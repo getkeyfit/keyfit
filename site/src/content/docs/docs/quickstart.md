@@ -28,7 +28,7 @@ The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkou
 ## Quickstart
 
 ```bash
-keyfit setup --rc     # shims for claude, codex, aws and gh, plus one line in your shell startup file
+keyfit setup --rc     # shims for claude, codex, aws, gh and vercel, plus one line in your shell startup file
 ```
 
 Open a new terminal, then go to a repository of one of your clients:
@@ -44,6 +44,7 @@ claude                # starts with this project's accounts, checked
 - **AWS:** a profile from `~/.aws/config`. Keyfit records the account that profile belongs to.
 - **GitHub:** one of the accounts `gh` is signed in to.
 - **Claude and Codex:** whether to use the login currently in `~/.claude` or `~/.codex`.
+- **Vercel:** whether to use the login the `vercel` CLI has now, with the team selected in it.
 - **Linear:** a personal API key, typed at a hidden prompt. Keyfit checks it with Linear, then stores it in the macOS Keychain.
 
 It ends with `keyfit status`:
@@ -53,6 +54,7 @@ acme-api
   ✔ aws       acme-dev → …4321   SSO token valid 6h 41m · refreshes automatically · account confirmed
   ✔ linear    acme   workspace confirmed
   ✔ github    octocat   login confirmed
+  ✔ vercel    octocat → acme   login and team confirmed
   ✔ claude    Acme   Acme (team) confirmed
   ✔ codex     ChatGPT pro   subscription login, no API key
 ```
@@ -61,7 +63,7 @@ When a check fails, the tool does not start:
 
 ```
 $ claude
-keyfit: claude not started — acme-api needs attention
+keyfit: claude not started, acme-api needs attention
   ✘ aws       acme-dev → …4321   SSO session expired
     → aws sso login --sso-session acme
   (bypass once: KEYFIT_DISABLE=1 claude …)

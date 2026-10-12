@@ -73,7 +73,7 @@ Superset workspaces are git worktrees of your repository, so they resolve to the
 The tool doesn't start, and every failed check is shown with its fix:
 
 ```
-keyfit: claude not started — acme-api needs attention
+keyfit: claude not started, acme-api needs attention
   ✘ aws       acme-dev → …4321   SSO session expired
     → aws sso login --sso-session acme
   (bypass once: KEYFIT_DISABLE=1 claude …)
@@ -96,10 +96,16 @@ Run the command after `→`. Sign-in commands always go through, even while chec
 | **Claude** `not signed in` | `claude auth login`. For an account in another config folder, use `CLAUDE_CONFIG_DIR=… claude auth login`, as printed |
 | **Claude** `signed in with api_key instead of a Claude subscription` | remove `ANTHROPIC_API_KEY` or `apiKeyHelper` from your Claude settings, or sign in again |
 | **Claude** `signed in to org 'X', project expects 'Y'` | sign in to the expected organization (`claude auth login`) |
+| **Vercel** `not signed in` | `vercel login` inside the project: Keyfit sends it to the project's login folder. The printed command names that folder, so it works anywhere |
+| **Vercel** `no expected identity recorded` | the folder was made with `keyfit add vercel --new` and nobody signed in yet. Run `vercel login` inside the project, then the `keyfit add vercel --name … --config-dir …` command printed after it |
+| **Vercel** `signed in as X, project expects Y` | that folder holds another login. Inside the project, run `vercel logout`, then `vercel login` as Y |
+| **Vercel** `this login has no access to Vercel team T` | sign in as a member of T, or map a team of this login: `keyfit add vercel --team <slug>` |
+| **Vercel** `… links this repository to another Vercel team (team_…)` | the repository was linked with another login or team. Remove the `.vercel` folder it names, then run `vercel link` inside the project; it links with the project's login and team |
+| `this folder belongs to acme-api (Vercel team acme); refusing --scope globex` (also `--team`, `--global-config`, `--token`) | inside a project, `vercel` works only with the project's login and team. Keyfit already adds them, so leave the option out |
 | **Codex** `not signed in` | `codex login` (another home: `CODEX_HOME=… codex login`) |
 | **Codex** `Codex is signed in with an API key`, `auth.json holds an API key next to the ChatGPT login` | `codex logout && codex login`, with your ChatGPT account |
 | `… did not answer (…)`, `→ check the network and retry` | the service could not be reached, even after one retry, and there is no success from the last 24 hours to fall back on. Check the network |
-| `project acme-api has no aws account mapped, so aws was not started` (same for `gh` and `github`) | map one: `keyfit add aws --profile …` or `keyfit add github --login …`. To skip Keyfit once: `KEYFIT_DISABLE=1 aws …` |
+| `project acme-api has no aws account mapped, so aws was not started` (same for `gh` and `github`, `vercel` and `vercel`) | map one: `keyfit add aws --profile …`, `keyfit add github --login …` or `keyfit add vercel`. To skip Keyfit once: `KEYFIT_DISABLE=1 aws …` |
 | `this folder belongs to acme-api (AWS profile acme-dev); refusing --profile other` | another project's profile was asked for inside this project. If the profile belongs to a machine-wide tool, list it under `[settings] shared_aws_profiles` in `~/.config/keyfit/registry.toml` |
 
 When a service doesn't answer but a check succeeded within the last 24 hours, the tool starts and Keyfit shows a warning, for example `workspace confirmed 3h 5m ago · could not re-check now (…)`. This fallback only covers network failures. A rejected key or a wrong account always fails.
@@ -109,7 +115,7 @@ When a service doesn't answer but a check succeeded within the last 24 hours, th
 Successful online checks are reused for 30 minutes (see [the verification cache](/docs/security/#the-verification-cache)). Keyfit checks again right away when the identity behind a connection changes:
 
 - a new AWS SSO or console sign-in
-- a different Linear key or GitHub token
+- a different Linear key, GitHub token or Vercel login
 - a different Claude organization
 - a connection changed with `keyfit add`
 
@@ -156,9 +162,9 @@ pipx uninstall keyfit            # or: brew uninstall keyfit
 
 - **Which startup files.** `--remove` takes Keyfit's line, and the blank line before it, out of `~/.zshrc` (and `$ZDOTDIR/.zshrc`), `~/.bash_profile`, `~/.bash_login`, `~/.profile` and `~/.bashrc`. If you used `keyfit setup --rc PATH` for another file, run `keyfit setup --remove --rc PATH`.
 - **What stays.** Without `--purge`, the registry stays, and `keyfit setup --rc` turns everything back on.
-- **What `--purge` deletes:** the registry, the check cache and the Claude config folders made by `keyfit add claude --new`. It refuses if `~/.config/keyfit` holds files Keyfit didn't write; delete those yourself if you are sure. Without a terminal it needs `--yes`.
+- **What `--purge` deletes:** the registry, the check cache, the Claude config folders made by `keyfit add claude --new` and the Vercel login folders made by `keyfit add vercel --new` (with the logins in them). It refuses if `~/.config/keyfit` holds files Keyfit didn't write; delete those yourself if you are sure. Without a terminal it needs `--yes`.
 - **Keychain items** Keyfit stored (service `keyfit`) are never deleted; `--purge` prints their names. Delete them in Keychain Access, or with `security delete-generic-password -s keyfit -a NAME`.
-- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `aws` and `gh` then run directly again.
+- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `aws`, `gh` and `vercel` then run directly again.
 
 If `keyfit` itself no longer runs, do it by hand:
 
