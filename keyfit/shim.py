@@ -1,12 +1,12 @@
-"""The shim in front of `claude`, `codex`, `aws` and `gh` (ambient mode).
+"""The shim in front of `claude`, `codex`, `aws`, `gh` and `vercel` (ambient mode).
 
 Three outcomes only:
   folder not registered      → run the real tool unchanged
   registered, all checks ok  → run it with the project's environment (silently)
   a check fails              → do not run it; print what is wrong and the fix
 
-Inside a project session (KEYFIT_PROJECT set), `aws` and `gh` stay on that
-session's project even after `cd` elsewhere; `claude` and `codex` re-resolve
+Inside a project session (KEYFIT_PROJECT set), `aws`, `gh` and `vercel` stay on
+that session's project even after `cd` elsewhere; `claude` and `codex` re-resolve
 from the folder, since starting a new agent elsewhere is deliberate.
 Bypass once: KEYFIT_DISABLE=1 <tool> …
 """
@@ -19,13 +19,14 @@ import sys
 from pathlib import Path
 
 from . import environment, mcp
+from .adapters import vercel
 from .realbin import find_real
-from .registry import Project, Registry
+from .registry import Project, Registry, canonical, tilde
 from .resolve import resolve
 
-TOOLS = ("claude", "codex", "aws", "gh")
-RELEVANT = {"aws": ("aws",), "gh": ("github",), "claude": None, "codex": None}
-PINNED = ("aws", "gh")
+TOOLS = ("claude", "codex", "aws", "gh", "vercel")
+RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "claude": None, "codex": None}
+PINNED = ("aws", "gh", "vercel")
 MAX_DEPTH = 6
 CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs",
                       "mcp", "plugin", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update", "help"}
@@ -40,11 +41,13 @@ LOGIN_COMMANDS = {
     "claude": (("auth",), ("setup-token",)),
     "codex": (("login",), ("logout",)),
     "gh": (("auth",),),
+    "vercel": (("login",), ("logout",), ("switch",), ("whoami",), ("teams",)),
 }
-LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",)}
+LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",)}
 VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query", "--color", "--ca-bundle",
                  "--cli-read-timeout", "--cli-connect-timeout", "--sso-session", "-u", "--user", "-h", "--hostname",
-                 "-c", "--config", "-m", "--model"}
+                 "-c", "--config", "-m", "--model", "-Q", "--global-config", "-S", "--scope", "-T", "--team",
+                 "-t", "--token", "-A", "--local-config", "--cwd", "--api"}
 
 
 class Refused(Exception):
@@ -97,6 +100,8 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
                 raise Refused(f"keyfit: this folder belongs to {project.name} (AWS profile {profile}); "
                               f"refusing --profile {asked}.\n  Bypass once: KEYFIT_DISABLE=1 aws …")
         return args
+    if tool == "vercel":
+        return vercel_args(project, args, env, cwd)
     if tool == "claude":
         if subcommand(args, CLAUDE_SUBCOMMANDS):
             return args
@@ -111,6 +116,45 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
             extra.append("--no-daemon")  # the shared daemon keeps the first launcher's environment
         return extra + args
     return args
+
+
+def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
+    """Refuse options that would leave the project's Vercel login or team (like `aws --profile`), then add the
+    login's folder (--global-config) and the team (--scope) unless the user named them already."""
+    conn = project.connections["vercel"]
+    folder = canonical(conn["config_dir"])
+    team = conn.get("team") or conn.get("team_id")
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 vercel …"
+    given = vercel.options(args)
+    for name, value in given:
+        if name == "--token":
+            raise Refused(f"keyfit: this folder belongs to {project.name} (Vercel login in {tilde(folder)}); "
+                          f"refusing --token: it would skip that login and its check.{bypass}")
+        if name == "--global-config" and value is not None and (cwd / value).resolve() != folder:
+            raise Refused(f"keyfit: this folder belongs to {project.name} (Vercel login in {tilde(folder)}); "
+                          f"refusing --global-config {value}.{bypass}")
+        if name in ("--scope", "--team") and team and value is not None \
+                and value not in (conn.get("team"), conn.get("team_id")):
+            raise Refused(f"keyfit: this folder belongs to {project.name} (Vercel team {team}); "
+                          f"refusing {name} {value}.{bypass}")
+        if name == "--cwd" and value:
+            link = vercel.foreign_link(conn, cwd / value, env)
+            if link is not None:
+                raise Refused(f"keyfit: {tilde(link[0])} links {value} to another Vercel team ({link[1]}), but this "
+                              f"folder belongs to {project.name} (Vercel team {team}); refusing --cwd {value}.{bypass}")
+    names = {name for name, _ in given}
+    extra = [] if "--global-config" in names else vercel.config_args(conn, env)
+    if team and not names & {"--scope", "--team"}:
+        extra += ["--scope", team]
+    return extra + args
+
+
+def vercel_login_args(project: Project, args: list[str], env: dict) -> list[str]:
+    """Sign-in commands (`vercel login`, …) go to the project's login folder, unless the user named one."""
+    conn = project.connections.get("vercel")
+    if conn is None or any(name == "--global-config" for name, _ in vercel.options(args)):
+        return args
+    return vercel.config_args(conn, env) + args
 
 
 def _say(lines: list[str]) -> None:
@@ -152,16 +196,18 @@ def main(argv: list[str]) -> int:
             if tool == "gh":
                 for var in ("GH_TOKEN", "GITHUB_TOKEN"):
                     login_env.pop(var, None)
+            if tool == "vercel":  # `vercel login` signs in to the project's folder
+                args = vercel_login_args(project, args, login_env)
             os.execve(real, [tool, *args], login_env)
         if relevant and not any(kind in project.connections for kind in relevant):
             raise Refused(f"keyfit: project {project.name} has no {relevant[0]} account mapped, so {tool} was not "
                           f"started.\n  Map one: keyfit add {relevant[0]} …   (bypass once: KEYFIT_DISABLE=1 {tool} …)")
-        run_env = environment.build(project, env, kinds=relevant)  # aws/gh only need their own connection
+        run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel need only their own connection
         run_env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
         checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
         failed = [c for c in checks if c.failed]
         if failed:
-            _say([f"keyfit: {tool} not started — {project.name} needs attention"])
+            _say([f"keyfit: {tool} not started, {project.name} needs attention"])
             for check in failed:
                 _say(check.lines())
             _say([f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"])
