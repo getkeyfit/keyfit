@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests
+
+      - name: Generated shell files parse
+        shell: bash
+        run: |
+          # Without an rc-file option `keyfit setup` writes only into KEYFIT_CONFIG_DIR;
+          # HOME is a throwaway too, so nothing outside the temp dirs is touched.
+          # Checks every shell.* file it generates (shell.zsh today, more shells later).
+          config="$(mktemp -d)"
+          HOME="$(mktemp -d)" KEYFIT_CONFIG_DIR="$config" python -m keyfit setup
+          checked=0
+          for file in "$config"/shell.*; do
+            [ -e "$file" ] || continue
+            case "$file" in
+              *.zsh) checker=zsh ;;
+              *.sh | *.bash) checker=/bin/bash ;;  # the bash macOS ships (3.2): the oldest our users run
+              *) echo "::error::no syntax checker for $(basename "$file")"; exit 1 ;;
+            esac
+            echo "$checker -n $(basename "$file")"
+            "$checker" -n "$file"
+            checked=$((checked + 1))
+          done
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::keyfit setup wrote no shell.* file"
+            exit 1
+          fi

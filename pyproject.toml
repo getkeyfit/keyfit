@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keyfit"
+dynamic = ["version"]
+description = "Per-project, verified environments for AI coding tools"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Flamur Maliqi", email = "contact@flamur-maliqi.de" }]
+keywords = ["aws", "claude", "codex", "credentials", "github", "linear", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://keyfit.dev"
+Source = "https://github.com/FlamurMaliqi/keyfit"
+Issues = "https://github.com/FlamurMaliqi/keyfit/issues"
+Changelog = "https://github.com/FlamurMaliqi/keyfit/blob/main/CHANGELOG.md"
+
+[project.scripts]
+keyfit = "keyfit.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "keyfit.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["keyfit", "keyfit.*"]

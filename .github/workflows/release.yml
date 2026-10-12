@@ -1,0 +1,52 @@
+name: Release
+
+# Publishes to PyPI when a version tag is pushed (git push origin vX.Y.Z), with PyPI trusted
+# publishing: GitHub proves to PyPI which workflow is running, so no PyPI token exists anywhere.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Tests
+        run: python -m unittest discover -s tests
+      - name: Tag matches the version
+        run: |
+          version="$(python -c 'import keyfit; print(keyfit.__version__)')"
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME but keyfit says $version"; exit 1; }
+      - name: Build
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/keyfit/
+    permissions:
+      id-token: write  # trusted publishing; nothing else
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

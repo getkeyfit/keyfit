@@ -1,0 +1,17 @@
+# never commit credentials or per-machine agent config
+.env
+.env.*
+.mcp.json
+.claude/settings.local.json
+.codex/
+*.pem
+*.key
+
+# tooling
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.egg-info/
+.DS_Store
