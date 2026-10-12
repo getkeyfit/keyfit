@@ -116,7 +116,7 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("aws", "s3", "ls", FAKE_ACCOUNT="999999999999")
         self.assertEqual(out.returncode, 1)
         self.assertEqual(out.stdout, "")  # the real command never ran
-        self.assertIn("aws not started — demo needs attention", out.stderr)
+        self.assertIn("aws not started, demo needs attention", out.stderr)
         self.assertIn("…9999", out.stderr)
 
     def test_other_profile_is_refused(self):
