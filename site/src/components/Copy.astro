@@ -1,0 +1,31 @@
+---
+/** A command with a copy button. The script below wires every [data-copy] button on the page. */
+import Icon from './Icon.astro';
+interface Props {
+	command: string;
+	prompt?: string;
+}
+const { command, prompt = '$' } = Astro.props;
+---
+
+<div class="copy">
+	<code><span class="copy-prompt" aria-hidden="true">{prompt}</span>{command}</code>
+	<button type="button" data-copy={command} aria-label={`Copy: ${command}`}>
+		<Icon name="copy" class="copy-idle" />
+		<Icon name="check" class="copy-done" />
+	</button>
+</div>
+
+<script>
+	for (const button of document.querySelectorAll<HTMLButtonElement>('button[data-copy]')) {
+		button.addEventListener('click', async () => {
+			try {
+				await navigator.clipboard.writeText(button.dataset.copy ?? '');
+				button.dataset.state = 'done';
+				setTimeout(() => delete button.dataset.state, 1600);
+			} catch {
+				button.dataset.state = 'failed';
+			}
+		});
+	}
+</script>

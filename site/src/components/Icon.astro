@@ -1,0 +1,22 @@
+---
+/** Phosphor icons (regular weight), inlined so they follow currentColor. */
+import laptop from '@phosphor-icons/core/assets/regular/laptop.svg?raw';
+import lockKey from '@phosphor-icons/core/assets/regular/lock-key.svg?raw';
+import globe from '@phosphor-icons/core/assets/regular/globe-hemisphere-west.svg?raw';
+import gitBranch from '@phosphor-icons/core/assets/regular/git-branch.svg?raw';
+import terminal from '@phosphor-icons/core/assets/regular/terminal-window.svg?raw';
+import plugs from '@phosphor-icons/core/assets/regular/plugs-connected.svg?raw';
+import copy from '@phosphor-icons/core/assets/regular/copy.svg?raw';
+import check from '@phosphor-icons/core/assets/regular/check.svg?raw';
+import arrowRight from '@phosphor-icons/core/assets/regular/arrow-right.svg?raw';
+import github from '@phosphor-icons/core/assets/regular/github-logo.svg?raw';
+
+const icons = { laptop, lockKey, globe, gitBranch, terminal, plugs, copy, check, arrowRight, github };
+interface Props {
+	name: keyof typeof icons;
+	class?: string;
+}
+const { name, class: className } = Astro.props;
+---
+
+<span class:list={['icon', className]} aria-hidden="true" set:html={icons[name]} />

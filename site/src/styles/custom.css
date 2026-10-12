@@ -1,58 +1,20 @@
-/* Keyfit brand: an amber "key" accent on Starlight's neutral greys. */
+/* Docs pages: the same type and colours as the landing page. */
 :root {
-	--sl-color-accent-low: #3a2806;
-	--sl-color-accent: #e8a317;
-	--sl-color-accent-high: #fde7b5;
-	--kf-ok: #3fb950;
-	--kf-fail: #f85149;
-	--kf-dim: #8b949e;
-	--kf-term-bg: #0f1115;
-	--kf-term-fg: #e6edf3;
-	--kf-term-border: #262b33;
+	--sl-font: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, sans-serif;
+	--sl-font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+	--sl-color-accent-low: #3a2a07;
+	--sl-color-accent: #f2b33d;
+	--sl-color-accent-high: #fce3ad;
+	--sl-color-black: #0b0b0d;
+	--sl-color-gray-6: #141418;
+	--sl-color-gray-5: #25252b;
+	--sl-color-gray-4: #4a4a53;
+	--sl-color-gray-3: #8a8a93;
+	--sl-color-gray-2: #c4c4cb;
+	--sl-color-gray-1: #ececef;
 }
-
 :root[data-theme='light'] {
-	--sl-color-accent-low: #fdefcc;
-	--sl-color-accent: #9a5b00;
-	--sl-color-accent-high: #3d2400;
-	--kf-ok: #1a7f37;
-	--kf-fail: #cf222e;
-	--kf-dim: #6e7781;
-}
-
-/* Hero: a little more air, and the promise in two weights. */
-.hero {
-	padding-block: clamp(2rem, 6vw, 5rem);
-}
-.hero h1 {
-	letter-spacing: -0.02em;
-}
-
-/* Landing sections */
-.kf-lead {
-	font-size: var(--sl-text-lg);
-	color: var(--sl-color-gray-2);
-	max-width: 46rem;
-}
-.kf-split {
-	display: grid;
-	gap: 1rem;
-	grid-template-columns: 1fr;
-}
-@media (min-width: 60rem) {
-	.kf-split {
-		grid-template-columns: 1fr 1fr;
-	}
-}
-.kf-faq details {
-	border-bottom: 1px solid var(--sl-color-gray-5);
-	padding-block: 0.75rem;
-}
-.kf-faq summary {
-	cursor: pointer;
-	font-weight: 600;
-	color: var(--sl-color-white);
-}
-.kf-faq details p {
-	margin-top: 0.5rem;
+	--sl-color-accent-low: #fbe9c4;
+	--sl-color-accent: #8f5a00;
+	--sl-color-accent-high: #3d2600;
 }

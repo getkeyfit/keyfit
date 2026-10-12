@@ -1,0 +1,254 @@
+---
+import '@fontsource-variable/geist';
+import '@fontsource-variable/geist-mono';
+import '../styles/landing.css';
+import Icon from '../components/Icon.astro';
+import Copy from '../components/Copy.astro';
+
+const title = 'Keyfit: the right accounts for every repo, checked';
+const description =
+	'Keyfit sits in front of claude, codex, aws, gh and vercel and verifies each project’s accounts before they run.';
+const repo = 'https://github.com/FlamurMaliqi/keyfit';
+
+// Real Keyfit and AWS CLI output for an invented client project.
+type Line = { t: string; k?: 'cmd' | 'ok' | 'fail' | 'fix' | 'dim' };
+const session: Line[] = [
+	{ t: 'claude', k: 'cmd' },
+	{ t: 'keyfit: claude not started, lumen-web needs attention' },
+	{ t: '  ✘ aws      lumen-prod → …8023   SSO session expired', k: 'fail' },
+	{ t: '    → aws sso login --sso-session lumen', k: 'fix' },
+	{ t: 'aws sso login --sso-session lumen', k: 'cmd' },
+	{ t: 'Successfully logged into Start URL: https://lumen.awsapps.com/start', k: 'dim' },
+	{ t: 'keyfit status', k: 'cmd' },
+	{ t: 'lumen-web' },
+	{ t: '  ✔ aws      lumen-prod → …8023   account confirmed', k: 'ok' },
+	{ t: '  ✔ linear   lumen   workspace confirmed', k: 'ok' },
+	{ t: '  ✔ github   lumen-ci   login confirmed', k: 'ok' },
+	{ t: '  ✔ vercel   lumen-ci → lumen   login and team confirmed', k: 'ok' },
+	{ t: 'claude', k: 'cmd' },
+];
+
+const checks = [
+	{ id: 'linear', name: 'Linear', logo: 'linear', text: 'The workspace behind the API key. Keys you add live in the macOS Keychain.' },
+	{ id: 'github', name: 'GitHub', logo: 'github', text: 'The login behind gh’s token, confirmed by GitHub itself.' },
+	{ id: 'claude', name: 'Claude Code', logo: 'claude', text: 'The organization of your claude.ai login. Login pools keep working.' },
+	{ id: 'codex', name: 'Codex', icon: 'terminal' as const, text: 'A ChatGPT login, with no stray API key taking over.' },
+];
+
+const privacy = [
+	{ icon: 'laptop' as const, title: 'No account, no server, no telemetry', text: 'A small open-source command-line tool with no dependencies.' },
+	{ icon: 'lockKey' as const, title: 'Keys stay secret', text: 'Never printed or logged. Keys you add are stored in the macOS Keychain.' },
+	{ icon: 'globe' as const, title: 'Each key goes only where it belongs', text: 'The Linear key goes to Linear, the GitHub token to GitHub. Nothing else leaves your Mac.' },
+	{ icon: 'gitBranch' as const, title: 'Your repositories stay untouched', text: 'Nothing is written into your code or into another tool’s login.' },
+];
+
+const faq = [
+	{ q: 'Does it slow my tools down?', a: 'Barely. Local checks run on every launch, and online checks are reused for 30 minutes, so most launches add a fraction of a second.' },
+	{ q: 'What happens in folders I haven’t registered?', a: 'Nothing. The tools run exactly as they did before Keyfit.' },
+	{ q: 'I already use direnv. Do I start over?', a: 'No. keyfit init imports the AWS profile and Linear key lines from your .envrc. It reads the file as text and never runs it.' },
+	{ q: 'Does Keyfit see my code or prompts?', a: 'No. It decides which accounts a tool starts with, then hands over to the real tool.' },
+	{ q: 'Linux or Windows?', a: 'Not yet. Keys live in the macOS Keychain, so the first version is macOS only. Linux is planned.' },
+	{ q: 'How do I turn it off?', a: 'KEYFIT_DISABLE=1 claude skips Keyfit once. keyfit setup --remove takes it out of your shell; your projects stay registered.' },
+];
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>{title}</title>
+		<meta name="description" content={description} />
+		<meta property="og:title" content={title} />
+		<meta property="og:description" content={description} />
+		<meta property="og:type" content="website" />
+		<meta property="og:url" content="https://keyfit.dev/" />
+		<link rel="canonical" href="https://keyfit.dev/" />
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<meta name="theme-color" content="#0b0b0d" />
+		<script is:inline>
+			// Follow the theme chosen in the docs (Starlight stores it); otherwise the system setting applies.
+			try {
+				const t = localStorage.getItem('starlight-theme');
+				if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+			} catch {}
+		</script>
+	</head>
+	<body>
+		<header class="nav">
+			<div class="wrap nav-row">
+				<a class="brand" href="/" aria-label="Keyfit home">
+					<img src="/favicon.svg" alt="" width="24" height="24" />
+					<span>Keyfit</span>
+				</a>
+				<nav aria-label="Main">
+					<a href="/docs/quickstart/">Docs</a>
+					<a href="/docs/security/">Security</a>
+					<a href={repo} class="nav-icon" aria-label="GitHub"><Icon name="github" /></a>
+					<a href="#install" class="btn btn-primary btn-sm">Install</a>
+				</nav>
+			</div>
+		</header>
+
+		<main>
+			<section class="hero">
+				<div class="wrap hero-grid">
+					<div class="hero-copy">
+						<h1>The right accounts for every repo. <span class="accent">Checked.</span></h1>
+						<p class="hero-sub">
+							Keyfit sits in front of <code>claude</code>, <code>codex</code>, <code>aws</code>, <code>gh</code> and
+							<code>vercel</code>, and verifies each project’s accounts before they run.
+						</p>
+						<div class="hero-ctas">
+							<a href="#install" class="btn btn-primary">Install</a>
+							<a href="/docs/quickstart/" class="btn btn-ghost">Read the docs <Icon name="arrowRight" /></a>
+						</div>
+					</div>
+					<figure class="term" aria-label="A Keyfit session in a terminal">
+						<pre><code>{session.map((line, i) => (
+							<span class={`l ${line.k ?? ''}`} style={`--i:${i}`}>{line.k === 'cmd' && <span class="ps" aria-hidden="true">~/code/lumen-web $ </span>}{line.t}{i === session.length - 1 && <span class="caret" aria-hidden="true" />}</span>
+						))}</code></pre>
+					</figure>
+				</div>
+			</section>
+
+			<section class="statement reveal">
+				<div class="wrap">
+					<h2>One stale environment variable away from the wrong client.</h2>
+					<p>
+						Agents run <code>aws</code>, <code>gh</code> and MCP tools on their own. Tools that switch credentials per folder
+						assume the switch worked. Keyfit asks each service who you are signed in as, and stops the tool when the answer is
+						wrong.
+					</p>
+				</div>
+			</section>
+
+			<section class="how reveal" aria-labelledby="how">
+				<div class="wrap how-grid">
+					<h2 id="how">How it works</h2>
+					<ol class="how-list">
+						<li>
+							<span class="how-verb">Recognise</span>
+							<p>Keyfit finds the project from the folder you are in, including every git worktree. Folders you haven’t registered work exactly as before.</p>
+						</li>
+						<li>
+							<span class="how-verb">Verify</span>
+							<p>Each account is checked with its own service. Expired sign-ins are caught before anything runs, and good results are reused for 30 minutes.</p>
+						</li>
+						<li>
+							<span class="how-verb">Start</span>
+							<p>The tool gets that project’s credentials and nothing else. MCP servers that belong to other projects are hidden for the session.</p>
+						</li>
+					</ol>
+				</div>
+			</section>
+
+			<section class="checks reveal" aria-labelledby="checks">
+				<div class="wrap">
+					<h2 id="checks">What it checks</h2>
+					<div class="bento">
+						<article class="cell cell-aws">
+							<span class="logo logo-wide" style="--logo:url(/logos/aws.svg)" role="img" aria-label="AWS"></span>
+							<h3>AWS</h3>
+							<p>The account behind the profile, confirmed with STS. Inside a project, another project’s profile is refused.</p>
+							<pre class="mini"><code><span class="ps">$ </span>aws --profile harbor-prod s3 ls
+<span class="fail">keyfit: this folder belongs to lumen-web (AWS profile lumen-prod); refusing --profile harbor-prod.</span></code></pre>
+						</article>
+						{checks.map((c) => (
+							<article class={`cell cell-${c.id}`}>
+								{c.logo ? (
+									<span class="logo" style={`--logo:url(/logos/${c.logo}.svg)`} role="img" aria-label={c.name} />
+								) : (
+									<Icon name={c.icon!} class="logo-icon" />
+								)}
+								<h3>{c.name}</h3>
+								<p>{c.text}</p>
+							</article>
+						))}
+						<article class="cell cell-vercel">
+							<span class="logo" style="--logo:url(/logos/vercel.svg)" role="img" aria-label="Vercel"></span>
+							<h3>Vercel</h3>
+							<p>The login and the team, so a deploy never lands in another client’s team.</p>
+						</article>
+						<article class="cell cell-mcp">
+							<Icon name="plugs" class="logo-icon" />
+							<h3>MCP servers</h3>
+							<p>Each project sees its own Linear server. Servers you claim for one project stay out of every other.</p>
+						</article>
+					</div>
+				</div>
+			</section>
+
+			<section class="privacy reveal" aria-labelledby="privacy">
+				<div class="wrap privacy-grid">
+					<div>
+						<h2 id="privacy">Runs on your Mac. Talks only to the services it checks.</h2>
+						<a class="text-link" href="/docs/security/">Everything it reads, stores and sends <Icon name="arrowRight" /></a>
+					</div>
+					<ul class="privacy-list">
+						{privacy.map((p) => (
+							<li>
+								<Icon name={p.icon} class="privacy-icon" />
+								<div>
+									<h3>{p.title}</h3>
+									<p>{p.text}</p>
+								</div>
+							</li>
+						))}
+					</ul>
+				</div>
+			</section>
+
+			<section class="install reveal" id="install" aria-labelledby="install-title">
+				<div class="wrap install-box">
+					<h2 id="install-title">Set it up once. Then forget about it.</h2>
+					<p class="install-req">macOS, Python 3.11 or newer, zsh or bash.</p>
+					<div class="install-grid">
+						<div>
+							<h3>Install</h3>
+							<Copy command="brew install flamurmaliqi/keyfit/keyfit" />
+							<p class="or">or</p>
+							<Copy command="pipx install keyfit" />
+						</div>
+						<div>
+							<h3>Turn it on</h3>
+							<Copy command="keyfit setup --rc" />
+							<Copy command="keyfit init" prompt="~/code/lumen-web $" />
+							<p class="install-note">Open a new terminal after <code>setup</code>. <code>init</code> offers the accounts it finds on your Mac.</p>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="faq reveal" aria-labelledby="faq">
+				<div class="wrap">
+					<h2 id="faq">Questions</h2>
+					<div class="faq-grid">
+						{faq.map((f) => (
+							<details>
+								<summary>{f.q}</summary>
+								<p>{f.a}</p>
+							</details>
+						))}
+					</div>
+				</div>
+			</section>
+		</main>
+
+		<footer class="foot">
+			<div class="wrap foot-row">
+				<a class="brand" href="/" aria-label="Keyfit home">
+					<img src="/favicon.svg" alt="" width="20" height="20" />
+					<span>Keyfit</span>
+				</a>
+				<nav aria-label="Footer">
+					<a href="/docs/quickstart/">Docs</a>
+					<a href="/docs/security/">Security</a>
+					<a href={`${repo}/blob/main/CHANGELOG.md`}>Changelog</a>
+					<a href={repo}>GitHub</a>
+				</nav>
+				<p>Open source, MIT licensed.</p>
+			</div>
+		</footer>
+	</body>
+</html>
