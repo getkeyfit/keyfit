@@ -1,0 +1,27 @@
+---
+/**
+ * A terminal window showing real Keyfit / CLI output.
+ * Lines: `cmd` gets the prompt, the others colour the text. `play` types the session in once.
+ */
+export type Line = { t: string; k?: 'cmd' | 'ok' | 'fail' | 'fix' | 'dim' | 'hi' };
+interface Props {
+	lines: Line[];
+	title?: string;
+	prompt?: string;
+	play?: boolean;
+	class?: string;
+}
+const { lines, title, prompt = '$', play = false, class: className } = Astro.props;
+// Words with a dash (flags, profile names) never break across lines when a terminal wraps.
+const parts = (text: string) => text.split(/(\S*-\S*)/).filter(Boolean);
+---
+
+<figure class:list={['term', { 'term-play': play }, className]} aria-label={title ?? 'Terminal output'}>
+	<div class="term-bar" aria-hidden="true">
+		<span class="dot"></span><span class="dot"></span><span class="dot"></span>
+		{title && <span class="term-title">{title}</span>}
+	</div>
+	<pre><code>{lines.map((line, i) => (
+		<span class={`l ${line.k ?? ''}`} style={`--i:${i}`}>{line.k === 'cmd' && <span class="ps" aria-hidden="true">{prompt} </span>}{parts(line.t).map((part) => (part.includes('-') ? <span class="nw">{part}</span> : part))}{play && i === lines.length - 1 && <span class="caret" aria-hidden="true" />}</span>
+	))}</code></pre>
+</figure>

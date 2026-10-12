@@ -1,38 +1,100 @@
 ---
-import '@fontsource-variable/geist';
-import '@fontsource-variable/geist-mono';
+import '@fontsource-variable/inter';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/ibm-plex-mono/500.css';
 import '../styles/landing.css';
 import Icon from '../components/Icon.astro';
 import Copy from '../components/Copy.astro';
+import Term, { type Line } from '../components/Term.astro';
 
-const title = 'Keyfit: the right accounts for every repo, checked';
+const title = 'Keyfit: the right accounts for every repo';
 const description =
-	'Keyfit sits in front of claude, codex, aws, gh and vercel and verifies each project’s accounts before they run.';
+	'Keyfit verifies each project’s AWS, Linear, GitHub, Claude, Codex and Vercel accounts before your agent runs.';
 const repo = 'https://github.com/FlamurMaliqi/keyfit';
 
-// Real Keyfit and AWS CLI output for an invented client project.
-type Line = { t: string; k?: 'cmd' | 'ok' | 'fail' | 'fix' | 'dim' };
+// Real Keyfit and CLI output for invented client projects (lumen-web, harbor-api).
 const session: Line[] = [
 	{ t: 'claude', k: 'cmd' },
 	{ t: 'keyfit: claude not started, lumen-web needs attention' },
-	{ t: '  ✘ aws      lumen-prod → …8023   SSO session expired', k: 'fail' },
+	{ t: '  ✘ aws       lumen-prod → …8023   SSO session expired', k: 'fail' },
 	{ t: '    → aws sso login --sso-session lumen', k: 'fix' },
+	{ t: '  (bypass once: KEYFIT_DISABLE=1 claude …)', k: 'dim' },
 	{ t: 'aws sso login --sso-session lumen', k: 'cmd' },
 	{ t: 'Successfully logged into Start URL: https://lumen.awsapps.com/start', k: 'dim' },
 	{ t: 'keyfit status', k: 'cmd' },
 	{ t: 'lumen-web' },
-	{ t: '  ✔ aws      lumen-prod → …8023   account confirmed', k: 'ok' },
-	{ t: '  ✔ linear   lumen   workspace confirmed', k: 'ok' },
-	{ t: '  ✔ github   lumen-ci   login confirmed', k: 'ok' },
-	{ t: '  ✔ vercel   lumen-ci → lumen   login and team confirmed', k: 'ok' },
+	{ t: '  ✔ aws       lumen-prod → …8023   SSO token valid 7h 58m · account confirmed', k: 'ok' },
+	{ t: '  ✔ linear    lumen   workspace confirmed', k: 'ok' },
+	{ t: '  ✔ github    lumen-ci   login confirmed', k: 'ok' },
+	{ t: '  ✔ claude    Lumen   Lumen (team) confirmed', k: 'ok' },
+	{ t: '  ✔ vercel    lumen-ci → lumen   login and team confirmed', k: 'ok' },
 	{ t: 'claude', k: 'cmd' },
 ];
 
-const checks = [
-	{ id: 'linear', name: 'Linear', logo: 'linear', text: 'The workspace behind the API key. Keys you add live in the macOS Keychain.' },
-	{ id: 'github', name: 'GitHub', logo: 'github', text: 'The login behind gh’s token, confirmed by GitHub itself.' },
-	{ id: 'claude', name: 'Claude Code', logo: 'claude', text: 'The organization of your claude.ai login. Login pools keep working.' },
-	{ id: 'codex', name: 'Codex', icon: 'terminal' as const, text: 'A ChatGPT login, with no stray API key taking over.' },
+const tools = [
+	{ name: 'AWS', logo: 'aws', wide: true },
+	{ name: 'Linear', logo: 'linear' },
+	{ name: 'GitHub', logo: 'github' },
+	{ name: 'Claude Code', logo: 'claude' },
+	{ name: 'Codex', icon: true },
+	{ name: 'Vercel', logo: 'vercel' },
+];
+
+const features: { label: string; title: string; text: string; term: string; lines: Line[] }[] = [
+	{
+		label: 'Verified, not assumed',
+		title: 'Checked with each service.',
+		text: 'Keyfit asks AWS, Linear, GitHub, Claude and Vercel who you are signed in as. Expired sign-ins are caught before anything runs.',
+		term: '~/code/harbor-api',
+		lines: [
+			{ t: 'keyfit status', k: 'cmd' },
+			{ t: 'harbor-api' },
+			{ t: '  ✔ aws       harbor → …4417   IAM key via Granted · account confirmed', k: 'ok' },
+			{ t: '  ✔ linear    harbor   workspace confirmed', k: 'ok' },
+			{ t: '  ✔ github    harbor-dev   login confirmed', k: 'ok' },
+			{ t: '  ✔ codex     ChatGPT pro   subscription login, no API key', k: 'ok' },
+		],
+	},
+	{
+		label: 'Wrong account refused',
+		title: 'Another client’s profile? Refused.',
+		text: 'Inside a project, an AWS profile or Vercel team that belongs to another client is blocked, and you see why.',
+		term: '~/code/lumen-web',
+		lines: [
+			{ t: 'aws --profile harbor s3 ls', k: 'cmd' },
+			{ t: 'keyfit: this folder belongs to lumen-web (AWS profile lumen-prod); refusing --profile harbor.', k: 'fail' },
+			{ t: '  Bypass once: KEYFIT_DISABLE=1 aws …', k: 'dim' },
+			{ t: 'vercel deploy --scope harbor', k: 'cmd' },
+			{ t: 'keyfit: this folder belongs to lumen-web (Vercel team lumen); refusing --scope harbor.', k: 'fail' },
+		],
+	},
+	{
+		label: 'Project-scoped MCP',
+		title: 'Each project sees its own servers.',
+		text: 'Agents only get the Linear workspace of the repo they are in. MCP servers you claim for one client stay out of every other session.',
+		term: 'codex  /mcp',
+		lines: [
+			{ t: 'linear_lumen:  connected (59 tools)', k: 'ok' },
+			{ t: 'linear_harbor: disabled (0 tools)', k: 'dim' },
+			{ t: 'linear_atlas:  disabled (0 tools)', k: 'dim' },
+			{ t: 'harbor_cloud:  disabled (0 tools)', k: 'dim' },
+			{ t: 'buffer:        connected (12 tools)', k: 'ok' },
+		],
+	},
+	{
+		label: 'No new habits',
+		title: 'Keep typing claude.',
+		text: 'Keyfit knows the project from the folder, including git worktrees and Superset workspaces. Folders you haven’t registered work exactly as before.',
+		term: '~/code/harbor-api',
+		lines: [
+			{ t: 'cd ~/code/harbor-api', k: 'cmd' },
+			{ t: 'claude', k: 'cmd' },
+			{ t: '' },
+			{ t: '  ✻ Welcome to Claude Code', k: 'hi' },
+			{ t: '' },
+			{ t: '  keyfit · harbor-api · aws harbor → …4417 · linear harbor · github harbor-dev', k: 'dim' },
+		],
+	},
 ];
 
 const privacy = [
@@ -65,7 +127,7 @@ const faq = [
 		<meta property="og:url" content="https://keyfit.dev/" />
 		<link rel="canonical" href="https://keyfit.dev/" />
 		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-		<meta name="theme-color" content="#0b0b0d" />
+		<meta name="theme-color" content="#111111" />
 		<script is:inline>
 			// Follow the theme chosen in the docs (Starlight stores it); otherwise the system setting applies.
 			try {
@@ -78,140 +140,101 @@ const faq = [
 		<header class="nav">
 			<div class="wrap nav-row">
 				<a class="brand" href="/" aria-label="Keyfit home">
-					<img src="/favicon.svg" alt="" width="24" height="24" />
-					<span>Keyfit</span>
+					<img src="/favicon.svg" alt="" width="22" height="22" />
+					<span>KEYFIT</span>
 				</a>
 				<nav aria-label="Main">
-					<a href="/docs/quickstart/">Docs</a>
-					<a href="/docs/security/">Security</a>
-					<a href={repo} class="nav-icon" aria-label="GitHub"><Icon name="github" /></a>
-					<a href="#install" class="btn btn-primary btn-sm">Install</a>
+					<a href="/docs/quickstart/" class="nav-link">Docs</a>
+					<a href="/docs/security/" class="nav-link">Security</a>
+					<a href={`${repo}/blob/main/CHANGELOG.md`} class="nav-link">Changelog</a>
+					<a href={repo} class="nav-gh" aria-label="Keyfit on GitHub"><Icon name="github" /></a>
+					<a href="#install" class="btn btn-light btn-sm">INSTALL <Icon name="download" /></a>
 				</nav>
 			</div>
 		</header>
 
 		<main>
 			<section class="hero">
-				<div class="wrap hero-grid">
-					<div class="hero-copy">
-						<h1>The right accounts for every repo. <span class="accent">Checked.</span></h1>
-						<p class="hero-sub">
-							Keyfit sits in front of <code>claude</code>, <code>codex</code>, <code>aws</code>, <code>gh</code> and
-							<code>vercel</code>, and verifies each project’s accounts before they run.
-						</p>
-						<div class="hero-ctas">
-							<a href="#install" class="btn btn-primary">Install</a>
-							<a href="/docs/quickstart/" class="btn btn-ghost">Read the docs <Icon name="arrowRight" /></a>
-						</div>
+				<div class="wrap hero-inner">
+					<a class="pill" href={`${repo}`}>Open source and free to use <Icon name="arrowRight" /></a>
+					<h1>
+						<span class="h1-line">The Right Accounts.</span>
+						<span class="h1-line marked">For Every Repo.<i class="mark tl"></i><i class="mark tr"></i><i class="mark bl"></i><i class="mark br"></i></span>
+					</h1>
+					<p class="hero-sub">Keyfit verifies each project’s AWS, Linear, GitHub, Claude, Codex and Vercel accounts before your agent runs.</p>
+					<div class="hero-ctas">
+						<a href="#install" class="btn btn-light">Install Keyfit <Icon name="download" /></a>
+						<a href={repo} class="btn btn-square" aria-label="Keyfit on GitHub"><Icon name="github" /></a>
 					</div>
-					<figure class="term" aria-label="A Keyfit session in a terminal">
-						<pre><code>{session.map((line, i) => (
-							<span class={`l ${line.k ?? ''}`} style={`--i:${i}`}>{line.k === 'cmd' && <span class="ps" aria-hidden="true">~/code/lumen-web $ </span>}{line.t}{i === session.length - 1 && <span class="caret" aria-hidden="true" />}</span>
-						))}</code></pre>
-					</figure>
+				</div>
+				<div class="wrap hero-shot">
+					<Term lines={session} title="~/code/lumen-web" prompt="$" play />
 				</div>
 			</section>
 
-			<section class="statement reveal">
+			<section class="tools" aria-labelledby="tools-title">
 				<div class="wrap">
-					<h2>One stale environment variable away from the wrong client.</h2>
-					<p>
-						Agents run <code>aws</code>, <code>gh</code> and MCP tools on their own. Tools that switch credentials per folder
-						assume the switch worked. Keyfit asks each service who you are signed in as, and stops the tool when the answer is
-						wrong.
-					</p>
-				</div>
-			</section>
-
-			<section class="how reveal" aria-labelledby="how">
-				<div class="wrap how-grid">
-					<h2 id="how">How it works</h2>
-					<ol class="how-list">
-						<li>
-							<span class="how-verb">Recognise</span>
-							<p>Keyfit finds the project from the folder you are in, including every git worktree. Folders you haven’t registered work exactly as before.</p>
-						</li>
-						<li>
-							<span class="how-verb">Verify</span>
-							<p>Each account is checked with its own service. Expired sign-ins are caught before anything runs, and good results are reused for 30 minutes.</p>
-						</li>
-						<li>
-							<span class="how-verb">Start</span>
-							<p>The tool gets that project’s credentials and nothing else. MCP servers that belong to other projects are hidden for the session.</p>
-						</li>
-					</ol>
-				</div>
-			</section>
-
-			<section class="checks reveal" aria-labelledby="checks">
-				<div class="wrap">
-					<h2 id="checks">What it checks</h2>
-					<div class="bento">
-						<article class="cell cell-aws">
-							<span class="logo logo-wide" style="--logo:url(/logos/aws.svg)" role="img" aria-label="AWS"></span>
-							<h3>AWS</h3>
-							<p>The account behind the profile, confirmed with STS. Inside a project, another project’s profile is refused.</p>
-							<pre class="mini"><code><span class="ps">$ </span>aws --profile harbor-prod s3 ls
-<span class="fail">keyfit: this folder belongs to lumen-web (AWS profile lumen-prod); refusing --profile harbor-prod.</span></code></pre>
-						</article>
-						{checks.map((c) => (
-							<article class={`cell cell-${c.id}`}>
-								{c.logo ? (
-									<span class="logo" style={`--logo:url(/logos/${c.logo}.svg)`} role="img" aria-label={c.name} />
-								) : (
-									<Icon name={c.icon!} class="logo-icon" />
-								)}
-								<h3>{c.name}</h3>
-								<p>{c.text}</p>
-							</article>
-						))}
-						<article class="cell cell-vercel">
-							<span class="logo" style="--logo:url(/logos/vercel.svg)" role="img" aria-label="Vercel"></span>
-							<h3>Vercel</h3>
-							<p>The login and the team, so a deploy never lands in another client’s team.</p>
-						</article>
-						<article class="cell cell-mcp">
-							<Icon name="plugs" class="logo-icon" />
-							<h3>MCP servers</h3>
-							<p>Each project sees its own Linear server. Servers you claim for one project stay out of every other.</p>
-						</article>
-					</div>
-				</div>
-			</section>
-
-			<section class="privacy reveal" aria-labelledby="privacy">
-				<div class="wrap privacy-grid">
-					<div>
-						<h2 id="privacy">Runs on your Mac. Talks only to the services it checks.</h2>
-						<a class="text-link" href="/docs/security/">Everything it reads, stores and sends <Icon name="arrowRight" /></a>
-					</div>
-					<ul class="privacy-list">
-						{privacy.map((p) => (
+					<h2 id="tools-title" class="tools-title">Works with the tools you already use</h2>
+					<ul class="tools-grid">
+						{tools.map((tool) => (
 							<li>
-								<Icon name={p.icon} class="privacy-icon" />
-								<div>
-									<h3>{p.title}</h3>
-									<p>{p.text}</p>
-								</div>
+								{tool.icon ? (
+									<Icon name="terminal" class="tool-icon" />
+								) : (
+									<span class:list={['tool-logo', { wide: tool.wide }]} style={`--logo:url(/logos/${tool.logo}.svg)`} />
+								)}
+								<span class="tool-name">{tool.name}</span>
 							</li>
 						))}
 					</ul>
 				</div>
 			</section>
 
-			<section class="install reveal" id="install" aria-labelledby="install-title">
-				<div class="wrap install-box">
+			{features.map((f, i) => (
+				<section class:list={['feature', { flip: i % 2 === 1 }]}>
+					<div class="wrap feature-grid">
+						<div class="feature-copy">
+							<p class="label">{f.label}</p>
+							<h3>{f.title}</h3>
+							<p class="feature-text">{f.text}</p>
+						</div>
+						<div class="feature-shot">
+							<Term lines={f.lines} title={f.term} />
+						</div>
+					</div>
+				</section>
+			))}
+
+			<section class="privacy" aria-labelledby="privacy">
+				<div class="wrap">
+					<p class="label">Private by design</p>
+					<h2 id="privacy">Runs on your Mac. Talks only to the services it checks.</h2>
+					<ul class="privacy-grid">
+						{privacy.map((p) => (
+							<li>
+								<Icon name={p.icon} class="privacy-icon" />
+								<h3>{p.title}</h3>
+								<p>{p.text}</p>
+							</li>
+						))}
+					</ul>
+					<a class="text-link" href="/docs/security/">Everything it reads, stores and sends <Icon name="arrowRight" /></a>
+				</div>
+			</section>
+
+			<section class="install" id="install" aria-labelledby="install-title">
+				<div class="wrap install-inner">
 					<h2 id="install-title">Set it up once. Then forget about it.</h2>
 					<p class="install-req">macOS, Python 3.11 or newer, zsh or bash.</p>
-					<div class="install-grid">
+					<div class="install-steps">
 						<div>
-							<h3>Install</h3>
+							<p class="label">Install</p>
 							<Copy command="brew install flamurmaliqi/keyfit/keyfit" />
 							<p class="or">or</p>
 							<Copy command="pipx install keyfit" />
 						</div>
 						<div>
-							<h3>Turn it on</h3>
+							<p class="label">Turn it on</p>
 							<Copy command="keyfit setup --rc" />
 							<Copy command="keyfit init" prompt="~/code/lumen-web $" />
 							<p class="install-note">Open a new terminal after <code>setup</code>. <code>init</code> offers the accounts it finds on your Mac.</p>
@@ -220,10 +243,10 @@ const faq = [
 				</div>
 			</section>
 
-			<section class="faq reveal" aria-labelledby="faq">
-				<div class="wrap">
+			<section class="faq" aria-labelledby="faq">
+				<div class="wrap faq-inner">
 					<h2 id="faq">Questions</h2>
-					<div class="faq-grid">
+					<div class="faq-list">
 						{faq.map((f) => (
 							<details>
 								<summary>{f.q}</summary>
@@ -236,18 +259,28 @@ const faq = [
 		</main>
 
 		<footer class="foot">
-			<div class="wrap foot-row">
-				<a class="brand" href="/" aria-label="Keyfit home">
-					<img src="/favicon.svg" alt="" width="20" height="20" />
-					<span>Keyfit</span>
-				</a>
-				<nav aria-label="Footer">
-					<a href="/docs/quickstart/">Docs</a>
-					<a href="/docs/security/">Security</a>
-					<a href={`${repo}/blob/main/CHANGELOG.md`}>Changelog</a>
-					<a href={repo}>GitHub</a>
+			<div class="wrap foot-grid">
+				<div>
+					<a class="brand" href="/" aria-label="Keyfit home">
+						<img src="/favicon.svg" alt="" width="20" height="20" />
+						<span>KEYFIT</span>
+					</a>
+					<p class="foot-note">Open source, MIT licensed.</p>
+				</div>
+				<nav aria-label="Docs">
+					<p class="foot-head">Docs</p>
+					<a href="/docs/quickstart/">Quickstart</a>
+					<a href="/docs/how-it-works/">How it works</a>
+					<a href="/docs/commands/">Commands</a>
+					<a href="/docs/troubleshooting/">Troubleshooting</a>
 				</nav>
-				<p>Open source, MIT licensed.</p>
+				<nav aria-label="Project">
+					<p class="foot-head">Project</p>
+					<a href={repo}>GitHub</a>
+					<a href={`${repo}/blob/main/CHANGELOG.md`}>Changelog</a>
+					<a href="/docs/security/">Security</a>
+					<a href={`${repo}/blob/main/SECURITY.md`}>Report a vulnerability</a>
+				</nav>
 			</div>
 		</footer>
 	</body>

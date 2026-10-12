@@ -1,20 +1,26 @@
 /* Docs pages: the same type and colours as the landing page. */
 :root {
-	--sl-font: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, sans-serif;
-	--sl-font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
-	--sl-color-accent-low: #3a2a07;
-	--sl-color-accent: #f2b33d;
-	--sl-color-accent-high: #fce3ad;
-	--sl-color-black: #0b0b0d;
-	--sl-color-gray-6: #141418;
-	--sl-color-gray-5: #25252b;
-	--sl-color-gray-4: #4a4a53;
-	--sl-color-gray-3: #8a8a93;
-	--sl-color-gray-2: #c4c4cb;
-	--sl-color-gray-1: #ececef;
+	--sl-font: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, sans-serif;
+	--sl-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+	--sl-color-accent-low: #3b2706;
+	--sl-color-accent: #f59e0b;
+	--sl-color-accent-high: #fde3a7;
+	--sl-color-black: #111111;
+	--sl-color-gray-6: #171717;
+	--sl-color-gray-5: #262626;
+	--sl-color-gray-4: #525252;
+	--sl-color-gray-3: #8a8a8a;
+	--sl-color-gray-2: #c7c7c7;
+	--sl-color-gray-1: #f0f0f0;
 }
 :root[data-theme='light'] {
-	--sl-color-accent-low: #fbe9c4;
-	--sl-color-accent: #8f5a00;
-	--sl-color-accent-high: #3d2600;
+	--sl-color-accent-low: #fdecc8;
+	--sl-color-accent: #b45309;
+	--sl-color-accent-high: #451a03;
+}
+.site-title {
+	font-family: var(--sl-font-mono);
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	font-weight: 600;
 }
