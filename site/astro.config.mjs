@@ -15,7 +15,7 @@ export default defineConfig({
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/FlamurMaliqi/keyfit' }],
 			customCss: ['./src/styles/custom.css'],
 			head: [{ tag: 'meta', attrs: { name: 'theme-color', content: '#e8a317' } }],
-			sidebar: [{ label: 'Docs', autogenerate: { directory: 'docs' } }],
+			sidebar: [{ label: 'Docs', items: [{ autogenerate: { directory: 'docs' } }] }],
 			lastUpdated: false,
 		}),
 	],
