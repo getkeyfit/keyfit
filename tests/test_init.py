@@ -1,4 +1,5 @@
-"""Guided `keyfit init` and `keyfit doctor`, with fake aws, gh, claude, codex and security in temporary folders."""
+"""Guided `keyfit init` and `keyfit doctor`, with fake aws, gh, claude, codex, vercel and security in temporary
+folders."""
 
 import base64
 import io
@@ -18,6 +19,7 @@ from keyfit.adapters import ADAPTERS
 from keyfit.adapters.github import logins
 from keyfit.cli import main
 from test_secrets import FAKE_SECURITY
+from test_vercel import TOKEN as VERCEL_TOKEN, api as vercel_api
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -106,7 +108,8 @@ class Machine(unittest.TestCase):
             {"auth_mode": "chatgpt", "OPENAI_API_KEY": None, "tokens": {"id_token": jwt(claims), "access_token": "x"}}))
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
-        for name, text in (("gh", FAKE_GH), ("claude", FAKE_CLAUDE), ("aws", FAKE_AWS), ("codex", "#!/bin/sh\n")):
+        for name, text in (("gh", FAKE_GH), ("claude", FAKE_CLAUDE), ("aws", FAKE_AWS), ("codex", "#!/bin/sh\n"),
+                           ("vercel", "#!/bin/sh\nexit 97\n")):
             executable(self.bin / name, text)
         self.stub = self.tmp / "stub"
         self.stub.mkdir()
@@ -130,6 +133,8 @@ class Machine(unittest.TestCase):
                 mock.patch.dict(os.environ, env, clear=True),
                 mock.patch.object(secrets, "SECURITY", str(self.stub / "security")),
                 mock.patch.object(sys, "platform", "darwin"),
+                mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+                mock.patch.object(ADAPTERS["vercel"], "fetch", vercel_api),
                 mock.patch.object(ADAPTERS["github"], "fetch",
                                   lambda token, timeout: (200, {"login": who[token]}) if token in who else (401, {})),
                 mock.patch.object(ADAPTERS["linear"], "fetch", lambda key, timeout: (
@@ -210,6 +215,21 @@ class GuidedInitTests(Machine):
         argv = [json.loads(line) for line in (self.stub / "argv.log").read_text().splitlines()]
         self.assertFalse(any(KEY in a for call in argv for a in call))
 
+    def test_current_vercel_login_is_offered(self):
+        folder = self.home / "Library" / "Application Support" / "com.vercel.cli"
+        folder.mkdir(parents=True)
+        (folder / "auth.json").write_text(json.dumps({"token": VERCEL_TOKEN}))
+        (folder / "config.json").write_text(json.dumps({"currentTeam": "team_acme"}))
+        code, out, err = self.init("", "", "n", "n", "y", "")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("Vercel: signed in as octocat, team acme in ~/Library/Application Support/com.vercel.cli\n", out)
+        self.assertEqual(self.asked[4], "Use this Vercel login for acme? [y/N] ")
+        reg = self.registry()
+        self.assertEqual(reg["projects"]["acme"]["vercel"], "acme")
+        self.assertEqual(reg["accounts"]["vercel"]["acme"]["team_id"], "team_acme")
+        self.assertIn("  ✔ vercel    octocat → acme   login and team confirmed\n", out)
+        self.assertNotIn(VERCEL_TOKEN, out + err + (self.config / "registry.toml").read_text())
+
     def test_declined_accounts_are_skipped(self):
         code, out, err = self.init("", "", "n", "", "")
         self.assertEqual(code, 0, out + err)
@@ -257,7 +277,12 @@ class GuidedInitTests(Machine):
         self.assertIn("GitHub: gh not found on PATH — skipped", out)
         self.assertIn("Claude: claude not found on PATH — skipped", out)
         self.assertIn("Codex: no clean ChatGPT login in ~/.codex (not signed in) — sign in (codex login)", out)
+        self.assertIn("Vercel: not signed in (~/Library/Application Support/com.vercel.cli) — sign in (vercel login), "
+                      "then: keyfit add vercel\n", out)
         self.assertEqual(self.asked, ["Add a Linear API key for acme? [y/N] "])
+        (self.bin / "vercel").unlink()
+        code, out, err = self.init("n")
+        self.assertIn("Vercel: vercel not found on PATH — skipped", out)
 
     def test_ctrl_c_stops_but_keeps_the_registration(self):
         code, out, _ = self.init("1", KeyboardInterrupt())
@@ -310,11 +335,12 @@ class DoctorTests(Machine):
         self.assertEqual(code, 0, out)
         lines = out.splitlines()
         self.assertEqual([line.split()[1] for line in lines[:-1]],
-                         ["macOS", "python", "shims", "PATH", "claude", "codex", "aws", "gh", "registry", "keychain",
-                          "project"])
+                         ["macOS", "python", "shims", "PATH", "claude", "codex", "aws", "gh", "vercel", "registry",
+                          "keychain", "project"])
         self.assertTrue(all(line.startswith("  ✔ ") for line in lines[:-1]), out)
         self.assertIn("first, before every real tool", out)
         self.assertIn(f"✔ gh        {self.bin / 'gh'}\n", out)
+        self.assertIn(f"✔ vercel    {self.bin / 'vercel'}\n", out)
         self.assertIn(f"✔ registry  {self.config / 'registry.toml'}   1 project\n", out)
         self.assertRegex(out, r"✔ project\s+acme\s")
         self.assertEqual(lines[-1], "All good.")
@@ -336,7 +362,7 @@ class DoctorTests(Machine):
         superset.mkdir(parents=True)
         code, out = self.doctor(self.bin, self.shims)
         self.assertEqual(code, 1)
-        self.assertIn(f"{self.bin} comes first: claude, codex, aws, gh would run without Keyfit", out)
+        self.assertIn(f"{self.bin} comes first: claude, codex, aws, gh, vercel would run without Keyfit", out)
         self.assertIn("→ make Keyfit's line (`…  # keyfit: …`) the last line of your shell startup file, "
                       "then open a new terminal", out)
         code, out = self.doctor(self.shims, superset, self.bin)
@@ -372,6 +398,9 @@ class DoctorTests(Machine):
         code, out = self.doctor(self.shims, self.bin)
         self.assertEqual(code, 0, out)
         self.assertIn("  ! gh        not found on PATH   needed only if you use it\n    → brew install gh\n", out)
+        (self.bin / "vercel").unlink()
+        code, out = self.doctor(self.shims, self.bin)
+        self.assertIn("  ! vercel    not found on PATH   needed only if you use it\n    → npm install -g vercel\n", out)
 
     def test_unreadable_registry_and_keychain_fail(self):
         self.setup_shims()

@@ -11,7 +11,7 @@ First public version. macOS only; Python 3.11 or newer, no other dependencies.
 
 ### Added
 
-- **Shims for `claude`, `codex`, `aws` and `gh`.** `keyfit setup` writes them and a small shell
+- **Shims for `claude`, `codex`, `aws`, `gh` and `vercel`.** `keyfit setup` writes them and a small shell
   file that puts them on PATH in new terminals (right after Superset's agent wrapper when it is
   there, so its hooks keep working). You keep typing the commands as usual.
 - **zsh and bash.** `keyfit setup` writes a PATH file for each; `keyfit setup --rc` adds the
@@ -24,17 +24,18 @@ First public version. macOS only; Python 3.11 or newer, no other dependencies.
   version.
 - **Guided first run.** In a terminal, `keyfit init` registers the repository, then offers what
   it finds on this Mac one at a time: an AWS profile from `~/.aws/config` (or `AWS_CONFIG_FILE`),
-  a GitHub account `gh` is signed in to, the current Claude and Codex logins, and a Linear key
+  a GitHub account `gh` is signed in to, the current Claude, Codex and Vercel logins, and a Linear key
   (hidden input, stored in the Keychain). Enter skips; anything already set is left alone; it
   ends with `keyfit status`. `--yes`, or no terminal, registers without asking.
 - **`keyfit setup --remove`** undoes setup: it deletes the shims and both PATH files and takes
   Keyfit's line out of `~/.zshrc`, `~/.bash_profile`, `~/.bash_login`, `~/.profile` and
   `~/.bashrc` (or only `--rc PATH`), leaving every other line as it was. The registry stays;
-  `--purge` also deletes `~/.config/keyfit` after asking (`--yes` to skip the question).
+  `--purge` also deletes `~/.config/keyfit`, with the Claude and Vercel login folders Keyfit made, after
+  asking (`--yes` to skip the question).
   Keychain items are never deleted.
 - **`keyfit doctor`** checks the installation with a ✔/✘ line each and the fix under every ✘:
   macOS, Python, the shims, their place on PATH (before every real tool, right after Superset's
-  wrapper), the real `claude`, `codex`, `aws` and `gh`, the registry, the Keychain and the
+  wrapper), the real `claude`, `codex`, `aws`, `gh` and `vercel`, the registry, the Keychain and the
   current folder's project. It never reads a secret.
 - **Projects recognised by folder.** `keyfit init` registers a repository. Every subfolder and
   every git worktree of it, wherever it lives on disk (Superset's included), belongs to that
@@ -54,8 +55,15 @@ First public version. macOS only; Python 3.11 or newer, no other dependencies.
   - Claude Code: the project's login, checked to be a claude.ai subscription in the expected
     organisation, optionally the exact login (`keyfit add claude`, `--new` for another account).
   - Codex: the project's ChatGPT login, optionally pinned to one account (`keyfit add codex`).
-- **Sign-in always works.** `aws sso login`, `claude auth login`, `codex login` and `gh auth …`
-  run even when a check fails, with the project's environment, so they fix the right account.
+  - Vercel: the project's login (the CLI's global config folder) and team, checked with Vercel's API
+    against the expected username and team membership (`keyfit add vercel`, `--new` for another
+    login). `vercel` gets the folder (`--global-config`) and the team (`--scope`); inside a project,
+    `--scope` or `--global-config` of another team or folder and `--token` are refused, and so is a
+    repository linked (`.vercel/project.json`, `.vercel/repo.json`) to another team. Inherited
+    `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `VERCEL_TEAM_ID` and `VERCEL_TOKEN` are removed.
+- **Sign-in always works.** `aws sso login`, `claude auth login`, `codex login`, `gh auth …` and
+  `vercel login` (also `logout`, `switch`, `whoami`, `teams`) run even when a check fails, with the
+  project's environment (and for `vercel`, the project's login folder), so they fix the right account.
 - **MCP servers per project.** In a project, Claude and Codex see only that project's Linear
   server and never a server another project owns. Your servers keep their names.
 - **`keyfit add mcp NAME…`** marks MCP servers (names or patterns such as `'globex_cloud_*'`) as

@@ -1,7 +1,7 @@
 """Find the real binary behind a name, skipping Keyfit's own shim directory.
 
 Shims sit first on PATH; when a shim (or a check) needs the real `aws`,
-`claude` or `gh`, it must not find itself again.
+`claude`, `gh` or `vercel`, it must not find itself again.
 """
 
 from __future__ import annotations

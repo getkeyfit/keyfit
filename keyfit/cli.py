@@ -13,6 +13,7 @@ from . import __version__, environment, mcp, secrets
 from .adapters import ADAPTERS
 from .adapters import claude as claude_adapter
 from .adapters import linear as linear_adapter
+from .adapters import vercel as vercel_adapter
 from .adapters.aws import ACCOUNT_RE, parse_envrc, read_profile
 from .checks import Check, mask_account
 from .registry import Project, Registry, canonical, config_dir, default_path, tilde  # noqa: F401  (config_dir used by setup)
@@ -173,6 +174,24 @@ def _offer_codex(name: str, base: dict) -> None:
         cmd_add_codex(argparse.Namespace(**base, name=None, codex_home=None, pin_account=False))
 
 
+def _offer_vercel(name: str, base: dict) -> None:
+    from .realbin import find_real
+
+    env = dict(os.environ)
+    if find_real("vercel", env, skip_wrappers=True) is None:
+        print("Vercel: vercel not found on PATH — skipped")
+        return
+    folder = canonical(vercel_adapter.cli_default(env))
+    record, problem = _vercel_identity(folder, None)
+    if record is None:
+        print(f"Vercel: {problem} — sign in (vercel login), then: keyfit add vercel")
+        return
+    team = f", team {record['team']}" if record.get("team") else ""
+    print(f"Vercel: signed in as {record['user']}{team} in {tilde(folder)}")
+    if _yes(f"Use this Vercel login for {name}?"):
+        cmd_add_vercel(argparse.Namespace(**base, name=None, config_dir=None, new=False, team=None))
+
+
 def _offer_linear(name: str, base: dict) -> None:
     if not secrets.can_store():
         print("Linear: later, with a key in an environment variable: keyfit add linear --key env:<VARIABLE>")
@@ -184,7 +203,7 @@ def _offer_linear(name: str, base: dict) -> None:
 
 
 GUIDED = (("aws", "AWS", _offer_aws), ("github", "GitHub", _offer_github), ("claude", "Claude", _offer_claude),
-          ("codex", "Codex", _offer_codex), ("linear", "Linear", _offer_linear))
+          ("codex", "Codex", _offer_codex), ("vercel", "Vercel", _offer_vercel), ("linear", "Linear", _offer_linear))
 
 
 def _guided_init(args, name: str, root: Path) -> int:
@@ -535,6 +554,63 @@ def cmd_add_codex(args) -> int:
     return 0
 
 
+def _vercel_identity(folder: Path, team: str | None) -> tuple[dict | None, str]:
+    """Who is signed in in this Vercel folder, and the team (`team`, else the one selected there): labels only."""
+    adapter = ADAPTERS["vercel"]
+    login, reason, _ = adapter.current_login(folder, dict(os.environ))
+    if login is None:
+        return None, f"{reason} ({tilde(folder)})"
+    token = login["token"]
+    user, reason, _ = adapter.whoami(token)
+    if user is None:
+        return None, reason
+    record = {"user": user["username"]}
+    wanted = team or login["current_team"]
+    if wanted:
+        found, reason, _ = adapter.team_of(token, wanted)
+        if found is None:
+            return None, reason + ("" if team else " (the team selected in that login) — pick one with --team SLUG")
+        record.update(team=found["slug"], team_id=found["id"])
+    return record, ""
+
+
+def cmd_add_vercel(args) -> int:
+    """Record which Vercel login (global config folder) and team a project uses. Default: the CLI's own login."""
+    reg = Registry.load(args.registry)
+    project = _project_from_args(reg, args)
+    if project is None:
+        return 1
+    if args.new:
+        if not args.name:
+            print("--new needs --name (the account's short name)", file=sys.stderr)
+            return 1
+        folder = config_dir() / "vercel" / args.name
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)  # the CLI keeps the login's token here
+        reg.set_account("vercel", args.name, {"config_dir": tilde(folder)})
+        reg.set_connection(project.name, "vercel", args.name)
+        reg.save()
+        team = f" --team {args.team}" if args.team else ""
+        print(f"Created {tilde(folder)}. Sign in once from inside {project.name} (Keyfit sends the login to that "
+              f"folder), then record who it is:\n  vercel login\n"
+              f"  keyfit add vercel --name {args.name} --config-dir {tilde(folder)}{team}")
+        return 0
+    env = dict(os.environ)
+    folder = canonical(args.config_dir) if args.config_dir else canonical(vercel_adapter.cli_default(env))
+    record, problem = _vercel_identity(folder, args.team)
+    if record is None:
+        print(f"could not record the Vercel login: {problem}\n  sign in with: "
+              f"{vercel_adapter.login_command(folder, env)}", file=sys.stderr)
+        return 1
+    name = args.name or record.get("team") or record["user"]
+    reg.set_account("vercel", name, {"config_dir": tilde(folder), **record})
+    reg.set_connection(project.name, "vercel", name)
+    reg.save()
+    team = f", team {record['team']}" + ("" if args.team else " (selected in that login; another: --team SLUG)") \
+        if record.get("team") else ""
+    print(f"{project.name}: vercel account '{name}' → {record['user']}{team} in {tilde(folder)}")
+    return 0
+
+
 def cmd_run(args) -> int:
     """Run a command with the project's environment (its accounts, checked first)."""
     reg = Registry.load(args.registry)
@@ -571,7 +647,7 @@ NOT_MACOS = "Keyfit supports macOS for now (it stores keys in the Keychain); Lin
 # is Superset wrapper → Keyfit shim → real tool (Superset finds "the next claude"). Both move to the very front:
 # a login profile that prepends another folder after Superset set PATH (e.g. `brew shellenv` in ~/.zprofile)
 # must not put real tools ahead of the shims.
-SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh shims on PATH (written by `keyfit setup`).
+SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 () {
   local kf="@SHIMS@" ss="$HOME/.superset/bin"
@@ -581,7 +657,7 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh shims on PATH (written by `
 
 # The same rule in POSIX sh, for bash (macOS ships 3.2): no arrays or `local`, so _kf_ variables unset at the
 # end; PATH is walked with parameter expansion (never word-split or globbed). Like zsh, it drops empty entries.
-SHELL_SH = """# Keyfit: put the claude/codex/aws/gh shims on PATH (written by `keyfit setup`).
+SHELL_SH = """# Keyfit: put the claude/codex/aws/gh/vercel shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 _kf="@SHIMS@"; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
 while [ -n "$_kf_rest" ]; do
@@ -616,7 +692,8 @@ def _rc_files(shell: str) -> list[Path]:
 
 
 def _setup_line(shell: str) -> str:
-    """The line `keyfit setup --rc` writes into a startup file of this shell."""
+    """The line `keyfit setup --rc` writes into a startup file of this shell. Its text is how Keyfit finds the line
+    again (setup, --remove, doctor), so it stays as it is although the shims now include vercel."""
     filename, _, load = SHELLS[shell]
     return f'{load} "{config_dir() / filename}"  # keyfit: claude/codex/aws/gh shims on PATH'
 
@@ -698,7 +775,8 @@ def cmd_setup(args) -> int:
 
 
 # What Keyfit itself keeps in its config dir; --purge deletes the folder only when it holds nothing else.
-KEYFIT_FILES = {"registry.toml", "registry.toml.tmp", "cache", "bin", "shell.zsh", "shell.sh", "claude", ".DS_Store"}
+KEYFIT_FILES = {"registry.toml", "registry.toml.tmp", "cache", "bin", "shell.zsh", "shell.sh", "claude", "vercel",
+                ".DS_Store"}
 
 
 def _drop_lines(rc: Path, lines: set[str]) -> bool:
@@ -731,8 +809,9 @@ def _purge_confirmed(folder: Path, args) -> bool:
     if not sys.stdin.isatty():
         print(f"--purge deletes {tilde(folder)}; confirm with --yes — nothing changed", file=sys.stderr)
         return False
-    accounts = sorted(p.name for p in (folder / "claude").glob("*") if p.is_dir())
-    extra = f" and the Claude account folders {', '.join(accounts)}" if accounts else ""
+    accounts = [(title, sorted(p.name for p in (folder / kind).glob("*") if p.is_dir()))
+                for kind, title in (("claude", "Claude"), ("vercel", "Vercel"))]
+    extra = "".join(f" and the {title} account folders {', '.join(names)}" for title, names in accounts if names)
     if _yes(f"Delete {tilde(folder)}: the registry of your projects{extra}?"):
         return True
     print("Nothing changed.")
@@ -790,12 +869,12 @@ def _remove_setup(args) -> int:
             folder.rmdir()  # only when nothing else is left in it
         except OSError:
             pass
-    print("Open a new terminal (or run: hash -r): claude, codex, aws and gh run directly again.")
+    print("Open a new terminal (or run: hash -r): claude, codex, aws, gh and vercel run directly again.")
     return 0
 
 
 INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "npm install -g @openai/codex",
-           "aws": "brew install awscli", "gh": "brew install gh"}
+           "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel"}
 
 
 def _short(path: str) -> str:
@@ -912,7 +991,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("init", help="register the current repository as a project, then offer the AWS, GitHub, "
-                                    "Claude, Codex and Linear accounts found on this Mac "
+                                    "Claude, Codex, Vercel and Linear accounts found on this Mac "
                                     "(imports `use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
@@ -931,7 +1010,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("projects", help="list registered projects")
     p.set_defaults(func=cmd_projects)
 
-    p = sub.add_parser("setup", help="write the claude/codex/aws/gh shims (and optionally add them to PATH)")
+    p = sub.add_parser("setup", help="write the claude/codex/aws/gh/vercel shims (and optionally add them to PATH)")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
     p.add_argument("--rc", nargs="?", const="", metavar="PATH",
@@ -943,7 +1022,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "~/.bash_profile, ~/.bash_login, ~/.profile and ~/.bashrc (or only --rc PATH); "
                         "the registry stays")
     p.add_argument("--purge", action="store_true",
-                   help="with --remove: also delete ~/.config/keyfit (registry, cache, Claude account folders it made), "
+                   help="with --remove: also delete ~/.config/keyfit (registry, cache, Claude and Vercel account "
+                        "folders it made), "
                         "after asking; Keychain items stay")
     p.add_argument("-y", "--yes", action="store_true", help="with --purge: do not ask")
     p.set_defaults(func=cmd_setup)
@@ -1003,6 +1083,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="require this exact ChatGPT account (default: any ChatGPT login, e.g. codex-multi-auth pools)")
     p.add_argument("--project", help="project name (default: the project of the current folder)")
     p.set_defaults(func=cmd_add_codex)
+    p = kinds.add_parser("vercel", help="Vercel login (global config folder) and team for this project")
+    p.add_argument("--name", help="short account name, reusable across projects (default: the team slug, "
+                                  "else the username)")
+    where = p.add_mutually_exclusive_group()
+    where.add_argument("--config-dir", help="the login's global config folder (default: the one the vercel CLI uses, "
+                                            "your current login)")
+    where.add_argument("--new", action="store_true",
+                       help="create a folder for another login (~/.config/keyfit/vercel/NAME); sign in afterwards")
+    p.add_argument("--team", help="team slug or ID the project deploys to (default: the team selected in that login)")
+    p.add_argument("--project", help="project name (default: the project of the current folder)")
+    p.set_defaults(func=cmd_add_vercel)
 
     p = sub.add_parser("run", help="run a command with the project's accounts: keyfit run -- <command>")
     p.add_argument("command", nargs=argparse.REMAINDER)

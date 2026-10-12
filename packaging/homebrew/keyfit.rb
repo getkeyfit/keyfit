@@ -21,7 +21,7 @@ class Keyfit < Formula
 
   def caveats
     <<~EOS
-      Put Keyfit in front of claude, codex, aws and gh (new terminals pick it up):
+      Put Keyfit in front of claude, codex, aws, gh and vercel (new terminals pick it up):
         keyfit setup --rc
       The shims run #{opt_libexec}/bin/python, so they survive `brew upgrade`.
       Run `keyfit setup` again if this formula ever moves to another Python version.
