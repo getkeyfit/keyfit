@@ -10,7 +10,7 @@ export default defineConfig({
 			title: 'Keyfit',
 			description:
 				'claude, codex, aws and gh use the accounts of the project you are in. Keyfit checks them with the services before the tool starts.',
-			logo: { src: './src/assets/logo.svg' },
+			logo: { light: './src/assets/wordmark-on-light.svg', dark: './src/assets/wordmark-on-dark.svg', replacesTitle: true },
 			favicon: '/favicon.svg',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/FlamurMaliqi/keyfit' }],
 			customCss: ['@fontsource-variable/inter', '@fontsource/ibm-plex-mono/400.css', '@fontsource/ibm-plex-mono/600.css', './src/styles/custom.css'],

@@ -191,14 +191,17 @@ code {
 	justify-content: space-between;
 	height: 64px;
 }
+/* The wordmark: KEYFIT set in Sixtyfour, the logo. */
 .brand {
 	display: inline-flex;
 	align-items: center;
-	gap: 0.6rem;
-	font-family: var(--mono);
-	font-weight: 600;
-	font-size: 17px;
-	letter-spacing: 0.12em;
+	font-family: 'Sixtyfour', var(--mono);
+	font-size: 19px;
+	line-height: 1;
+	letter-spacing: -0.02em;
+}
+.brand-sm {
+	font-size: 16px;
 }
 .nav nav {
 	display: flex;
