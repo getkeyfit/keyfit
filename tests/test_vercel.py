@@ -419,7 +419,7 @@ class ShimTests(VercelCase):
         code, argv, _ = self.run_shim("deploy")
         self.assertEqual(code, 1)
         self.assertIsNone(argv)
-        self.assertIn("keyfit: vercel not started — client needs attention", self.stderr)
+        self.assertIn("keyfit: vercel not started, client needs attention", self.stderr)
         self.assertIn("✘ vercel    octocat → acme   signed in as hubot, project expects octocat", self.stderr)
 
     def test_linked_to_another_team_blocks(self):

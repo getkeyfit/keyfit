@@ -68,7 +68,7 @@ When a check fails, the tool does not start:
 
 ```
 $ claude
-keyfit: claude not started — acme-api needs attention
+keyfit: claude not started, acme-api needs attention
   ✘ aws       acme-dev → …4321   SSO session expired
     → aws sso login --sso-session acme
   (bypass once: KEYFIT_DISABLE=1 claude …)

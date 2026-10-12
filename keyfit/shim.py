@@ -207,7 +207,7 @@ def main(argv: list[str]) -> int:
         checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
         failed = [c for c in checks if c.failed]
         if failed:
-            _say([f"keyfit: {tool} not started — {project.name} needs attention"])
+            _say([f"keyfit: {tool} not started, {project.name} needs attention"])
             for check in failed:
                 _say(check.lines())
             _say([f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"])
