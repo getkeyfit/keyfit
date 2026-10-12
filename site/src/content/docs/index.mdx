@@ -1,0 +1,194 @@
+---
+title: Keyfit — the right accounts for every project, checked
+description: claude, codex, aws and gh use the accounts of the project you are in. Keyfit checks them with AWS, Linear, GitHub and Claude before the tool starts, and stops it when one is wrong.
+template: splash
+hero:
+  title: Every project gets its own accounts. Keyfit checks them.
+  tagline: Type <code>claude</code>, <code>codex</code>, <code>aws</code> or <code>gh</code> as usual. Keyfit knows which client's repository you are in, verifies that project's AWS, Linear, GitHub, Claude and Codex accounts with the services themselves, and stops the tool when one is wrong.
+  actions:
+    - text: Get started
+      link: /docs/quickstart/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/FlamurMaliqi/keyfit
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+import Terminal from '../../components/Terminal.astro';
+
+## For people who work for several clients
+
+<p class="kf-lead">
+	Coding agents run <code>aws</code>, <code>gh</code> and MCP tools on their own. When each client has its own AWS
+	account, Linear workspace and GitHub login, one leftover environment variable is enough for an agent to act as the
+	wrong client. Tools that switch credentials per folder assume the switch worked. Keyfit asks each service who you
+	are signed in as, and stops the tool if the answer is wrong.
+</p>
+
+<div class="kf-split">
+	<Terminal
+		title="acme-api — everything matches"
+		lines={[
+			{ text: 'keyfit status', tone: 'cmd' },
+			{ text: 'acme-api' },
+			{ text: '  ✔ aws       acme-dev → …4321   account confirmed', tone: 'ok' },
+			{ text: '  ✔ linear    acme   workspace confirmed', tone: 'ok' },
+			{ text: '  ✔ github    octocat   login confirmed', tone: 'ok' },
+			{ text: '  ✔ claude    Acme   Acme (team) confirmed', tone: 'ok' },
+			{ text: '  ✔ codex     ChatGPT pro   subscription login', tone: 'ok' },
+			{ text: 'claude', tone: 'cmd' },
+			{ text: '…starts with acme’s accounts, and only those', tone: 'dim' },
+		]}
+	/>
+	<Terminal
+		title="globex-web — a sign-in expired"
+		lines={[
+			{ text: 'claude', tone: 'cmd' },
+			{ text: 'keyfit: claude not started — globex-web needs attention' },
+			{ text: '  ✘ aws       globex → …8765   SSO session expired', tone: 'fail' },
+			{ text: '    → aws sso login --sso-session globex', tone: 'fix' },
+			{ text: '  (bypass once: KEYFIT_DISABLE=1 claude …)', tone: 'dim' },
+			{ text: 'aws sso login --sso-session globex', tone: 'cmd' },
+			{ text: 'claude', tone: 'cmd' },
+			{ text: '…starts with globex’s accounts', tone: 'dim' },
+		]}
+	/>
+</div>
+
+## How it works
+
+<Steps>
+
+1. **It recognises the project.** From the folder you are in, including every git worktree of a registered repository (Superset's too). Folders you haven't registered work exactly as before.
+
+2. **It checks every account with the service.** AWS, Linear, GitHub and Claude are asked who you are. Expired sign-ins are caught before anything runs. Successful checks are reused for 30 minutes, so launches stay fast.
+
+3. **It starts the tool with only that project's credentials.** Conflicting keys inherited from your shell are removed, and MCP servers that belong to other projects are hidden. If a check fails, the tool does not start and you see the command that fixes it.
+
+</Steps>
+
+## What it checks
+
+<CardGrid>
+	<Card title="AWS" icon="cloud-download">
+		The account behind the profile, via <code>sts get-caller-identity</code>. Inside a project, <code>aws --profile</code> with another project's profile is refused.
+	</Card>
+	<Card title="Linear" icon="list-format">
+		The workspace behind the API key. Keys you add are stored in the macOS Keychain, never in a file.
+	</Card>
+	<Card title="GitHub" icon="github">
+		The login behind <code>gh</code>'s token for that account, checked with GitHub.
+	</Card>
+	<Card title="Claude Code" icon="comment">
+		The organization of the claude.ai login. Login pools that rotate between accounts keep working.
+	</Card>
+	<Card title="Codex" icon="rocket">
+		A ChatGPT login without an API key, so a stray key never takes over.
+	</Card>
+	<Card title="MCP servers" icon="puzzle">
+		Each project sees its own Linear server. Servers you assign to a project stay out of every other one.
+	</Card>
+</CardGrid>
+
+## Install
+
+You need macOS, Python 3.11 or newer, and zsh or bash.
+
+<Tabs syncKey="install">
+	<TabItem label="Homebrew">
+		```bash
+		brew install flamurmaliqi/keyfit/keyfit
+		```
+	</TabItem>
+	<TabItem label="pipx">
+		```bash
+		pipx install keyfit
+		```
+	</TabItem>
+</Tabs>
+
+Then, once:
+
+```bash
+keyfit setup --rc   # puts Keyfit in front of claude, codex, aws and gh (new terminals)
+cd ~/code/acme-api
+keyfit init         # registers the repository and offers the accounts it finds on your Mac
+```
+
+<LinkCard title="Quickstart" description="The five-minute guide, with every option explained." href="/docs/quickstart/" />
+
+## Private by design
+
+<CardGrid>
+	<Card title="Runs on your Mac" icon="laptop">
+		No account, no server, no telemetry. It is a small command-line tool with no dependencies.
+	</Card>
+	<Card title="Keys stay secret" icon="approve-check">
+		Never printed, logged or written to Keyfit's files. Keys you add live in the macOS Keychain.
+	</Card>
+	<Card title="Talks only to the services it checks" icon="random">
+		AWS, Linear, GitHub and Claude, to ask who you are. Each key goes only to the service it belongs to.
+	</Card>
+	<Card title="Leaves your repositories alone" icon="document">
+		It never writes into your code and never changes another tool's login.
+	</Card>
+</CardGrid>
+
+<LinkCard title="Security" description="Everything Keyfit reads, stores and sends, and what it doesn't protect against." href="/docs/security/" />
+
+## Questions
+
+<div class="kf-faq">
+
+<details>
+<summary>Does it slow my tools down?</summary>
+
+Barely. Local checks run on every launch; the online checks are reused for 30 minutes, so most launches add a fraction of a second. The first check after a break takes a second or two.
+
+</details>
+
+<details>
+<summary>What happens in folders I haven't registered?</summary>
+
+Nothing. The tools run exactly as before Keyfit.
+
+</details>
+
+<details>
+<summary>I already use direnv. Do I need to retype everything?</summary>
+
+No. `keyfit init` imports `use aws PROFILE ACCOUNT_ID` and `export LINEAR_API_KEY=$VARIABLE` lines from the repository's `.envrc`. It reads the file as text and never runs it.
+
+</details>
+
+<details>
+<summary>Does Keyfit see my code or my prompts?</summary>
+
+No. It only decides which accounts a tool starts with, then hands over to the real tool.
+
+</details>
+
+<details>
+<summary>Does it work on Linux or Windows?</summary>
+
+Not yet. Keys live in the macOS Keychain, so the first version is macOS only. Linux is planned.
+
+</details>
+
+<details>
+<summary>How do I skip or remove it?</summary>
+
+`KEYFIT_DISABLE=1 claude` skips Keyfit once. `keyfit setup --remove` takes it out of your shell; your projects stay registered until you add `--purge`.
+
+</details>
+
+<details>
+<summary>What does it cost?</summary>
+
+Nothing. Keyfit is open source under the MIT licence.
+
+</details>
+
+</div>
