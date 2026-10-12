@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Flamur Maliqi", email = "contact@flamur-maliqi.de" }]
-keywords = ["aws", "claude", "codex", "credentials", "github", "linear", "mcp"]
+keywords = ["aws", "claude", "codex", "credentials", "github", "linear", "mcp", "vercel"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",

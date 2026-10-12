@@ -3,6 +3,7 @@ from .claude import ClaudeAdapter
 from .codex import CodexAdapter
 from .github import GithubAdapter
 from .linear import LinearAdapter
+from .vercel import VercelAdapter
 
 ADAPTERS = {
     "aws": AwsAdapter(),
@@ -10,4 +11,5 @@ ADAPTERS = {
     "claude": ClaudeAdapter(),
     "codex": CodexAdapter(),
     "github": GithubAdapter(),
+    "vercel": VercelAdapter(),
 }
