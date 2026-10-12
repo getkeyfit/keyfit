@@ -1,0 +1,53 @@
+name: Feedback from trying Keyfit
+description: You tried Keyfit. Tell us what worked, what got in the way, and whether you would keep it.
+title: "[feedback] "
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying Keyfit early. Short answers are fine. Please leave out secret values,
+        account IDs and anything else you would not post publicly.
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What did you try?
+      description: What you set up and what you used it for (which tools, how many projects, Superset or plain terminals, …).
+    validations:
+      required: true
+
+  - type: textarea
+    id: blocked
+    attributes:
+      label: What blocked or confused you?
+      description: A step you got stuck on, a message you did not understand, a tool Keyfit stopped when it should not have.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: keep
+    attributes:
+      label: Would you keep using it?
+      options:
+        - "Yes"
+        - Probably
+        - Not sure yet
+        - Probably not
+        - "No"
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why, and what would change your answer?
+    validations:
+      required: false

@@ -1,0 +1,75 @@
+name: Bug report
+description: Keyfit did something wrong, blocked a tool it should not have, or crashed.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Keyfit never prints secret values, but please read what you paste
+        and remove anything you do not want public (project names, account IDs, paths).
+        Found a security problem? Do not open an issue; see SECURITY.md.
+
+  - type: textarea
+    id: command
+    attributes:
+      label: What you ran
+      description: The exact command, and the folder you ran it in (a registered project, a worktree, an unregistered folder, …).
+      placeholder: |
+        cd ~/code/my-project
+        claude
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Paste the output Keyfit printed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `keyfit doctor`
+      description: Run it in the same folder. It prints names and checks only, never secret values. If `keyfit` itself does not start, say so here.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Output of `keyfit --version`
+      placeholder: keyfit 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: Apple menu > About This Mac, or `sw_vers -productVersion`.
+      placeholder: "15.6"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: shell
+    attributes:
+      label: Shell
+      options:
+        - zsh
+        - bash
+        - other (please say which under "What happened")
+    validations:
+      required: true

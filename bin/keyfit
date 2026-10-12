@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Run keyfit from this checkout without installing it.
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m keyfit "$@"

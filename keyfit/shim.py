@@ -1,0 +1,185 @@
+"""The shim in front of `claude`, `codex`, `aws` and `gh` (ambient mode).
+
+Three outcomes only:
+  folder not registered      → run the real tool unchanged
+  registered, all checks ok  → run it with the project's environment (silently)
+  a check fails              → do not run it; print what is wrong and the fix
+
+Inside a project session (KEYFIT_PROJECT set), `aws` and `gh` stay on that
+session's project even after `cd` elsewhere; `claude` and `codex` re-resolve
+from the folder, since starting a new agent elsewhere is deliberate.
+Bypass once: KEYFIT_DISABLE=1 <tool> …
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+from . import environment, mcp
+from .realbin import find_real
+from .registry import Project, Registry
+from .resolve import resolve
+
+TOOLS = ("claude", "codex", "aws", "gh")
+RELEVANT = {"aws": ("aws",), "gh": ("github",), "claude": None, "codex": None}
+PINNED = ("aws", "gh")
+MAX_DEPTH = 6
+CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs",
+                      "mcp", "plugin", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update", "help"}
+CODEX_SUBCOMMANDS = {"agents", "exec", "e", "review", "login", "logout", "mcp", "plugin", "app-server",
+                     "remote-control", "app", "completion", "update", "doctor", "sandbox", "debug", "apply", "a",
+                     "resume", "queue", "archive", "delete", "migrate-rollouts", "unarchive", "fork", "cloud",
+                     "exec-server", "features", "help"}
+CODEX_SESSIONS = {None, "exec", "e", "review", "resume", "fork"}
+# Sign-in and setup commands always run — they are how a failed check gets fixed.
+LOGIN_COMMANDS = {
+    "aws": (("sso", "login"), ("sso", "logout"), ("login",), ("logout",), ("configure",)),
+    "claude": (("auth",), ("setup-token",)),
+    "codex": (("login",), ("logout",)),
+    "gh": (("auth",),),
+}
+LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",)}
+VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query", "--color", "--ca-bundle",
+                 "--cli-read-timeout", "--cli-connect-timeout", "--sso-session", "-u", "--user", "-h", "--hostname",
+                 "-c", "--config", "-m", "--model"}
+
+
+class Refused(Exception):
+    pass
+
+
+def positionals(args: list[str]) -> list[str]:
+    out = []
+    for i, arg in enumerate(args):
+        if arg == "--":
+            break
+        if arg.startswith("-") or (i > 0 and args[i - 1] in VALUE_OPTIONS):
+            continue
+        out.append(arg)
+    return out
+
+
+def is_login_command(tool: str, args: list[str]) -> bool:
+    words = positionals(args)
+    return any(tuple(words[:len(prefix)]) == prefix for prefix in LOGIN_COMMANDS.get(tool, ()))
+
+
+def subcommand(args: list[str], known: set[str]) -> str | None:
+    previous = None
+    for arg in args:
+        if arg == "--":
+            return None
+        if arg in known and (previous is None or not previous.startswith("-")):
+            return arg
+        previous = arg
+    return None
+
+
+def requested_profiles(args: list[str]) -> list[str]:
+    out = []
+    for i, arg in enumerate(args):
+        if arg == "--profile" and i + 1 < len(args):
+            out.append(args[i + 1])
+        elif arg.startswith("--profile="):
+            out.append(arg.split("=", 1)[1])
+    return out
+
+
+def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Path,
+                owners: dict | None = None) -> list[str]:
+    if tool == "aws":
+        profile = project.connections["aws"]["profile"]
+        for asked in requested_profiles(args):
+            if asked != profile:
+                raise Refused(f"keyfit: this folder belongs to {project.name} (AWS profile {profile}); "
+                              f"refusing --profile {asked}.\n  Bypass once: KEYFIT_DISABLE=1 aws …")
+        return args
+    if tool == "claude":
+        if subcommand(args, CLAUDE_SUBCOMMANDS):
+            return args
+        settings = mcp.claude_settings(project, env, cwd, owners)
+        return (["--settings", json.dumps(settings)] if settings else []) + args
+    if tool == "codex":
+        sub = subcommand(args, CODEX_SUBCOMMANDS)
+        if sub not in CODEX_SESSIONS:
+            return args
+        extra = mcp.codex_overrides(project, env, owners)
+        if sub is None:
+            extra.append("--no-daemon")  # the shared daemon keeps the first launcher's environment
+        return extra + args
+    return args
+
+
+def _say(lines: list[str]) -> None:
+    for line in lines:
+        print(line, file=sys.stderr)
+
+
+def main(argv: list[str]) -> int:
+    tool, args = Path(argv[0]).name, list(argv[1:])
+    env = dict(os.environ)
+    real = find_real(tool, env, skip_wrappers=True)
+    if real is None:
+        print(f"keyfit: the real {tool} was not found on PATH", file=sys.stderr)
+        return 127
+    depth = int(env.get("KEYFIT_SHIM_DEPTH") or 0)
+    if depth >= MAX_DEPTH:  # shims calling shims: stop instead of recursing until the process table is full
+        print(f"keyfit: {tool} nested {depth} levels deep through Keyfit — stopping to avoid a loop.\n"
+              f"  Bypass once: KEYFIT_DISABLE=1 {tool} …", file=sys.stderr)
+        return 1
+    if env.get("KEYFIT_DISABLE") == "1":
+        os.execve(real, [tool, *args], env)
+
+    try:
+        registry = Registry.load()
+        shared = tool == "aws" and requested_profiles(args)
+        if shared and set(shared) <= registry.shared_aws_profiles():
+            # profiles of machine-wide tools rather than a project ([settings]): they run unchanged anywhere
+            os.execve(real, [tool, *args], env)
+        pinned = env.get("KEYFIT_PROJECT") if tool in PINNED else None
+        project = registry.get(pinned) if pinned else resolve(".", registry).project
+        if project is None:
+            os.execve(real, [tool, *args], env)  # not a registered project: exactly as before Keyfit
+
+        relevant = RELEVANT.get(tool)
+        if is_login_command(tool, args):
+            # run sign-in/setup with the project's environment (so `aws sso login` / `claude auth login`
+            # target the project's profile / account) but without checks; gh must manage its own tokens.
+            login_env = environment.build(project, env, kinds=LOGIN_KINDS[tool])
+            if tool == "gh":
+                for var in ("GH_TOKEN", "GITHUB_TOKEN"):
+                    login_env.pop(var, None)
+            os.execve(real, [tool, *args], login_env)
+        if relevant and not any(kind in project.connections for kind in relevant):
+            raise Refused(f"keyfit: project {project.name} has no {relevant[0]} account mapped, so {tool} was not "
+                          f"started.\n  Map one: keyfit add {relevant[0]} …   (bypass once: KEYFIT_DISABLE=1 {tool} …)")
+        run_env = environment.build(project, env, kinds=relevant)  # aws/gh only need their own connection
+        run_env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
+        checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
+        failed = [c for c in checks if c.failed]
+        if failed:
+            _say([f"keyfit: {tool} not started — {project.name} needs attention"])
+            for check in failed:
+                _say(check.lines())
+            _say([f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"])
+            return 1
+        if tool in ("claude", "codex"):
+            for check in (c for c in checks if c.status == "warn"):
+                _say([f"keyfit: {check.lines()[0].strip()}"])
+        args = adjust_args(tool, project, args, run_env, Path.cwd(), registry.mcp_owners())
+    except Refused as refusal:
+        print(refusal, file=sys.stderr)
+        return 1
+    except Exception as err:  # a Keyfit bug must not silently drop the checks
+        print(f"keyfit: internal error ({type(err).__name__}: {err}) — {tool} was not started.\n"
+              f"  Bypass once: KEYFIT_DISABLE=1 {tool} …", file=sys.stderr)
+        return 1
+    if env.get("KEYFIT_DRY_RUN") == "1":
+        changed = sorted(k for k in set(env) | set(run_env) if env.get(k) != run_env.get(k))
+        print(f"keyfit: project {project.name}, checks ok\n  would run: {real} {' '.join(args)}\n"
+              f"  environment changes (names only): {', '.join(changed)}", file=sys.stderr)
+        return 0
+    os.execve(real, [tool, *args], run_env)

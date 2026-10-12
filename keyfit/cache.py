@@ -1,0 +1,69 @@
+"""Successful remote checks, remembered so daily launches stay instant and a network blip does not block work.
+
+Local checks run on every launch. A remote check is reused while it is fresh
+(30 minutes) and while the connection and its fingerprint (a new sign-in, a
+different key) are unchanged. When the network does not answer, a success from
+the last 24 hours is shown as a warning instead of blocking. Failures are never
+cached. The file holds statuses and labels only — no secrets.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import threading
+import time
+
+from .registry import config_dir
+
+TTL = 30 * 60          # fresh: reused without asking the provider
+STALE = 24 * 60 * 60   # kept: trusted (as a warning) only when the provider cannot be reached
+_LOCK = threading.Lock()  # checks run in parallel threads; one writer at a time per process
+
+
+def _path():
+    return config_dir() / "cache" / "checks.json"
+
+
+def key(project: str, kind: str, conn, fingerprint: str) -> str:
+    return hashlib.sha256(json.dumps([project, kind, conn, fingerprint], sort_keys=True).encode()).hexdigest()
+
+
+def _load() -> dict:
+    try:
+        return json.loads(_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def get(k: str, now: float | None = None, max_age: float = TTL) -> dict | None:
+    entry = _load().get(k)
+    now = time.time() if now is None else now
+    if entry and now - entry.get("at", 0) < max_age:
+        return entry
+    return None
+
+
+def put(k: str, status: str, detail: str) -> None:
+    """Best effort: a lost entry only means one more remote check later; never break a launch."""
+    with _LOCK:
+        now = time.time()
+        data = {key_: v for key_, v in _load().items() if now - v.get("at", 0) < STALE}
+        data[k] = {"at": now, "status": status, "detail": detail}
+        path = _path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")  # unique per process and thread
+            tmp.write_text(json.dumps(data))
+            tmp.chmod(0o600)
+            os.replace(tmp, path)
+        except OSError:
+            pass
+
+
+def clear() -> None:
+    try:
+        _path().unlink()
+    except OSError:
+        pass
