@@ -100,6 +100,7 @@ class ClaudeTests(unittest.TestCase):
     def test_seed_links_shared_settings_and_trusts_repo(self):
         repo = self.tmp / "repo"
         repo.mkdir()
+        (self.home / ".claude.json").write_text(json.dumps({"projects": {str(repo): {"hasTrustDialogAccepted": True}}}))
         made = seed(self.other, {"HOME": str(self.home)}, [repo])
         self.assertTrue((self.other / "settings.json").is_symlink())
         self.assertTrue((self.other / "skills").is_symlink())
@@ -107,6 +108,17 @@ class ClaudeTests(unittest.TestCase):
         state = json.loads((self.other / ".claude.json").read_text())
         self.assertTrue(state["projects"][str(repo)]["hasTrustDialogAccepted"])
         self.assertIn("settings.json", made)
+
+    def test_seed_trusts_only_what_the_default_account_trusts(self):
+        # trust lets a repository's own hooks and settings run: a new login never trusts more than the old one
+        parent, child, stranger = self.tmp / "work", self.tmp / "work" / "client", self.tmp / "stranger"
+        for folder in (child, stranger):
+            folder.mkdir(parents=True)
+        (self.home / ".claude.json").write_text(json.dumps({"projects": {
+            str(parent): {"hasTrustDialogAccepted": True}, str(stranger): {"hasTrustDialogAccepted": False}}}))
+        seed(self.other, {"HOME": str(self.home)}, [child, stranger])
+        state = json.loads((self.other / ".claude.json").read_text())
+        self.assertEqual(list(state["projects"]), [str(child)])
 
     def test_seed_creates_an_owner_only_folder(self):
         # Claude keeps the account's transcripts and history in this folder
