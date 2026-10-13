@@ -13,7 +13,7 @@ from unittest import mock
 from keyfit import mcp
 from keyfit.cli import main
 from keyfit.registry import LEGACY_KINDS, Project, Registry
-from keyfit.shim import adjust_args, subcommand, CLAUDE_SUBCOMMANDS, CODEX_SUBCOMMANDS
+from keyfit.shim import Refused, adjust_args, subcommand, CLAUDE_SUBCOMMANDS, CODEX_SUBCOMMANDS
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -282,6 +282,25 @@ class OwnedServerTests(unittest.TestCase):
         self.assertEqual(self.hidden_in("acme"), ["globex_cloud_eu"])
         self.assertEqual(self.hidden_in("initech"), ["globex_cloud_eu"])
         self.assertEqual(self.hidden_in("globex"), ["auth_team"])
+
+    def test_codex_names_are_never_quoted(self):
+        # Codex splits a -c key on every dot without quoting (tested with codex-cli 0.162.1): a quoted
+        # name makes it refuse to start, while a bare name with an inner space is understood
+        (self.tmp / ".codex" / "config.toml").write_text('[mcp_servers."globex cloud"]\nurl = "https://g.example/mcp"\n')
+        self.registry.add_mcp_servers("globex", ["globex cloud"])
+        args = adjust_args("codex", self.registry.get("acme"), ["exec", "x"], self.env, self.tmp, self.registry.mcp_owners())
+        self.assertEqual(args[:2], ["-c", "mcp_servers.globex cloud.enabled=false"])
+
+    def test_codex_refuses_when_a_server_cannot_be_hidden(self):
+        for name in ("globex_cloud_e.u", "globex_cloud_e=u", "globex_cloud_eu "):  # all match globex_cloud_*
+            with self.subTest(name=name):
+                (self.tmp / ".codex" / "config.toml").write_text(f'[mcp_servers.{json.dumps(name)}]\nurl = "https://g.example/mcp"\n')
+                with self.assertRaises(Refused) as refusal:
+                    adjust_args("codex", self.registry.get("acme"), ["exec", "x"], self.env, self.tmp, self.registry.mcp_owners())
+                self.assertIn("codex not started", str(refusal.exception))
+        # the project that owns it starts normally: nothing has to be hidden there
+        args = adjust_args("codex", self.registry.get("globex"), ["exec", "x"], self.env, self.tmp, self.registry.mcp_owners())
+        self.assertEqual(args, ["exec", "x"])
 
     def test_registry_keeps_ownership_out_of_connections(self):
         self.registry.save()

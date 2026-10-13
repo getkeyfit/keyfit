@@ -34,6 +34,11 @@ From the pre-launch security review:
 - **The loop guard counts every launch**, so a wrapper that calls a tool by name stops after a few
   rounds in unregistered folders too.
 - **`bin/keyfit` runs Python isolated**, so a repository it runs in cannot replace a module.
+- **Codex never sees a server it cannot hide.** Codex splits a `-c` key on every dot and does not
+  understand quotes, so a server name with a dot or `=` that had to be hidden either stayed visible
+  or broke the start. Such a server now stops `codex` with a message to rename it; names with inner
+  spaces are passed bare, which Codex understands.
+- **Release workflow:** actions pinned to commit hashes, `build` and `twine` to versions.
 - `docs/security.md` now says plainly what Keyfit sees, stores, sends and does not protect against.
 
 ## [0.1.0] - 2026-10-12

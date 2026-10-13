@@ -124,7 +124,12 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         sub = subcommand(args, CODEX_SUBCOMMANDS)
         if sub not in CODEX_SESSIONS:
             return args
-        extra = mcp.codex_overrides(project, env, owners)
+        try:
+            extra = mcp.codex_overrides(project, env, owners)
+        except mcp.Unhideable as server:
+            raise Refused(f"keyfit: codex not started, {project.name} must not see MCP server {printable(str(server))}, "
+                          f"and Codex cannot hide a name with a dot, \"=\" or a space at either end.\n"
+                          f"  Rename it in ~/.codex/config.toml (underscores work), or remove it.") from None
         if sub is None:
             extra.append("--no-daemon")  # the shared daemon keeps the first launcher's environment
         return extra + args
