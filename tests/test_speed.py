@@ -1,18 +1,21 @@
 """Launch speed (KEY-43): what was made faster keeps every check."""
 
+import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
-from keyfit import environment  # noqa: E402
+from keyfit import cache, environment  # noqa: E402
 from keyfit.adapters import ADAPTERS  # noqa: E402
 from keyfit.adapters.base import Adapter  # noqa: E402
-from keyfit.adapters.github import git_identity  # noqa: E402
+from keyfit.adapters.github import git_identity, hosts_file  # noqa: E402
 from keyfit.checks import Check  # noqa: E402
 from keyfit.cli import _check_shims  # noqa: E402
 from keyfit.realbin import MARKER  # noqa: E402
@@ -20,6 +23,19 @@ from keyfit.registry import Project  # noqa: E402
 from keyfit.shim import TOOLS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Fake gh: answers `auth token --hostname github.com --user <login>` and logs every call.
+FAKE_GH = """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["GH_CALLS"], "a") as fh: fh.write(json.dumps(args) + "\\n")
+if args[:5] != ["auth", "token", "--hostname", "github.com", "--user"]:
+    sys.exit(97)
+token = json.loads(os.environ.get("FAKE_GH_TOKENS", "{}")).get(args[5])
+if not token: sys.exit(1)
+print(token)
+"""
+WHO = {"tok-octocat": "octocat", "tok-hubot": "hubot"}
 
 
 def git(*args, cwd):
@@ -76,6 +92,81 @@ class VerifyTests(unittest.TestCase):
         for connections in ({"broken": {}}, {"fine": {}, "broken": {}}):
             with self.assertRaises(RuntimeError):  # the shim turns this into "internal error", tool not started
                 environment.verify(Project("demo", ["/tmp"], connections), {})
+
+
+class SessionTokenTests(unittest.TestCase):
+    """Inside a session Keyfit started, gh keeps the GH_TOKEN the project's check confirmed instead of asking
+    gh for it again, but only that exact token, only for that project and while gh's sign-ins are unchanged."""
+
+    def setUp(self):
+        os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        (self.tmp / "bin").mkdir()
+        gh = self.tmp / "bin" / "gh"
+        gh.write_text(FAKE_GH)
+        gh.chmod(0o755)
+        self.calls = self.tmp / "calls"
+        self.calls.write_text("")
+        conn = {"login": "octocat", "name": "octocat"}
+        self.project = Project("demo", [str(self.tmp)], {"github": conn})
+        self.other = Project("other", [str(self.tmp)], {"github": dict(conn)})
+        fetch = mock.patch.object(ADAPTERS["github"], "fetch",
+                                  lambda token, timeout: (200, {"login": WHO[token]}) if token in WHO else (401, {}))
+        fetch.start()
+        self.addCleanup(fetch.stop)
+        cwd = os.getcwd()
+        os.chdir(self.tmp)
+        self.addCleanup(os.chdir, cwd)
+
+    def launch(self, project=None, **inherited):
+        """What the shim does for `gh`: build the environment, then run the checks with the cache."""
+        project = project or self.project
+        env = {"HOME": str(self.tmp), "PATH": f"{self.tmp / 'bin'}{os.pathsep}{os.environ['PATH']}",
+               "GH_CALLS": str(self.calls), "FAKE_GH_TOKENS": json.dumps({"octocat": "tok-octocat"}), **inherited}
+        env = environment.build(project, env, kinds=("github",))
+        return env, environment.verify(project, env, kinds=("github",), use_cache=True)
+
+    def asked_gh(self) -> int:
+        return len(self.calls.read_text().splitlines())
+
+    def test_session_keeps_the_token_its_check_confirmed(self):
+        first, _ = self.launch()
+        self.assertEqual(self.asked_gh(), 1)
+        env, checks = self.launch(GH_TOKEN=first["GH_TOKEN"], KEYFIT_PROJECT="demo")
+        self.assertEqual(self.asked_gh(), 1)
+        self.assertEqual(env["GH_TOKEN"], "tok-octocat")
+        self.assertEqual([c.status for c in checks], ["ok"])
+
+    def test_a_token_no_check_confirmed_is_replaced(self):
+        self.launch()
+        env, checks = self.launch(GH_TOKEN="tok-hubot")  # another account's token, valid at GitHub
+        self.assertEqual(self.asked_gh(), 2)
+        self.assertEqual(env["GH_TOKEN"], "tok-octocat")
+        self.assertEqual([c.status for c in checks], ["ok"])
+
+    def test_confirmation_is_per_project(self):
+        first, _ = self.launch()
+        self.launch(self.other, GH_TOKEN=first["GH_TOKEN"])
+        self.assertEqual(self.asked_gh(), 2)
+
+    def test_a_gh_sign_in_change_asks_gh_again(self):
+        first, _ = self.launch()
+        hosts = Path(hosts_file(first))  # `gh auth login/logout/switch` rewrite it
+        hosts.parent.mkdir(parents=True)
+        hosts.write_text("github.com: {}\n")
+        self.launch(GH_TOKEN=first["GH_TOKEN"])
+        self.assertEqual(self.asked_gh(), 2)
+
+    def test_after_the_cache_window_gh_is_asked_again(self):
+        first, _ = self.launch()
+        later = time.time() + cache.TTL + 1
+        with mock.patch("time.time", return_value=later):
+            self.launch(GH_TOKEN=first["GH_TOKEN"])
+        self.assertEqual(self.asked_gh(), 2)
+
+    def test_hosts_file_follows_gh(self):
+        self.assertEqual(hosts_file({"HOME": "/h"}), "/h/.config/gh/hosts.yml")
+        self.assertEqual(hosts_file({"HOME": "/h", "XDG_CONFIG_HOME": "/x"}), "/x/gh/hosts.yml")
 
 
 class GitIdentityTests(unittest.TestCase):

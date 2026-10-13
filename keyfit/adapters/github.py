@@ -6,13 +6,18 @@ Project:  github = "octocat"
 
 inject  — remove inherited GitHub tokens and gh overrides, then read the account's
           own token with `gh auth token --user <login>` (read-only; gh keeps one
-          Keychain entry per account) and expose it as GH_TOKEN.
+          Keychain entry per account) and expose it as GH_TOKEN. Inside a session
+          Keyfit started, the session's GH_TOKEN is kept instead when this project's
+          check confirmed exactly that token in the last 30 minutes and gh's sign-ins
+          (hosts.yml) have not changed since; asking gh again takes ~80 ms per launch.
           Never point gh at a synthetic GH_CONFIG_DIR: gh rewrites its per-account
           Keychain entries from the shared active slot when it does (2026-10-08 incident).
 local   — a token exists for the login; the repo's author email and ssh host alias
           match the account (warnings — commits would carry the wrong identity).
 remote  — GET https://api.github.com/user with that token must return the login,
           which also catches a stored token that belongs to a different account.
+fingerprint — the token's hash and when gh last changed its sign-ins (hosts.yml, by its
+          time only): a new token or any `gh auth login/logout/switch` is checked again.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import os
 import re
 import subprocess
 
+from .. import cache
 from ..checks import Check
 from ..realbin import find_real
 from .base import Adapter
@@ -100,6 +106,13 @@ def git_identity(cwd: str) -> tuple[str, str | None]:
     return email, (m.group(1) if m else None)
 
 
+def hosts_file(env: dict) -> str:
+    """gh's list of sign-ins, where gh reads it once GH_CONFIG_DIR is scrubbed. Keyfit only looks at its time."""
+    if env.get("XDG_CONFIG_HOME"):
+        return os.path.join(env["XDG_CONFIG_HOME"], "gh", "hosts.yml")
+    return os.path.join(env.get("HOME") or os.path.expanduser("~"), ".config", "gh", "hosts.yml")
+
+
 class GithubAdapter(Adapter):
     kind = "github"
 
@@ -115,15 +128,35 @@ class GithubAdapter(Adapter):
                 f"then switch back: gh auth switch --user <your usual account>")
 
     def inject(self, conn, env: dict) -> None:
+        inherited = env.get("GH_TOKEN")
         for var in SCRUB:
             env.pop(var, None)
-        token, _ = read_token(conn.get("login", ""), env)
+        if inherited and self.confirmed(conn, env, inherited):
+            token = inherited
+        else:
+            token, _ = read_token(conn.get("login", ""), env)
         if token:
             env["GH_TOKEN"] = token
         env["KEYFIT_GITHUB_LOGIN"] = conn.get("login", "")
 
+    def confirmed(self, conn, env: dict, token: str) -> bool:
+        """True when the project's GitHub check (KEYFIT_PROJECT, set by environment.build) confirmed exactly this
+        token within the cache's 30 minutes and gh's sign-ins have not changed since: both are in the fingerprint."""
+        project = env.get("KEYFIT_PROJECT")
+        if not project:
+            return False
+        return cache.get(cache.key(project, self.kind, conn, self._fingerprint(token, env))) is not None
+
     def fingerprint(self, conn, env: dict) -> str:
-        return hashlib.sha256(env.get("GH_TOKEN", "").encode()).hexdigest()[:16]
+        return self._fingerprint(env.get("GH_TOKEN", ""), env)
+
+    @staticmethod
+    def _fingerprint(token: str, env: dict) -> str:
+        try:
+            changed = str(os.stat(hosts_file(env)).st_mtime_ns)
+        except OSError:
+            changed = ""
+        return f"{hashlib.sha256(token.encode()).hexdigest()[:16]}:{changed}"
 
     def local(self, conn, env: dict) -> Check:
         label = self.label(conn)
