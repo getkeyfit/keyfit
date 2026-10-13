@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Sign in now? [Y/n]`.** When you start a tool yourself in a terminal and every failed check is fixed
+  by a plain sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`),
+  Keyfit offers to run it, checks again and starts the tool. Without a terminal (agents, scripts, CI)
+  nothing is asked. gh's sign-in is never run for you, since it switches gh's active account.
+
 ### Changed
 
 - **Faster starts, about 30–55 ms per launch.** urllib and TLS load only when a check goes online,

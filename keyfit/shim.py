@@ -3,7 +3,8 @@
 Three outcomes only:
   folder not registered      → run the real tool unchanged
   registered, all checks ok  → run it with the project's environment (silently)
-  a check fails              → do not run it; print what is wrong and the fix
+  a check fails              → do not run it; print what is wrong and the fix (in a terminal, when the fix
+                               is only a sign-in, offer to run it and then start the tool)
 
 Inside a project session (KEYFIT_PROJECT set), `aws`, `gh` and `vercel` stay on
 that session's project even after `cd` elsewhere; `claude` and `codex` re-resolve
@@ -50,6 +51,16 @@ LOGIN_COMMANDS = {
     "vercel": (("login",), ("logout",), ("switch",), ("whoami",), ("teams",)),
 }
 LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",)}
+# Fixes that are nothing but a sign-in, which Keyfit offers to run when you start a tool yourself in a terminal
+# (None: one value such as a profile name). Every other fix, including gh's (it switches gh's active account), is
+# only printed. A variable a fix may set in front: Claude's and Codex's config folder of the account.
+SIGN_INS = {
+    "aws": (("login", "--profile", None), ("sso", "login", "--profile", None), ("sso", "login", "--sso-session", None)),
+    "claude": (("auth", "login"),),
+    "codex": (("login",),),
+    "vercel": (("login",), ("login", "--global-config", None)),
+}
+SIGN_IN_VARS = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}
 VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query", "--color", "--ca-bundle",
                  "--cli-read-timeout", "--cli-connect-timeout", "--sso-session", "-u", "--user", "-h", "--hostname",
                  "-c", "--config", "-m", "--model", "-Q", "--global-config", "-S", "--scope", "-T", "--team",
@@ -185,6 +196,58 @@ def _say(lines: list[str]) -> None:
         print(line, file=sys.stderr)
 
 
+def sign_in_command(fix: str) -> tuple[dict, list[str]] | None:
+    """The fix as (variables, words) when it is exactly one of SIGN_INS, else None."""
+    import shlex
+
+    try:
+        words = shlex.split(fix)
+    except ValueError:
+        return None
+    assignments = {}
+    while words and "=" in words[0] and not words[0].startswith("-"):
+        name, _, value = words.pop(0).partition("=")
+        assignments[name] = value
+    if not words or words[0] not in SIGN_INS or set(assignments) - {SIGN_IN_VARS.get(words[0])}:
+        return None
+    rest = words[1:]
+    for shape in SIGN_INS[words[0]]:
+        if len(shape) == len(rest) and all(want == word if want else word and not word.startswith("-")
+                                           for want, word in zip(shape, rest)):
+            return assignments, words
+    return None
+
+
+def offer_sign_in(failed: list, project: Project, env: dict) -> bool | None:
+    """In a terminal, when every failed check is fixed by a sign-in, ask and run them. True: they all finished;
+    False: one failed; None: nothing was offered or the answer was no. Never asked without a terminal (agents,
+    scripts, CI), so nothing waits for an answer that cannot come."""
+    commands = [sign_in_command(check.fix) for check in failed]
+    if not commands or None in commands or env.get("KEYFIT_DRY_RUN") == "1" or env.get("CI"):
+        return None
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        return None
+    sys.stderr.write("  Sign in now? [Y/n] ")
+    sys.stderr.flush()
+    answer = sys.stdin.readline()
+    if not answer or answer.strip().lower() not in ("", "y", "yes"):  # end of input counts as no
+        return None
+    import subprocess
+
+    for assignments, words in {(tuple(a.items()), tuple(w)): None for a, w in commands}:
+        name = words[0]
+        real = find_real(name, env, skip_wrappers=True)
+        if real is None:
+            _say([f"keyfit: {name} is not installed. Install it: {INSTALL[name]}"])
+            return False
+        login_env = environment.build(project, env, kinds=LOGIN_KINDS[name])  # as when you type the sign-in
+        login_env.update(assignments)
+        if subprocess.run(list(words), executable=real, env=login_env).returncode != 0:
+            _say([f"keyfit: {name} sign-in did not finish"])
+            return False
+    return True
+
+
 def main(argv: list[str]) -> int:
     tool, args = Path(argv[0]).name, list(argv[1:])
     env = dict(os.environ)
@@ -240,8 +303,19 @@ def main(argv: list[str]) -> int:
             _say([f"keyfit: {tool} not started, {project.name} needs attention"])
             for check in failed:
                 _say(check.lines())
-            _say([f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"])
-            return 1
+            if offer_sign_in(failed, project, env):
+                run_env = environment.build(project, env, kinds=relevant)
+                checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
+                failed = [c for c in checks if c.failed]
+                if failed:
+                    _say([f"keyfit: {tool} not started, {project.name} still needs attention"])
+                    for check in failed:
+                        _say(check.lines())
+                else:
+                    _say([f"keyfit: signed in, starting {tool}"])
+            if failed:
+                _say([f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"])
+                return 1
         if tool in ("claude", "codex"):
             for check in (c for c in checks if c.status == "warn"):
                 _say([f"keyfit: {check.lines()[0].strip()}"])
