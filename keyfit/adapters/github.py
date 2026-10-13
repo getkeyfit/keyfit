@@ -145,7 +145,8 @@ class GithubAdapter(Adapter):
         project = env.get("KEYFIT_PROJECT")
         if not project:
             return False
-        return cache.get(cache.key(project, self.kind, conn, self._fingerprint(token, env))) is not None
+        hit = cache.get(cache.key(project, self.kind, conn, self._fingerprint(token, env)))
+        return hit is not None and hit.get("status") == "ok"  # a warning never vouches for a token
 
     def fingerprint(self, conn, env: dict) -> str:
         return self._fingerprint(env.get("GH_TOKEN", ""), env)

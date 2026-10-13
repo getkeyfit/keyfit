@@ -144,6 +144,14 @@ class SessionTokenTests(unittest.TestCase):
         self.assertEqual(env["GH_TOKEN"], "tok-octocat")
         self.assertEqual([c.status for c in checks], ["ok"])
 
+    def test_a_cached_warning_does_not_vouch_for_a_token(self):
+        first, _ = self.launch()
+        path = cache._path()
+        data = json.loads(path.read_text())
+        path.write_text(json.dumps({k: {**v, "status": "warn"} for k, v in data.items()}))
+        self.launch(GH_TOKEN=first["GH_TOKEN"], KEYFIT_PROJECT="demo")
+        self.assertEqual(self.asked_gh(), 2)
+
     def test_confirmation_is_per_project(self):
         first, _ = self.launch()
         self.launch(self.other, GH_TOKEN=first["GH_TOKEN"])

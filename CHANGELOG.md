@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Faster starts, about 30–55 ms per launch.** urllib and TLS load only when a check goes online,
+  shims run `python3 -I -S`, GitHub's two git questions run side by side, and `gh` inside a session
+  Keyfit started keeps the token its project's check confirmed in the last 30 minutes (until gh's
+  sign-ins change). Run `keyfit setup` again to rewrite your shims. `scripts/bench_shim.py` measures
+  what a shim adds on your Mac.
+
 ### Security
 
 From the pre-launch security review:
