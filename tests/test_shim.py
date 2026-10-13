@@ -14,7 +14,7 @@ from unittest import mock
 from keyfit import mcp
 from keyfit.cli import main
 from keyfit.registry import LEGACY_KINDS, Project, Registry
-from keyfit.shim import Refused, adjust_args, subcommand, CLAUDE_SUBCOMMANDS, CODEX_SUBCOMMANDS
+from keyfit.shim import Refused, adjust_args, sign_in_command, subcommand, CLAUDE_SUBCOMMANDS, CODEX_SUBCOMMANDS
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -39,6 +39,22 @@ if args[:3] == ["auth", "status", "--json"]:
 print(json.dumps({"argv": args, "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY")}))
 """
 
+
+# Signed out until `claude auth login` has run once (it leaves the file $SIGNED_IN behind).
+FAKE_CLAUDE_SIGNED_OUT = """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+marker = os.environ["SIGNED_IN"]
+folder = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude")
+if args[:2] == ["auth", "login"]:
+    open(marker, "w").close(); print("fake sign-in done"); sys.exit(0)
+if args[:3] == ["auth", "status", "--json"]:
+    if not os.path.exists(marker):
+        print(json.dumps({"loggedIn": False, "authMethod": "none", "configDirectory": folder})); sys.exit(1)
+    print(json.dumps({"loggedIn": True, "authMethod": "claude.ai", "email": "me@work.io", "orgId": "org-work",
+                      "orgName": "Work", "subscriptionType": "team", "configDirectory": folder})); sys.exit(0)
+print(json.dumps({"argv": args}))
+"""
 
 def executable(path: Path, text: str) -> None:
     path.write_text(text)
@@ -93,6 +109,72 @@ class ShimTests(unittest.TestCase):
                "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config), "STS_COUNT": str(self.sts), **extra}
         out = subprocess.run([tool, *args], cwd=cwd or self.repo, env=env, capture_output=True, text=True, timeout=60)
         return out
+
+    def run_in_terminal(self, tool, *args, answer: str):
+        """Run the shim with a terminal on stdin and stderr, as when you type the command; answer the prompt."""
+        import pty
+        import select
+
+        env = {"PATH": f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin",
+               "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config), "STS_COUNT": str(self.sts),
+               "SIGNED_IN": str(self.tmp / "signed-in")}
+        master, slave = pty.openpty()
+        proc = subprocess.Popen([tool, *args], cwd=self.repo, env=env, stdin=slave, stdout=subprocess.PIPE,
+                                stderr=slave)
+        os.close(slave)
+        seen, sent = b"", False
+        while select.select([master], [], [], 30)[0]:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:  # the other side closed: the shim and what it started are done
+                break
+            if not chunk:
+                break
+            seen += chunk
+            if not sent and b"Sign in now? [Y/n] " in seen:
+                os.write(master, answer.encode())
+                sent = True
+        proc.wait(timeout=30)
+        os.close(master)
+        return proc.returncode, proc.stdout.read().decode(), seen.decode().replace("\r\n", "\n")
+
+    def test_expired_sign_in_is_offered_and_then_the_tool_starts(self):
+        executable(self.bin / "claude", FAKE_CLAUDE_SIGNED_OUT)
+        code, out, terminal = self.run_in_terminal("claude", "-p", "hi", answer="\n")
+        self.assertEqual(code, 0, terminal)
+        self.assertIn("✘ claude    Work   not signed in\n    → claude auth login\n  Sign in now? [Y/n] ", terminal)
+        self.assertIn("fake sign-in done", out)  # the sign-in ran, with the terminal's stdin
+        self.assertIn("keyfit: signed in, starting claude\n", terminal)
+        self.assertEqual(json.loads(out.splitlines()[-1])["argv"][-2:], ["-p", "hi"])
+
+    def test_declined_sign_in_starts_nothing(self):
+        executable(self.bin / "claude", FAKE_CLAUDE_SIGNED_OUT)
+        code, out, terminal = self.run_in_terminal("claude", "-p", "hi", answer="n\n")
+        self.assertEqual((code, out), (1, ""))
+        self.assertFalse((self.tmp / "signed-in").exists())
+        self.assertIn("  (bypass once: KEYFIT_DISABLE=1 claude …)", terminal)
+
+    def test_no_terminal_no_question(self):
+        # agents and scripts: nothing may wait for an answer that cannot come
+        executable(self.bin / "claude", FAKE_CLAUDE_SIGNED_OUT)
+        out = self.run_tool("claude", "-p", "hi", SIGNED_IN=str(self.tmp / "signed-in"))
+        self.assertEqual((out.returncode, out.stdout), (1, ""))
+        self.assertNotIn("Sign in now?", out.stderr)
+        self.assertTrue(out.stderr.endswith("    → claude auth login\n  (bypass once: KEYFIT_DISABLE=1 claude …)\n"))
+
+    def test_only_plain_sign_ins_are_offered(self):
+        for fix, words in [
+                ("aws login --profile acme", ["aws", "login", "--profile", "acme"]),
+                ("aws sso login --sso-session corp", ["aws", "sso", "login", "--sso-session", "corp"]),
+                ("CLAUDE_CONFIG_DIR=/k/claude/w claude auth login", ["claude", "auth", "login"]),
+                ("CODEX_HOME=/k/codex codex login", ["codex", "login"]),
+                ('vercel login --global-config "/k/vercel/a b"', ["vercel", "login", "--global-config", "/k/vercel/a b"])]:
+            self.assertEqual(sign_in_command(fix)[1], words, fix)
+        for fix in ("gh auth login --hostname github.com --git-protocol ssh --web",  # switches gh's active account
+                    "claude auth login  then: keyfit add claude --name w", "aws login --profile",
+                    "aws login --profile --debug", "AWS_PROFILE=x aws login --profile y", "CODEX_HOME=/x claude auth login",
+                    "rm -r .vercel, then link it again: vercel link", "aws configure --profile p", "keyfit add claude", ""):
+            self.assertIsNone(sign_in_command(fix), fix)
 
     def test_registered_folder_gets_project_environment(self):
         out = self.run_tool("aws", "s3", "ls", AWS_ACCESS_KEY_ID="inherited", AWS_PROFILE="other")

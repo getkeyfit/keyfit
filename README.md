@@ -98,6 +98,7 @@ Already using direnv? `keyfit init` also imports `use aws PROFILE ACCOUNT_ID` an
 Some details:
 
 - **Which accounts each tool gets:** `claude` and `codex` get, and check, all of the project's accounts. `aws` gets only the AWS account, `gh` only the GitHub account and `vercel` only the Vercel login.
+- **Expired sign-ins are one keypress.** When you start a tool in a terminal and the only problem is an expired or missing sign-in, Keyfit asks `Sign in now? [Y/n]`, runs the sign-in, checks again and starts the tool. Agents and scripts are never asked; they get the message and the fix.
 - **Sign-in commands always run**, with the project's environment, so they fix the right account. These are `aws sso login`, `aws login`, `aws configure`, `claude auth …`, `codex login`, `gh auth …` and `vercel login`, `logout`, `switch`, `whoami` and `teams`.
 - **Inside a Claude or Codex session,** the `aws`, `gh` and `vercel` commands it runs stay on that session's project, even after a `cd` elsewhere.
 - **Claude Code's status line** shows the project and its accounts, unless you configured a status line of your own.
