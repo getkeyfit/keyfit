@@ -190,6 +190,12 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("aws", "s3", "ls", cwd=self.outside, KEYFIT_PROJECT="demo", AWS_PROFILE="other")
         self.assertEqual(json.loads(out.stdout)["AWS_PROFILE"], "iam")
 
+    def test_session_of_a_project_no_longer_registered_does_not_run_unchecked(self):
+        out = self.run_tool("aws", "s3", "ls", KEYFIT_PROJECT="renamed", AWS_PROFILE="other")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(out.stdout, "")
+        self.assertIn("project renamed, which is not in the registry", out.stderr)
+
     def test_claude_session_hides_other_projects_linear_servers(self):
         out = self.run_tool("claude", "-p", "hello", ANTHROPIC_API_KEY="sk-ant-inherited")
         self.assertEqual(out.returncode, 0, out.stderr)
