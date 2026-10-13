@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -159,6 +160,44 @@ class ShimTests(unittest.TestCase):
         self.assertEqual(out.stdout.count("no longer supported"), 1, out.stdout)
         self.assertNotIn("not supported yet", out.stdout)
         self.assertIn(LEGACY_KINDS[0], reg.read_text())  # the user's entries are left for them to remove
+
+    def test_registry_mistake_stops_the_tool_and_names_the_place(self):
+        reg = self.config / "registry.toml"
+        reg.write_text("[projects.demo\n" + reg.read_text())
+        for cwd in (self.repo, self.outside):  # unreadable: no folder can be told apart, so nothing starts unchecked
+            out = self.run_tool("claude", "-p", "hi", cwd=cwd)
+            self.assertEqual((out.returncode, out.stdout), (1, ""))
+            self.assertRegex(out.stderr, rf"^keyfit: claude not started, {re.escape(str(reg))} has a mistake\n  ✘ .*"
+                                         rf"\(at line 1, column \d+\)\n    → fix that line in {re.escape(str(reg))}\n"
+                                         r"  \(bypass once: KEYFIT_DISABLE=1 claude …\)\n$")
+
+    def test_unusable_connection_fails_only_its_project(self):
+        reg = self.config / "registry.toml"
+        reg.write_text(reg.read_text().replace('claude = "work"', 'claude = "wrok"'))
+        out = self.run_tool("claude", "-p", "hi")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("✘ claude    wrok   no account [accounts.claude.wrok]\n    → map it again: keyfit add claude …",
+                      out.stderr)
+        self.assertNotIn("internal error", out.stderr)
+        self.assertEqual(self.run_tool("aws", "s3", "ls").returncode, 0)  # the project's aws has its own account
+        self.assertEqual(self.run_tool("claude", "-p", "hi", cwd=self.outside).returncode, 0)  # other folders too
+        reg.write_text(reg.read_text().replace("aws = {", "asw = {"))
+        out = self.run_tool("claude", "-p", "hi")
+        self.assertRegex(out.stderr, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, "
+                                     r"github, vercel\)\n    → rename or remove asw in ")
+
+    def test_missing_tool_says_how_to_install_it(self):
+        out = self.run_tool("gh", "pr", "list")
+        self.assertEqual(out.returncode, 127)
+        self.assertEqual(out.stderr, "keyfit: gh is not installed (no gh on PATH besides Keyfit's shim).\n"
+                                     "  Install it: brew install gh   (keyfit doctor shows where each tool is found)\n")
+
+    def test_unmapped_tool_names_the_command_that_maps_it(self):
+        executable(self.bin / "gh", "#!/bin/sh\necho gh ran\n")
+        out = self.run_tool("gh", "pr", "list")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(out.stderr, "keyfit: project demo has no github account mapped, so gh was not started.\n"
+                                     "  Map one: keyfit add github --login <login>   (bypass once: KEYFIT_DISABLE=1 gh …)\n")
 
     def test_login_commands_run_even_when_a_check_fails(self):
         out = self.run_tool("aws", "sso", "login", FAKE_ACCOUNT="999999999999")

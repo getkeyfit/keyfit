@@ -196,6 +196,34 @@ class AwsTests(unittest.TestCase):
         self.assertTrue(c.failed)
         self.assertEqual(c.fix, "aws sso login --sso-session corp")
 
+    def test_rejected_static_key_points_at_aws_configure(self):
+        (self.home / ".aws" / "credentials").write_text("[static]\naws_access_key_id = AKIAFAKE\n")
+        conn = {"profile": "static", "account": "444444444444"}
+        env = self.env_for(conn, {"static": {"error": "An error occurred (InvalidClientTokenId) when calling the "
+                                                      "GetCallerIdentity operation: The security token included in "
+                                                      "the request is invalid."}})
+        c = self.aws.verify(conn, env)
+        self.assertTrue(c.failed)
+        self.assertIn("InvalidClientTokenId", c.detail)
+        # a sign-in command: the shim lets it through inside the project although the check fails
+        self.assertEqual(c.fix, "aws configure --profile static   (enter a working access key)")
+
+    def test_other_errors_point_at_a_command_the_shim_lets_through(self):
+        conn = {"profile": "role", "account": "333333333333"}
+        env = self.env_for(conn, {"role": {"error": "An error occurred (AccessDenied) when calling AssumeRole"}})
+        self.assertEqual(self.aws.verify(conn, env).fix,
+                         "KEYFIT_DISABLE=1 aws sts get-caller-identity --profile role   (shows the full error)")
+
+    def test_missing_cli_says_how_to_install_it(self):
+        conn = {"profile": "iam", "account": "444444444444"}
+        c = self.aws.verify(conn, self.env_for(conn, PATH="/usr/bin:/bin"))
+        self.assertEqual((c.detail, c.fix), ("aws CLI not found on PATH", "brew install awscli"))
+
+    def test_inject_survives_a_hand_edited_connection(self):
+        env = self.env_for({"profile": "iam"})  # no account: the local check says so instead of a KeyError
+        self.assertEqual(env["AWS_EXPECTED_ACCOUNT_ID"], "")
+        self.assertIn("12-digit", self.aws.local({"profile": "iam"}, env).detail)
+
     def test_inherited_key_never_reaches_aws(self):
         conn = {"profile": "iam", "account": "444444444444"}
         env = self.env_for(conn, {"iam": {"account": "444444444444"}}, AWS_ACCESS_KEY_ID="inherited")
