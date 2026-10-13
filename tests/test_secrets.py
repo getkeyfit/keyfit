@@ -244,6 +244,20 @@ class StoreKeysTests(unittest.TestCase):
         self.assertEqual(self.fetched, [])
         self.assertNotIn(token, out + err)
 
+    def test_a_terminal_that_would_echo_the_key_reads_nothing(self):
+        import getpass
+        import warnings
+
+        def echoing(prompt="Password: "):  # what getpass does when it cannot turn echo off
+            warnings.warn("Can not control echo on the terminal.", getpass.GetPassWarning, stacklevel=2)
+            return KEY
+
+        err = io.StringIO()
+        with mock.patch("getpass.getpass", echoing), mock.patch("sys.stdin", TTY()), redirect_stderr(err):
+            self.assertEqual(main(["add", "linear"]), 1)
+        self.assertIn("cannot hide what you type", err.getvalue())
+        self.assertEqual((self.fetched, self.keychain()), ([], {}))
+
     def test_secret_set_quotes_any_printable_value_and_list_shows_names_only(self):
         value = 'p"a s\'s\\w0rd\\ $(x) `y` #z -w "'
         code, out, err = self.keyfit("secret", "set", "OPENAI_API_KEY", stdin=TTY(), password=value)
