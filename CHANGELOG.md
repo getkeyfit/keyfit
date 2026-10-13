@@ -5,6 +5,33 @@ All notable changes to Keyfit are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **First run reads like a guide.** `keyfit` alone prints its help with a "start here" list; `setup` and
+  `init` come first in it, and every command's `--help` says what it does. After `keyfit setup --rc`,
+  Keyfit says what to do next; with `--rc FILE` it prints the matching `--remove --rc FILE`.
+- **`keyfit init` refuses your home folder** (and any folder above it), and a `--root` that doesn't
+  exist: every folder under it would have belonged to one project. Outside git, it says that every
+  folder below belongs to the project. It also says when Keyfit isn't active in this terminal yet.
+- **`keyfit status`** says which of `aws`, `gh` and `vercel` won't start in the project until their
+  account is mapped, and how to register a folder that isn't.
+- **Every error names the next command.** A tool that isn't installed shows how to install it; an
+  unmapped `gh` shows `keyfit add github --login <login>`; `keyfit add aws` lists the profiles there
+  are; a rejected AWS access key points at `aws configure --profile P`, which runs inside the project.
+
+### Fixed
+
+- A mistake in `registry.toml` (a typo, `roots` written as a string, a root that is the home folder)
+  is reported with its place and the fix instead of a Python traceback, in `keyfit` commands and in
+  the shims. A connection that names a missing account, or a misspelled one, fails only its own
+  project's check.
+- With Python older than 3.11 (macOS's own `python3` is 3.9), Keyfit says which version it needs
+  instead of failing on `import tomllib`.
+- Shims whose Keyfit installation is gone (uninstalled before `keyfit setup --remove`, or moved) say
+  what to do instead of sh's "No such file or directory". The tool still doesn't start.
+
 ## [0.1.0] - 2026-10-12
 
 First public version. macOS only; Python 3.11 or newer, no other dependencies.
