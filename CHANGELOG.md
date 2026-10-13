@@ -5,6 +5,37 @@ All notable changes to Keyfit are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+From the pre-launch security review:
+
+- **A `.git` file or symlink no longer lends a folder another project.** A folder (for example an
+  unpacked archive) whose `.git` pointed at a registered repository resolved to that project. A
+  worktree now counts only when its repository lists it; a moved worktree needs `git worktree repair`.
+- **Unclear command lines always run the checks.** `claude --add-dir auth` or `codex -C login` was
+  taken for a sign-in command and started a session without checks.
+- **`aws --prof other` is refused** like `--profile other`: the AWS CLI accepts abbreviations.
+- **A session whose project is no longer registered** runs no `aws`, `gh` or `vercel` instead of
+  running them unchecked.
+- **An account kind Keyfit does not know** (a typo such as `githb`) fails its check instead of warning.
+- **No key in error output.** A malformed `~/.aws/credentials` line (which can be a secret key) was
+  printed in the "internal error" message; internal errors now show the exception type and place
+  only. A key typed where a reference or name belongs (`--key lin_api_…`, `secret set lin_api_…`) is
+  refused without being repeated, and hidden prompts never fall back to echoing.
+- **Keys go only to their own service.** Only values shaped like a Linear key are sent to Linear
+  (`--key env:VAR` and `.envrc` imports could name any variable), and Keyfit's HTTPS checks no
+  longer follow redirects, which would have carried the key or token to the new address.
+- **Owner-only files from the first byte:** the registry, the check cache and a new Claude
+  account's `.claude.json`; the cache folder and Claude account folders are 700.
+- **Control characters are escaped** in check output, so text from a repository
+  (`.vercel/project.json`) cannot drive the terminal.
+- **The loop guard counts every launch**, so a wrapper that calls a tool by name stops after a few
+  rounds in unregistered folders too.
+- **`bin/keyfit` runs Python isolated**, so a repository it runs in cannot replace a module.
+- `docs/security.md` now says plainly what Keyfit sees, stores, sends and does not protect against.
+
 ## [0.1.0] - 2026-10-12
 
 First public version. macOS only; Python 3.11 or newer, no other dependencies.
