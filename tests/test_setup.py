@@ -71,7 +71,7 @@ class SetupTests(unittest.TestCase):
         self.assertIn("add this as the LAST line of ~/.zshrc (or run: keyfit setup --rc)", out)
         entry = Path(cli.__file__).resolve().parent / "_shim_entry.py"
         self.assertEqual((self.config / "bin" / "aws").read_text(),
-                         f'#!/bin/sh\nexec "{sys.executable}" -I "{entry}" aws "$@"\n')
+                         f'#!/bin/sh\nexec "{sys.executable}" -I -S "{entry}" aws "$@"\n')
 
     def test_not_macos(self):
         code, out, err = self.setup(platform="linux")

@@ -13,7 +13,10 @@ from keyfit import environment  # noqa: E402
 from keyfit.adapters import ADAPTERS  # noqa: E402
 from keyfit.adapters.base import Adapter  # noqa: E402
 from keyfit.checks import Check  # noqa: E402
+from keyfit.cli import _check_shims  # noqa: E402
+from keyfit.realbin import MARKER  # noqa: E402
 from keyfit.registry import Project  # noqa: E402
+from keyfit.shim import TOOLS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -68,6 +71,19 @@ class VerifyTests(unittest.TestCase):
         for connections in ({"broken": {}}, {"fine": {}, "broken": {}}):
             with self.assertRaises(RuntimeError):  # the shim turns this into "internal error", tool not started
                 environment.verify(Project("demo", ["/tmp"], connections), {})
+
+
+class ShimScriptTests(unittest.TestCase):
+    def test_doctor_reads_both_shim_forms(self):
+        folder = Path(tempfile.mkdtemp()).resolve()
+        (folder / MARKER).write_text("")
+        for flags in ("-I", "-I -S"):
+            for tool in TOOLS:
+                (folder / tool).write_text(f'#!/bin/sh\nexec "/nowhere/python3" {flags} "/nowhere/_shim_entry.py" {tool} "$@"\n')
+                (folder / tool).chmod(0o755)
+            check = _check_shims(folder)
+            self.assertTrue(check.failed, flags)
+            self.assertIn("runs /nowhere/python3, which no longer exists", check.detail)
 
 
 if __name__ == "__main__":

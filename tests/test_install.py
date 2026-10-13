@@ -98,7 +98,7 @@ class InstalledWheelTests(unittest.TestCase):
         self.run_in(self.tmp, str(self.venv / "bin" / "keyfit"), "setup")
         shim = (self.config / "bin" / "aws").read_text()
         site = next(self.venv.glob("lib/python*/site-packages"))
-        self.assertEqual(shim, f'#!/bin/sh\nexec "{self.venv}/bin/python" -I "{site}/keyfit/_shim_entry.py" aws "$@"\n')
+        self.assertEqual(shim, f'#!/bin/sh\nexec "{self.venv}/bin/python" -I -S "{site}/keyfit/_shim_entry.py" aws "$@"\n')
 
         repo = self.tmp / "repo"
         repo.mkdir()
