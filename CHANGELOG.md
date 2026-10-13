@@ -38,6 +38,9 @@ From the pre-launch security review:
   understand quotes, so a server name with a dot or `=` that had to be hidden either stayed visible
   or broke the start. Such a server now stops `codex` with a message to rename it; names with inner
   spaces are passed bare, which Codex understands.
+- **A new Claude login trusts no more than your default one.** `keyfit add claude --new` pre-trusted
+  every folder of the project; trust is what lets a repository's own hooks and settings run, so it
+  now carries over only folders your default login already trusts.
 - **Release workflow:** actions pinned to commit hashes, `build` and `twine` to versions.
 - `docs/security.md` now says plainly what Keyfit sees, stores, sends and does not protect against.
 

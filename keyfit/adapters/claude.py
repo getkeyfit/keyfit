@@ -66,9 +66,22 @@ def auth_status(env: dict, timeout: float = 30) -> tuple[dict | None, str]:
         return None, (lines[-1] if lines else "unreadable output from claude auth status")[:200]
 
 
+def _trusted(root: Path, env: dict) -> bool:
+    """Whether *root* (or a folder above it) is trusted in the default account's ~/.claude.json."""
+    try:
+        projects = json.loads((Path(env.get("HOME") or Path.home()) / ".claude.json").read_text()).get("projects") or {}
+    except (OSError, ValueError, AttributeError):
+        return False
+    path = canonical(root)
+    return any((projects.get(str(folder)) or {}).get("hasTrustDialogAccepted") is True
+               for folder in (path, *path.parents))
+
+
 def seed(config_dir: Path, env: dict, trust: list[Path] = ()) -> list[str]:
-    """Create a new account's config dir: shared settings symlinked from ~/.claude, repos pre-trusted. Owner-only:
-    Claude keeps the account's session transcripts and history there."""
+    """Create a new account's config dir: shared settings symlinked from ~/.claude, and the project's repos
+    pre-trusted where you already trust them in the default account (trust is what lets a repository's own
+    hooks and settings run, so a new login never trusts more than the old one). Owner-only: Claude keeps
+    the account's session transcripts and history there."""
     config_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     made = []
     source = default_dir(env)
@@ -79,6 +92,7 @@ def seed(config_dir: Path, env: dict, trust: list[Path] = ()) -> list[str]:
             made.append(item)
     state = config_dir / ".claude.json"
     if not state.exists():
+        trust = [root for root in trust if _trusted(root, env)]
         projects = {str(canonical(root)): {"hasTrustDialogAccepted": True} for root in trust}
         write_private(state, json.dumps({"projects": projects}, indent=2))
         made.append(".claude.json (trusted: " + ", ".join(p.name for p in trust) + ")" if trust else ".claude.json")
