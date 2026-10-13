@@ -30,7 +30,13 @@ from .registry import Project
 LINEAR_HOST = "mcp.linear.app"
 LINEAR_API_KEY = "LINEAR_API_KEY"  # the generic variable Keyfit fills with the project's key
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-BARE = re.compile(r"^[A-Za-z0-9_-]+$")
+# Codex splits a `-c` key on every dot and the whole option on its first "=", without quoting
+# (a quoted name makes Codex refuse to start), so such a server name cannot be addressed.
+CODEX_UNADDRESSABLE = re.compile(r"[.=]|^\s|\s$")
+
+
+class Unhideable(Exception):
+    """A server Codex must not see in this project, but that Codex cannot be told to hide."""
 
 
 def _host(url) -> str:
@@ -134,6 +140,7 @@ def codex_overrides(project: Project, env: dict, owners: dict | None = None) -> 
     for name, spec in codex_servers(env).items():
         if not hidden(name, spec, project, owners, key_var=spec.get("bearer_token_env_var")):
             continue
-        key = name if BARE.match(name) else json.dumps(name)
-        out += ["-c", f"mcp_servers.{key}.enabled=false"]
+        if not name or CODEX_UNADDRESSABLE.search(name):
+            raise Unhideable(name)
+        out += ["-c", f"mcp_servers.{name}.enabled=false"]
     return out

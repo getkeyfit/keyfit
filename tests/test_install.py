@@ -117,5 +117,19 @@ class InstalledWheelTests(unittest.TestCase):
         self.assertEqual(line, "keyfit · demo\n")
 
 
+class CheckoutRunnerTests(unittest.TestCase):
+    def test_bin_keyfit_never_imports_from_the_current_folder(self):
+        # `python -m` would put the current folder first on sys.path: a repository's argparse.py would run
+        folder = Path(tempfile.mkdtemp()).resolve()
+        marker = folder / "ran"
+        (folder / "argparse.py").write_text(f"open({str(marker)!r}, 'w').close()\n")
+        env = {"PATH": f"{Path(sys.executable).parent}{os.pathsep}/usr/bin:/bin", "HOME": str(folder),
+               "KEYFIT_CONFIG_DIR": str(folder / "config"), "PYTHONPATH": str(folder)}
+        out = subprocess.run([str(ROOT / "bin" / "keyfit"), "--version"], cwd=folder, env=env,
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.stdout.strip(), f"keyfit {keyfit.__version__}", out.stderr)
+        self.assertFalse(marker.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

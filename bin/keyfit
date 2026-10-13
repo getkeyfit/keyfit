@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
-# Run keyfit from this checkout without installing it.
+# Run keyfit from this checkout without installing it. Isolated (-I) like the shims: neither the current
+# folder nor PYTHONPATH comes before the checkout, so a repository it runs in cannot replace a module.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m keyfit "$@"
+exec python3 -I -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from keyfit.cli import main; sys.exit(main(sys.argv[1:]))' "$root" "$@"

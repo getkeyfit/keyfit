@@ -223,6 +223,41 @@ class StoreKeysTests(unittest.TestCase):
         self.assertEqual(self.fetched, [])
         self.assertEqual(self.security_calls(), [])
 
+    def test_a_key_typed_where_a_reference_or_name_belongs_is_refused_and_never_echoed(self):
+        code, out, err = self.keyfit("add", "linear", "--key", KEY)
+        self.assertEqual(code, 1)
+        self.assertIn("not the key itself", err)
+        code2, out2, err2 = self.keyfit("secret", "set", KEY, stdin=TTY(), password="v")
+        self.assertEqual(code2, 1)
+        self.assertEqual(self.prompts, [])  # not even the prompt repeats it
+        self.assertNotIn(KEY, secrets.describe(KEY) + secrets.describe("keychain:keyfit/" + KEY))
+        self.assertEqual((self.fetched, self.keychain()), ([], {}))
+        self.assert_never_leaked(KEY, out, err, out2, err2)
+
+    def test_only_values_shaped_like_linear_keys_are_sent_to_linear(self):
+        # `--key env:VAR` (or an .envrc line on `keyfit init`) can name any variable, such as a GitHub token
+        token = "ghp_" + "T" * 36
+        with mock.patch.dict(os.environ, {"SOME_TOKEN": token}):
+            code, out, err = self.keyfit("add", "linear", "--key", "env:SOME_TOKEN")
+        self.assertEqual(code, 1)
+        self.assertIn("not sent to Linear", err)
+        self.assertEqual(self.fetched, [])
+        self.assertNotIn(token, out + err)
+
+    def test_a_terminal_that_would_echo_the_key_reads_nothing(self):
+        import getpass
+        import warnings
+
+        def echoing(prompt="Password: "):  # what getpass does when it cannot turn echo off
+            warnings.warn("Can not control echo on the terminal.", getpass.GetPassWarning, stacklevel=2)
+            return KEY
+
+        err = io.StringIO()
+        with mock.patch("getpass.getpass", echoing), mock.patch("sys.stdin", TTY()), redirect_stderr(err):
+            self.assertEqual(main(["add", "linear"]), 1)
+        self.assertIn("cannot hide what you type", err.getvalue())
+        self.assertEqual((self.fetched, self.keychain()), ([], {}))
+
     def test_secret_set_quotes_any_printable_value_and_list_shows_names_only(self):
         value = 'p"a s\'s\\w0rd\\ $(x) `y` #z -w "'
         code, out, err = self.keyfit("secret", "set", "OPENAI_API_KEY", stdin=TTY(), password=value)

@@ -231,7 +231,7 @@ def cmd_which(args) -> int:
         print(f"{r.project.name}  ({r.how})")
         if args.verbose:
             for kind, value in r.project.connections.items():
-                label = ADAPTERS[kind].label(value) if kind in ADAPTERS else value
+                label = ADAPTERS[kind].label(value) if kind in ADAPTERS else "(not a kind Keyfit knows)"
                 print(f"  {kind:<10} {label}")
             if r.project.mcp_servers:
                 print(f"  {'mcp':<10} owns {', '.join(r.project.mcp_servers)}")
@@ -283,6 +283,10 @@ def cmd_add_aws(args) -> int:
         print("use a named profile, never `default`", file=sys.stderr)
         return 1
     profile = read_profile(args.profile, os.environ)
+    if profile.kind == "unreadable":
+        print("your AWS config or credentials file does not parse — find it with: "
+              f"aws configure list --profile {args.profile}", file=sys.stderr)
+        return 1
     if profile.kind == "missing":
         print(f"no AWS profile named '{args.profile}' — create it first (aws configure sso --profile {args.profile})",
               file=sys.stderr)
@@ -323,11 +327,19 @@ def cmd_add_aws(args) -> int:
 def _read_secret(prompt: str) -> str | None:
     """Hidden prompt on a terminal, else one line from stdin (scripts). Never echoed, never in argv."""
     import getpass
+    import warnings
 
     try:
         if sys.stdin.isatty():
-            return getpass.getpass(prompt)
+            with warnings.catch_warnings():
+                # getpass falls back to reading with echo when it cannot control the terminal: stop instead
+                warnings.simplefilter("error", getpass.GetPassWarning)
+                return getpass.getpass(prompt)
         return sys.stdin.readline().rstrip("\r\n")
+    except getpass.GetPassWarning:
+        print("\nthis terminal cannot hide what you type, so nothing was read; pipe the key on stdin instead",
+              file=sys.stderr)
+        return None
     except (EOFError, KeyboardInterrupt):
         print(file=sys.stderr)  # end the prompt line; the caller says nothing was stored
         return None
@@ -339,6 +351,11 @@ def cmd_add_linear(args) -> int:
     if project is None:
         return 1
     if args.key is not None:
+        if secrets.looks_like_key(args.key):
+            print("--key takes where the key lives (env:VAR or keychain:service/account), not the key itself: "
+                  "run `keyfit add linear` without --key to paste it at a hidden prompt "
+                  "(the key may now be in your shell history)", file=sys.stderr)
+            return 1
         ref = secrets.normalise(args.key)
         key = secrets.resolve(ref, os.environ)
         if not key:
@@ -384,6 +401,10 @@ def cmd_secret_set(args) -> int:
     """Store a value typed at a hidden prompt as Keychain item keyfit/NAME and print its reference."""
     if not secrets.can_store():
         print(secrets.NOT_MACOS, file=sys.stderr)
+        return 1
+    if secrets.looks_like_key(args.name):
+        print("NAME is a label such as linear-acme; the key itself goes in at the hidden prompt "
+              "(it may now be in your shell history)", file=sys.stderr)
         return 1
     if not secrets.NAME.fullmatch(args.name):
         print("a name is letters, digits, '.', '_' and '-' (at most 64)", file=sys.stderr)

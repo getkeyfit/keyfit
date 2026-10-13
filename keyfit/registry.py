@@ -50,6 +50,15 @@ def default_path() -> Path:
     return config_dir() / "registry.toml"
 
 
+def write_private(path: Path, text: str) -> None:
+    """Write a file only its owner can read, from the first byte: writing first and chmod-ing after leaves it
+    readable by other users of the Mac in between (or for good, should the chmod never run)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        os.fchmod(fd, 0o600)  # a file that already existed keeps its mode through O_CREAT
+        fh.write(text)
+
+
 def canonical(path: str | Path) -> Path:
     """Expand ~, make absolute, resolve symlinks — the one form paths are compared in."""
     return Path(path).expanduser().resolve()
@@ -90,8 +99,7 @@ class Registry:
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".toml.tmp")
-        tmp.write_text(tomlwrite.dumps(self.data))
-        tmp.chmod(0o600)
+        write_private(tmp, tomlwrite.dumps(self.data))
         os.replace(tmp, self.path)
 
     # projects ---------------------------------------------------------------
