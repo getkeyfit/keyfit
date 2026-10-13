@@ -74,6 +74,15 @@ class SetupTests(unittest.TestCase):
                          f'exec "{sys.executable}" -I -S "{entry}" aws "$@"')
         self.assertNotIn("Next:", out)  # nothing is active until the line is in a startup file
 
+    def test_setup_again_says_it_is_already_active(self):
+        # an upgrade: `keyfit setup` rewrites the shims and doesn't ask for a line that's already there
+        self.setup("--rc")
+        before = (self.home / ".zshrc").read_text()
+        _, out, _ = self.setup()
+        self.assertIn("Already active: ~/.zshrc loads them; new starts use them now.", out)
+        self.assertNotIn("add this as the LAST line", out)
+        self.assertEqual((self.home / ".zshrc").read_text(), before)
+
     def test_shim_whose_keyfit_is_gone_says_what_to_do(self):
         # `pipx uninstall keyfit` before `keyfit setup --remove`: no "No such file or directory" from sh, and the
         # tool still does not start unchecked
