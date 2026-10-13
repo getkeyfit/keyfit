@@ -855,7 +855,11 @@ def cmd_setup(args) -> int:
               f"(after Superset's wrapper, if you use Superset).")
         return 0
     line = _setup_line(shell)
-    if rc is None:
+    candidates = dict.fromkeys(_rc_files(shell) + ([Path.home() / ".zshrc"] if shell == "zsh" else []))
+    active = [path for path in candidates if path.is_file() and line in path.read_text(errors="replace")]
+    if rc is None and active:  # running setup again (an upgrade): the shims are rewritten in place
+        print(f"Already active: {' and '.join(tilde(p) for p in active)} loads them; new starts use them now.")
+    elif rc is None:
         again = "keyfit setup" + (f" --shell {shell}" if args.shell != "auto" else "") + " --rc"
         files = " and ".join(tilde(p) for p in _rc_files(shell))
         print(f"To activate, add this as the LAST line of {files} (or run: {again}):\n  {line}")
