@@ -9,7 +9,7 @@ sidebar:
 
 ## Install
 
-You need macOS, Python 3.11 or newer, and zsh or bash.
+You need macOS, Python 3.11 or newer, and zsh or bash. The `python3` that comes with macOS is 3.9, which is too old; `brew install pipx` installs pipx together with a current Python (then run `pipx ensurepath` and open a new terminal).
 
 ```bash
 pipx install keyfit                       # coming with the first release
@@ -20,7 +20,7 @@ Nothing is published yet. Until then, install from source:
 
 ```bash
 git clone https://github.com/FlamurMaliqi/keyfit.git
-pipx install ./keyfit        # or run it without installing: ./keyfit/bin/keyfit … (uses python3 from PATH)
+pipx install ./keyfit        # or run it without installing: ./keyfit/bin/keyfit … (uses the python3 on PATH, 3.11 or newer)
 ```
 
 The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkout they also run that checkout. If you move Keyfit to another Python, virtualenv or folder, run `keyfit setup` again.
@@ -31,7 +31,7 @@ The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkou
 keyfit setup --rc     # shims for claude, codex, aws, gh and vercel, plus one line in your shell startup file
 ```
 
-Open a new terminal, then go to a repository of one of your clients:
+Open a new terminal, then go to a repository of one of your clients (a repository, not your home folder: everything under the folder you register belongs to that project):
 
 ```bash
 cd ~/code/acme-api
@@ -46,6 +46,8 @@ claude                # starts with this project's accounts, checked
 - **Claude and Codex:** whether to use the login currently in `~/.claude` or `~/.codex`.
 - **Vercel:** whether to use the login the `vercel` CLI has now, with the team selected in it.
 - **Linear:** a personal API key, typed at a hidden prompt. Keyfit checks it with Linear, then stores it in the macOS Keychain.
+
+Skipped accounts are simply not checked, with one catch: inside the project, `aws`, `gh` and `vercel` start only once it has an AWS, GitHub or Vercel account. Skip GitHub, and `gh` waits in that repository until you run `keyfit add github --login <login>`. `keyfit status` lists what is still unmapped.
 
 It ends with `keyfit status`:
 
