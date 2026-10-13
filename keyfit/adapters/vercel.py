@@ -188,7 +188,7 @@ def _fetch(path: str, token: str, timeout: float) -> tuple[int, dict]:
     req = urllib.request.Request(API + path, headers={"Authorization": f"Bearer {token}", "User-Agent": "keyfit",
                                                       "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=http.context()) as resp:
+        with http.urlopen(req, timeout) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as err:
         return err.code, {}
