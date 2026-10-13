@@ -15,7 +15,7 @@ import os
 import threading
 import time
 
-from .registry import config_dir
+from .registry import config_dir, write_private
 
 TTL = 30 * 60          # fresh: reused without asking the provider
 STALE = 24 * 60 * 60   # kept: trusted (as a warning) only when the provider cannot be reached
@@ -53,10 +53,9 @@ def put(k: str, status: str, detail: str) -> None:
         data[k] = {"at": now, "status": status, "detail": detail}
         path = _path()
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")  # unique per process and thread
-            tmp.write_text(json.dumps(data))
-            tmp.chmod(0o600)
+            write_private(tmp, json.dumps(data))
             os.replace(tmp, path)
         except OSError:
             pass
