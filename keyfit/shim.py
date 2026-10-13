@@ -89,12 +89,17 @@ def subcommand(args: list[str], known: set[str]) -> str | None:
 
 
 def requested_profiles(args: list[str]) -> list[str]:
+    """Profiles named with --profile. The AWS CLI's parser (argparse) also takes an abbreviation that no other
+    global option shares — `--prof x`, `--pro=x`, down to `--p` — so those count too."""
     out = []
     for i, arg in enumerate(args):
-        if arg == "--profile" and i + 1 < len(args):
+        name, eq, value = arg.partition("=")
+        if len(name) < 3 or not "--profile".startswith(name):
+            continue
+        if eq:
+            out.append(value)
+        elif i + 1 < len(args):
             out.append(args[i + 1])
-        elif arg.startswith("--profile="):
-            out.append(arg.split("=", 1)[1])
     return out
 
 
