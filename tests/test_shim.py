@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -13,7 +14,7 @@ from unittest import mock
 from keyfit import mcp
 from keyfit.cli import main
 from keyfit.registry import LEGACY_KINDS, Project, Registry
-from keyfit.shim import adjust_args, subcommand, CLAUDE_SUBCOMMANDS, CODEX_SUBCOMMANDS
+from keyfit.shim import Refused, adjust_args, subcommand, CLAUDE_SUBCOMMANDS, CODEX_SUBCOMMANDS
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -119,10 +120,25 @@ class ShimTests(unittest.TestCase):
         self.assertIn("aws not started, demo needs attention", out.stderr)
         self.assertIn("…9999", out.stderr)
 
+    def test_option_value_that_looks_like_a_sign_in_command_still_runs_the_checks(self):
+        out = self.run_tool("claude", "--add-dir", "auth", FAKE_ACCOUNT="999999999999")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(out.stdout, "")  # the session never started
+        self.assertIn("claude not started, demo needs attention", out.stderr)
+
     def test_other_profile_is_refused(self):
         out = self.run_tool("aws", "--profile", "other", "s3", "ls")
         self.assertEqual(out.returncode, 1)
         self.assertIn("refusing --profile other", out.stderr)
+
+    def test_abbreviated_profile_option_is_refused_too(self):
+        # the AWS CLI's argparse accepts any unambiguous prefix of --profile
+        for args in (["--prof", "other", "s3", "ls"], ["s3", "ls", "--pro=other"], ["--p", "other", "s3", "ls"]):
+            out = self.run_tool("aws", *args)
+            self.assertEqual(out.returncode, 1, args)
+            self.assertEqual(out.stdout, "")
+            self.assertIn("refusing --profile other", out.stderr)
+        self.assertEqual(self.run_tool("aws", "--prof", "iam", "s3", "ls").returncode, 0)
 
     def test_shared_profile_runs_unchanged(self):
         out = self.run_tool("aws", "--profile", "ci-worker", "s3", "ls", FAKE_ACCOUNT="999999999999")
@@ -160,6 +176,44 @@ class ShimTests(unittest.TestCase):
         self.assertNotIn("not supported yet", out.stdout)
         self.assertIn(LEGACY_KINDS[0], reg.read_text())  # the user's entries are left for them to remove
 
+    def test_registry_mistake_stops_the_tool_and_names_the_place(self):
+        reg = self.config / "registry.toml"
+        reg.write_text("[projects.demo\n" + reg.read_text())
+        for cwd in (self.repo, self.outside):  # unreadable: no folder can be told apart, so nothing starts unchecked
+            out = self.run_tool("claude", "-p", "hi", cwd=cwd)
+            self.assertEqual((out.returncode, out.stdout), (1, ""))
+            self.assertRegex(out.stderr, rf"^keyfit: claude not started, {re.escape(str(reg))} has a mistake\n  ✘ .*"
+                                         rf"\(at line 1, column \d+\)\n    → fix that line in {re.escape(str(reg))}\n"
+                                         r"  \(bypass once: KEYFIT_DISABLE=1 claude …\)\n$")
+
+    def test_unusable_connection_fails_only_its_project(self):
+        reg = self.config / "registry.toml"
+        reg.write_text(reg.read_text().replace('claude = "work"', 'claude = "wrok"'))
+        out = self.run_tool("claude", "-p", "hi")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("✘ claude    wrok   no account [accounts.claude.wrok]\n    → map it again: keyfit add claude …",
+                      out.stderr)
+        self.assertNotIn("internal error", out.stderr)
+        self.assertEqual(self.run_tool("aws", "s3", "ls").returncode, 0)  # the project's aws has its own account
+        self.assertEqual(self.run_tool("claude", "-p", "hi", cwd=self.outside).returncode, 0)  # other folders too
+        reg.write_text(reg.read_text().replace("aws = {", "asw = {"))
+        out = self.run_tool("claude", "-p", "hi")
+        self.assertRegex(out.stderr, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, "
+                                     r"github, vercel\)\n    → rename or remove asw in ")
+
+    def test_missing_tool_says_how_to_install_it(self):
+        out = self.run_tool("gh", "pr", "list")
+        self.assertEqual(out.returncode, 127)
+        self.assertEqual(out.stderr, "keyfit: gh is not installed (no gh on PATH besides Keyfit's shim).\n"
+                                     "  Install it: brew install gh   (keyfit doctor shows where each tool is found)\n")
+
+    def test_unmapped_tool_names_the_command_that_maps_it(self):
+        executable(self.bin / "gh", "#!/bin/sh\necho gh ran\n")
+        out = self.run_tool("gh", "pr", "list")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(out.stderr, "keyfit: project demo has no github account mapped, so gh was not started.\n"
+                                     "  Map one: keyfit add github --login <login>   (bypass once: KEYFIT_DISABLE=1 gh …)\n")
+
     def test_login_commands_run_even_when_a_check_fails(self):
         out = self.run_tool("aws", "sso", "login", FAKE_ACCOUNT="999999999999")
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -174,6 +228,12 @@ class ShimTests(unittest.TestCase):
     def test_session_pins_aws_to_its_project(self):
         out = self.run_tool("aws", "s3", "ls", cwd=self.outside, KEYFIT_PROJECT="demo", AWS_PROFILE="other")
         self.assertEqual(json.loads(out.stdout)["AWS_PROFILE"], "iam")
+
+    def test_session_of_a_project_no_longer_registered_does_not_run_unchecked(self):
+        out = self.run_tool("aws", "s3", "ls", KEYFIT_PROJECT="renamed", AWS_PROFILE="other")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(out.stdout, "")
+        self.assertIn("project renamed, which is not in the registry", out.stderr)
 
     def test_claude_session_hides_other_projects_linear_servers(self):
         out = self.run_tool("claude", "-p", "hello", ANTHROPIC_API_KEY="sk-ant-inherited")
@@ -261,6 +321,25 @@ class OwnedServerTests(unittest.TestCase):
         self.assertEqual(self.hidden_in("acme"), ["globex_cloud_eu"])
         self.assertEqual(self.hidden_in("initech"), ["globex_cloud_eu"])
         self.assertEqual(self.hidden_in("globex"), ["auth_team"])
+
+    def test_codex_names_are_never_quoted(self):
+        # Codex splits a -c key on every dot without quoting (tested with codex-cli 0.162.1): a quoted
+        # name makes it refuse to start, while a bare name with an inner space is understood
+        (self.tmp / ".codex" / "config.toml").write_text('[mcp_servers."globex cloud"]\nurl = "https://g.example/mcp"\n')
+        self.registry.add_mcp_servers("globex", ["globex cloud"])
+        args = adjust_args("codex", self.registry.get("acme"), ["exec", "x"], self.env, self.tmp, self.registry.mcp_owners())
+        self.assertEqual(args[:2], ["-c", "mcp_servers.globex cloud.enabled=false"])
+
+    def test_codex_refuses_when_a_server_cannot_be_hidden(self):
+        for name in ("globex_cloud_e.u", "globex_cloud_e=u", "globex_cloud_eu "):  # all match globex_cloud_*
+            with self.subTest(name=name):
+                (self.tmp / ".codex" / "config.toml").write_text(f'[mcp_servers.{json.dumps(name)}]\nurl = "https://g.example/mcp"\n')
+                with self.assertRaises(Refused) as refusal:
+                    adjust_args("codex", self.registry.get("acme"), ["exec", "x"], self.env, self.tmp, self.registry.mcp_owners())
+                self.assertIn("codex not started", str(refusal.exception))
+        # the project that owns it starts normally: nothing has to be hidden there
+        args = adjust_args("codex", self.registry.get("globex"), ["exec", "x"], self.env, self.tmp, self.registry.mcp_owners())
+        self.assertEqual(args, ["exec", "x"])
 
     def test_registry_keeps_ownership_out_of_connections(self):
         self.registry.save()

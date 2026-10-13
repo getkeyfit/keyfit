@@ -70,8 +70,35 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.home.iterdir()), [".superset"])
         self.assertIn("add this as the LAST line of ~/.zshrc (or run: keyfit setup --rc)", out)
         entry = Path(cli.__file__).resolve().parent / "_shim_entry.py"
-        self.assertEqual((self.config / "bin" / "aws").read_text(),
-                         f'#!/bin/sh\nexec "{sys.executable}" -I "{entry}" aws "$@"\n')
+        self.assertEqual((self.config / "bin" / "aws").read_text().splitlines()[-1],
+                         f'exec "{sys.executable}" -I -S "{entry}" aws "$@"')
+        self.assertNotIn("Next:", out)  # nothing is active until the line is in a startup file
+
+    def test_setup_again_says_it_is_already_active(self):
+        # an upgrade: `keyfit setup` rewrites the shims and doesn't ask for a line that's already there
+        self.setup("--rc")
+        before = (self.home / ".zshrc").read_text()
+        _, out, _ = self.setup()
+        self.assertIn("Already active: ~/.zshrc loads them; new starts use them now.", out)
+        self.assertNotIn("add this as the LAST line", out)
+        self.assertEqual((self.home / ".zshrc").read_text(), before)
+
+    def test_shim_whose_keyfit_is_gone_says_what_to_do(self):
+        # `pipx uninstall keyfit` before `keyfit setup --remove`: no "No such file or directory" from sh, and the
+        # tool still does not start unchecked
+        self.setup()
+        shim = self.config / "bin" / "claude"
+        entry = str(Path(cli.__file__).resolve().parent / "_shim_entry.py")
+        shim.write_text(shim.read_text().replace(entry, str(self.tmp / "gone" / "_shim_entry.py")))
+        out = subprocess.run([str(shim), "--version"], capture_output=True, text=True, timeout=30,
+                             env={"HOME": str(self.home), "PATH": "/usr/bin:/bin"})
+        self.assertEqual(out.returncode, 127)
+        self.assertEqual(out.stdout, "")
+        self.assertIn(f"keyfit: claude not started: Keyfit is not installed where its shims expect it "
+                      f"({self.tmp / 'gone' / '_shim_entry.py'}).\n  Upgraded or reinstalled Keyfit? Run: keyfit setup\n"
+                      "  Uninstalled it? Remove the line ending in '# keyfit: claude/codex/aws/gh shims on PATH' from "
+                      "your shell startup file, then open a new terminal.\n", out.stderr)
+        self.assertNotIn("No such file", out.stderr)
 
     def test_not_macos(self):
         code, out, err = self.setup(platform="linux")
@@ -121,9 +148,11 @@ class SetupTests(unittest.TestCase):
         self.assertIn("--shell zsh or --shell bash", err)
 
     def test_zsh_rc(self):
-        self.setup("--rc")
+        _, out, _ = self.setup("--rc")
         line = f'source "{self.config}/shell.zsh"  # keyfit: claude/codex/aws/gh shims on PATH'
         self.assertEqual((self.home / ".zshrc").read_text(), f"\n{line}\n")
+        self.assertIn("Next: open a new terminal, go to a project's repository and run: keyfit init\n"
+                      "Undo any time: keyfit setup --remove;", out)
         _, out, _ = self.setup("--rc")
         self.assertIn("~/.zshrc already loads them", out)
         self.assertEqual((self.home / ".zshrc").read_text().count(line), 1)
@@ -167,9 +196,10 @@ class SetupTests(unittest.TestCase):
 
     def test_rc_path(self):
         rc = self.tmp / "rc"
-        self.setup("--shell", "bash", "--rc", str(rc))
+        _, out, _ = self.setup("--shell", "bash", "--rc", str(rc))
         self.assertIn("shell.sh", rc.read_text())
         self.assertFalse((self.home / ".bash_profile").exists())
+        self.assertIn(f"Undo any time: keyfit setup --remove --rc {rc};", out)  # --remove alone would not find it
 
 
     # setup --remove ---------------------------------------------------------------------------------------------
@@ -271,6 +301,18 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(self.config.exists())
         code, _, err = self.setup("--purge")
         self.assertEqual((code, err.strip()), (1, "keyfit setup: --purge goes with --remove"))
+
+class OldPythonTests(unittest.TestCase):
+    def test_too_old_python_gets_a_sentence_not_a_traceback(self):
+        # macOS's own python3 is 3.9; `bin/keyfit` from a checkout runs whatever python3 comes first
+        code = "import sys; sys.version_info = (3, 9, 6, 'final', 0); sys.path.insert(0, sys.argv[1]); import keyfit"
+        root = str(Path(cli.__file__).resolve().parents[1])
+        out = subprocess.run([sys.executable, "-I", "-c", code, root], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(out.stderr, f"keyfit needs Python 3.11 or newer, but this is Python 3.9 ({sys.executable}).\n"
+                                     "  Install a newer one (brew install python@3.13), then run Keyfit with it, "
+                                     "for example: pipx install --python python3.13 keyfit\n")
+
 
 class StablePathTests(unittest.TestCase):
     def test_homebrew_cellar_paths_survive_upgrades(self):

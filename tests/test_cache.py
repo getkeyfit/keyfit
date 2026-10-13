@@ -41,6 +41,24 @@ class CacheTests(unittest.TestCase):
         cache.put("a", "ok", "x")  # must not raise
         self.assertIsNone(cache.get("a"))
 
+    def test_cache_and_registry_are_owner_only_from_the_first_byte(self):
+        from keyfit.registry import Registry, write_private
+
+        old = os.umask(0)  # nothing but write_private's own mode decides
+        try:
+            cache.put("a", "ok", "x")
+            Registry(Path(os.environ["KEYFIT_CONFIG_DIR"]) / "registry.toml").save()
+            stale = Path(os.environ["KEYFIT_CONFIG_DIR"]) / "stale.tmp"
+            stale.write_text("old")
+            stale.chmod(0o644)  # left behind by an earlier crash: O_CREAT keeps its mode
+            write_private(stale, "new")
+        finally:
+            os.umask(old)
+        root = Path(os.environ["KEYFIT_CONFIG_DIR"])
+        modes = {p.name: p.stat().st_mode & 0o777 for p in (root / "cache", root / "cache" / "checks.json",
+                                                            root / "registry.toml", stale)}
+        self.assertEqual(modes, {"cache": 0o700, "checks.json": 0o600, "registry.toml": 0o600, "stale.tmp": 0o600})
+
     def test_no_temp_files_left_behind(self):
         cache.put("a", "ok", "x")
         folder = Path(os.environ["KEYFIT_CONFIG_DIR"]) / "cache"

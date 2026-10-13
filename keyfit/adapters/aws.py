@@ -32,6 +32,7 @@ from .base import Adapter
 ACCOUNT_RE = re.compile(r"^\d{12}$")
 ARN_ACCOUNT = re.compile(r"^arn:aws[a-z-]*:(?:iam|sts)::(\d{12}):")
 CONSOLE_SESSION_MAX = timedelta(hours=12)  # `aws login` refreshes for at most 12 hours
+NO_CLI, INSTALL = "aws CLI not found on PATH", "brew install awscli"
 
 # Inherited variables that could override or confuse the project's profile.
 SCRUB = (
@@ -48,7 +49,7 @@ SCRUB = (
 @dataclass
 class Profile:
     name: str
-    kind: str  # sso | login | role | process | static | unknown | missing
+    kind: str  # sso | login | role | process | static | unknown | missing | unreadable
     account_hint: str | None = None
     sso_session: str | None = None
     sso_start_url: str | None = None
@@ -84,31 +85,43 @@ def login_cache_file(p: Profile, env: dict) -> Path:
     return folder / (hashlib.sha256((p.login_session or "").encode()).hexdigest() + ".json")
 
 
-def profile_names(env: dict) -> list[str]:
-    """The named profiles in the AWS config file, in file order (never `default`)."""
+def _parse(path: Path) -> configparser.RawConfigParser | None:
+    """The INI file, or None when it does not parse. configparser's errors quote the offending line, and in
+    ~/.aws/credentials that line can be a secret key: no such error may reach a message."""
     cfg = configparser.RawConfigParser()
     try:
-        cfg.read(config_path(env))
-    except configparser.Error:
+        cfg.read(path)
+    except (configparser.Error, UnicodeDecodeError):
+        return None
+    return cfg
+
+
+def profile_names(env: dict) -> list[str]:
+    """The named profiles in the AWS config file, in file order (never `default`)."""
+    cfg = _parse(config_path(env))
+    if cfg is None:
         return []
     return [section[8:].strip() for section in cfg.sections() if section.startswith("profile ")]
 
 
 def read_profile(name: str, env: dict) -> Profile:
-    cfg = configparser.RawConfigParser()
-    cfg.read(config_path(env))
+    cfg = _parse(config_path(env))
+    if cfg is None:
+        return Profile(name, "unreadable")
     section = "default" if name == "default" else f"profile {name}"
 
     def get(key: str) -> str | None:
         return cfg.get(section, key).strip() if cfg.has_option(section, key) else None
 
-    def in_credentials_file() -> bool:
-        creds = configparser.RawConfigParser()
-        creds.read(credentials_path(env))
-        return creds.has_option(name, "aws_access_key_id")
+    def from_credentials_file() -> str:
+        """"static" when the credentials file has a key for the profile, "unreadable" when it does not parse."""
+        creds = _parse(credentials_path(env))
+        if creds is None:
+            return "unreadable"
+        return "static" if creds.has_option(name, "aws_access_key_id") else ""
 
     if not cfg.has_section(section):
-        return Profile(name, "static") if in_credentials_file() else Profile(name, "missing")
+        return Profile(name, from_credentials_file() or "missing")
     if get("sso_session") or get("sso_start_url"):
         session, url = get("sso_session"), get("sso_start_url")
         session_section = f"sso-session {session}"
@@ -123,9 +136,9 @@ def read_profile(name: str, env: dict) -> Profile:
         return Profile(name, "role", account_hint=m.group(1) if m else None, source_profile=get("source_profile"))
     if get("credential_process"):
         return Profile(name, "process", process=get("credential_process"))
-    if get("aws_access_key_id") or in_credentials_file():
+    if get("aws_access_key_id"):
         return Profile(name, "static")
-    return Profile(name, "unknown")
+    return Profile(name, from_credentials_file() or "unknown")
 
 
 def _parse_time(value) -> datetime | None:
@@ -150,7 +163,15 @@ def _login_fix(p: Profile) -> str:
         return _sso_login_command(p)
     if p.kind == "login":
         return f"aws login --profile {p.name}"
-    return f"aws sts get-caller-identity --profile {p.name}   (shows the full error)"
+    if p.kind == "static":  # `aws configure` is a sign-in command: it runs inside the project although checks fail
+        return f"aws configure --profile {p.name}   (enter a working access key)"
+    # inside the project the shim would stop this command for the same failed check
+    return f"KEYFIT_DISABLE=1 aws sts get-caller-identity --profile {p.name}   (shows the full error)"
+
+
+def fix_for(p: Profile, reason: str) -> str:
+    """The next step when `sts get-caller-identity` gave no account for this profile."""
+    return INSTALL if reason == NO_CLI else _login_fix(p)
 
 
 class AwsAdapter(Adapter):
@@ -167,8 +188,8 @@ class AwsAdapter(Adapter):
     def inject(self, conn, env: dict) -> None:
         for var in SCRUB:
             env.pop(var, None)
-        env["AWS_PROFILE"] = conn["profile"]
-        env["AWS_EXPECTED_ACCOUNT_ID"] = str(conn["account"])
+        env["AWS_PROFILE"] = conn.get("profile", "")  # missing in a hand-edited registry: the local check says so
+        env["AWS_EXPECTED_ACCOUNT_ID"] = str(conn.get("account", ""))
         if conn.get("config_file"):
             env["AWS_CONFIG_FILE"] = str(Path(conn["config_file"]).expanduser())
         if conn.get("region"):
@@ -190,6 +211,10 @@ class AwsAdapter(Adapter):
                         f"keyfit add aws --profile {profile} --account <12 digits>")
 
         p = read_profile(profile, env)
+        if p.kind == "unreadable":
+            return fail(f"{config_path(env)} or {credentials_path(env)} does not parse "
+                        "(the line is not shown: it may hold a key)",
+                        f"aws configure list --profile {profile}   (names the file)")
         if p.kind == "missing":
             return fail(f"no profile '{profile}' in {config_path(env)}",
                         f"aws configure sso --profile {profile}   (or: keyfit add aws --profile <existing profile>)")
@@ -266,7 +291,7 @@ class AwsAdapter(Adapter):
         """Return (account, "", False) or (None, reason, transient) from `aws sts get-caller-identity`."""
         aws = find_real("aws", env)
         if aws is None:
-            return None, "aws CLI not found on PATH", False
+            return None, NO_CLI, False
         cmd = [aws, "sts", "get-caller-identity", "--profile", profile, "--query", "Account",
                "--output", "text", "--cli-connect-timeout", "5", "--cli-read-timeout", "10"]
         try:
@@ -302,7 +327,7 @@ class AwsAdapter(Adapter):
             p = read_profile(profile, env)
             if p.kind == "process" and "did not answer" in reason:
                 reason += " (a Keychain prompt may be waiting — choose Always Allow)"
-            return Check(self.kind, "fail", label, reason, _login_fix(p), transient=network)
+            return Check(self.kind, "fail", label, reason, fix_for(p, reason), transient=network)
         if actual != account:
             return Check(self.kind, "fail", label,
                          f"profile '{profile}' is signed in to account {mask_account(actual)}, "

@@ -20,6 +20,12 @@ NOT_MACOS = "Keyfit stores keys in the macOS Keychain; Linux is planned"
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")  # account names Keyfit stores under (use fullmatch)
 _STORABLE = re.compile(r"[\x20-\x7e]+")  # printable ASCII: `find-generic-password -w` prints anything else as hex
 _MAX_LINE = 4000  # `security -i` reads 4095 bytes per line and runs the rest as a separate command
+# Keys of the kinds Keyfit handles, typed where a name or reference belongs (`--key lin_api_…`): never echoed back
+_KEY_LIKE = re.compile(r"lin_(?:api|oauth)_[A-Za-z0-9]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|sk-[\w-]{20,}")
+
+
+def looks_like_key(text: str) -> bool:
+    return bool(_KEY_LIKE.search(text or ""))
 
 
 def normalise(ref: str) -> str:
@@ -30,6 +36,8 @@ def normalise(ref: str) -> str:
 
 
 def describe(ref: str) -> str:
+    if looks_like_key(ref):
+        return "a key written where its reference belongs (not shown)"
     scheme, _, rest = normalise(ref).partition(":")
     if scheme == "env":
         return f"${rest}"

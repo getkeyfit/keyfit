@@ -4,12 +4,29 @@ from __future__ import annotations
 
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from . import cache
 from .adapters import ADAPTERS
 from .checks import Check, human
-from .registry import Project
+from .registry import Project, default_path, tilde
+
+
+def label(kind: str, conn) -> str:
+    adapter = ADAPTERS.get(kind)
+    return adapter.label(conn) if adapter is not None and isinstance(conn, dict) else str(conn)
+
+
+def unusable(kind: str, conn) -> Check | None:
+    """A connection the registry holds in a form Keyfit cannot use (a hand edit): it fails, so the tool does not
+    start without it, and says how to fix it. None for a usable one."""
+    registry, shown = tilde(default_path()), conn if isinstance(conn, str) else ""
+    if kind not in ADAPTERS:
+        return Check(kind, "fail", shown, f"unknown connection (a typo? Keyfit knows {', '.join(ADAPTERS)})",
+                     f"rename or remove {kind} in {registry}")
+    if isinstance(conn, dict):
+        return None
+    reason = f"no account [accounts.{kind}.{conn}]" if shown else f"not a table ({kind} = {{ … }})"
+    return Check(kind, "fail", shown, reason, f"map it again: keyfit add {kind} …   (or fix it in {registry})")
 
 
 def _selected(project: Project, kinds) -> list[tuple[str, object]]:
@@ -23,10 +40,9 @@ def build(project: Project, base_env: dict | None = None, kinds=None) -> dict:
     env["KEYFIT_PROJECT"] = project.name
     labels = []
     for kind, conn in _selected(project, kinds):
-        adapter = ADAPTERS.get(kind)
-        if adapter is not None:
-            adapter.inject(conn, env)
-            labels.append(f"{kind} {adapter.label(conn)}")
+        if unusable(kind, conn) is None:  # an unusable one fails its check; nothing is injected for it
+            ADAPTERS[kind].inject(conn, env)
+            labels.append(f"{kind} {label(kind, conn)}")
     env["KEYFIT_SUMMARY"] = " · ".join([project.name, *labels])  # shown by the Claude status line
     return env
 
@@ -36,9 +52,10 @@ def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cac
 
     def one(item):
         kind, conn = item
-        adapter = ADAPTERS.get(kind)
-        if adapter is None:
-            return Check(kind, "warn", str(conn), "not supported yet")
+        broken = unusable(kind, conn)
+        if broken is not None:
+            return broken
+        adapter = ADAPTERS[kind]
         if not remote:
             return adapter.verify(conn, env, remote=False)
         local = adapter.local(conn, env)
@@ -63,7 +80,9 @@ def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cac
         return local.merge(result)
 
     items = _selected(project, kinds)
-    if not items:
-        return []
+    if len(items) < 2:  # aws, gh and vercel check one connection: no thread pool (or its ~5 ms import) needed
+        return [one(item) for item in items]
+    from concurrent.futures import ThreadPoolExecutor
+
     with ThreadPoolExecutor(max_workers=len(items)) as pool:
         return list(pool.map(one, items))

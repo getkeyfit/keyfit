@@ -255,6 +255,18 @@ class AdapterTests(VercelCase):
         (repo / ".vercel" / "repo.json").write_text(json.dumps({"orgId": "team_globex", "projects": []}))
         self.assertIn("repo.json links", self.check(self.conn()).detail)
 
+    def test_text_from_the_repository_cannot_drive_the_terminal(self):
+        # a cloned repository controls .vercel/project.json; its orgId is printed in the failure
+        self.login(self.default)
+        repo = self.repos["client"]
+        (repo / ".vercel").mkdir()
+        (repo / ".vercel" / "project.json").write_text(json.dumps({"orgId": "team_x\x1b]0;title\x07\r\x1b[2K\u202e"}))
+        os.chdir(repo)
+        lines = "\n".join(self.check(self.conn()).lines())
+        self.assertFalse(any(ord(c) < 0x20 and c != "\n" for c in lines), repr(lines))
+        self.assertNotIn("\u202e", lines)
+        self.assertIn("team_x\\x1b]0;title\\x07\\r\\x1b[2K\\u202e", lines)
+
     def test_link_outside_the_repository_is_not_read(self):
         self.login(self.default)
         (self.tmp / ".vercel").mkdir()
@@ -565,7 +577,8 @@ class AddVercelTests(VercelCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(main(["status"]), 0)
-        self.assertEqual(out.getvalue(), "client\n  ✔ vercel    octocat → acme   login and team confirmed\n")
+        self.assertEqual(out.getvalue(), "client\n  ✔ vercel    octocat → acme   login and team confirmed\n"
+                                         "  aws and gh won't start here until mapped: keyfit add aws|github …\n")
 
 
 if __name__ == "__main__":

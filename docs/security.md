@@ -1,179 +1,104 @@
 # Security
 
-Keyfit decides which credentials `claude`, `codex`, `aws`, `gh` and `vercel` get, so this page lists everything it reads, stores and sends. To report a vulnerability, see [SECURITY.md](../SECURITY.md); please don't open a public issue.
+Keyfit decides which credentials `claude`, `codex`, `aws`, `gh` and `vercel` get. This page says what it can see, what it keeps and where, what it sends and to whom, and what it does not protect against. To report a problem, see [the end of this page](#reporting-a-problem); please don't open a public issue.
 
 ## In short
 
-- **No secret values in Keyfit's files.** The registry and the check cache hold references and labels only. The one place Keyfit puts a secret is the macOS Keychain, and only for keys you type into `keyfit add linear` or `keyfit secret set`.
-- **Where a secret value goes:** into the environment of the tool Keyfit starts, and to the service it belongs to when Keyfit asks that service whose key it is. The Linear key goes only to Linear, the GitHub token only to GitHub and the Vercel token only to Vercel.
-- **No telemetry, no log files, no writes into your repositories.** Keyfit never changes another tool's login.
-- **What it protects against:** using the wrong account by accident. It is not a sandbox, and it does not protect against malicious code running as you.
+- **What it is for:** stopping a tool from using the wrong project's account by accident. It is not a sandbox and not a secrets vault, and it does not protect you from code that already runs as you.
+- **No secret values in Keyfit's files.** Keys you paste into Keyfit go into the macOS Keychain.
+- **A key or token leaves your Mac only for its own service**, over HTTPS, when Keyfit asks that service whose it is.
+- **No telemetry, no update checks, no log files, no writes into your repositories.**
+- **Keyfit's output never shows a key or token.**
 
-## What Keyfit reads
+## What Keyfit can see
 
-### Files
+Keyfit runs as you, so it could read anything you can. This is what it actually reads:
 
-| File | When | Why |
-|---|---|---|
-| `~/.config/keyfit/registry.toml` | every shim launch and most `keyfit` commands | your projects and their accounts |
-| `~/.config/keyfit/cache/checks.json` | launches and `keyfit run` | recent successful checks (see [the verification cache](#the-verification-cache)) |
-| Environment variables named by `env:` references, such as `$LINEAR_ACME_API_KEY` | launches in that project | the key to hand to the tool |
-| `~/.aws/config` (or `$AWS_CONFIG_FILE`, or the project's `config_file`) | AWS checks, `keyfit add aws`, guided `keyfit init` | the profile's type, its account hints, the list of profile names |
-| `~/.aws/credentials` (or `$AWS_SHARED_CREDENTIALS_FILE`) | AWS checks | only whether the profile has a static access key there, so Keyfit can warn about it |
-| `~/.aws/sso/cache/*.json`, `~/.aws/login/cache/*.json` (or `$AWS_LOGIN_CACHE_DIRECTORY`) | AWS checks | expiry times, whether a refresh token exists, and the account of a console sign-in. The tokens in these files are never used or sent by Keyfit |
-| `~/.claude.json` (or `.claude.json` in the account's config folder) | `claude` launches, `keyfit add mcp` | `mcpServers`, to hide other projects' servers, and the organization and account IDs under `oauthAccount`, to notice a changed login |
-| `settings.json` in the Claude config folder | `claude` launches | only whether you set a `statusLine` of your own |
-| `.mcp.json` in the current folder | `claude` launches in a project | which project-scope servers to disable for this session |
-| `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`) | Codex checks, `keyfit add codex`, guided `keyfit init` | the login mode, whether an API key is stored, and the plan and account ID from the ID token's claims. Tokens are not used or sent |
-| `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) | `codex` launches, `keyfit add mcp` | `mcp_servers`, to hide other projects' servers |
-| `auth.json` and `config.json` in the account's Vercel folder (the CLI's default `~/Library/Application Support/com.vercel.cli`, or the account's `config_dir`) | Vercel checks, `keyfit add vercel`, guided `keyfit init` | from `auth.json`: the token, to ask Vercel whose it is, its expiry and whether a refresh token exists. From `config.json`: `currentTeam`, the team selected in that login. Neither file is written by Keyfit |
-| `.vercel/project.json`, `.vercel/repo.json`, `.now/project.json` in the current folder and its parents up to the repository root (and in the folder `vercel --cwd` names) | Vercel checks, `vercel` launches | only `orgId`: the team the repository is linked to |
-| `.envrc` of the repository | `keyfit init` only | `use aws PROFILE ACCOUNT_ID` and `export LINEAR_API_KEY=$VARIABLE` lines. It is read as text and never run |
-| Your shell startup files (`~/.zshrc` or `$ZDOTDIR/.zshrc`, `~/.bash_profile`, `~/.bash_login`, `~/.profile`, `~/.bashrc`) | `keyfit setup`, `keyfit setup --remove`, `keyfit doctor` | where Keyfit's line goes, whether it is there, and removing it |
-| `PATH`, and the `.keyfit-shims` marker file in shim folders | every launch | to find the real tool behind the shim, skipping Keyfit's shims and Superset's wrappers (`~/.superset/bin`, `~/.superset-*/bin`) |
-| `/etc/ssl/cert.pem` | HTTPS checks | the CA bundle macOS maintains, used only when Python has no CA certificates of its own |
-
-### Programs
-
-Keyfit runs the real programs, never a shim or wrapper:
-
-| Command | When | Why |
-|---|---|---|
-| `git -C <folder> rev-parse --path-format=absolute --git-common-dir --show-toplevel` | every launch and most commands | which repository, and therefore which project, a folder belongs to |
-| `git config user.email`, `git remote get-url origin` | GitHub checks, `keyfit add github` | to warn when commits would carry another identity |
-| `aws sts get-caller-identity --profile P --query Account --output text` | AWS checks, `keyfit add aws` | which account the profile is signed in to (see [network calls](#network-calls)) |
-| `claude auth status --json` | Claude checks, `keyfit add claude`, guided `keyfit init` | whether the login is a claude.ai subscription, plus its config folder, organization, email and plan |
-| `gh auth token --hostname github.com --user LOGIN` | launches that include GitHub, `keyfit add github` | the token `gh` stored for that account. This only reads it: Keyfit never runs `gh auth login`, `gh auth switch` or anything else that changes gh's logins |
-| `vercel whoami` (with `--global-config DIR` for a folder other than the CLI's default) | Vercel checks, `keyfit add vercel`, only when the stored access token has expired | the CLI renews its own token, as every `vercel` command does before it starts. Keyfit ignores the output and reads the renewed token from `auth.json`. It runs with `VERCEL_TELEMETRY_DISABLED=1` |
-| `gh auth status --hostname github.com` | guided `keyfit init` | the accounts gh is signed in to (it prints logins; tokens stay masked) |
-| `/usr/bin/security find-generic-password -s SERVICE -a ACCOUNT` | `keychain:` references, `keyfit secret list` | with `-w` it reads the value, but only when the value is needed for a launch or a check. `keyfit secret list` runs it without `-w`, which only checks that the item exists |
-| `/usr/bin/security -i` with `add-generic-password -U` | `keyfit add linear` (pasted key), `keyfit secret set` | to store a key. The command goes to the stdin of `security -i`, never into its arguments |
-| `/usr/bin/security list-keychains` | `keyfit doctor` | whether the Keychain answers; it reads no item |
-
-## What Keyfit stores
-
-Everything Keyfit writes lives under `~/.config/keyfit` (or `$KEYFIT_CONFIG_DIR`). The two exceptions are your Keychain and, only when you ask for it, one line in a shell startup file.
-
-| Path | Contents |
+| What | Why |
 |---|---|
-| `registry.toml` (mode 600) | Projects: names, folders, connections. Accounts: identity labels only. These are AWS profile names with their 12-digit account IDs (and the AWS config file, when not the default), Linear workspace slugs, and where each key lives (`env:NAME` or `keychain:service/account`). It also holds GitHub logins (with the expected git email and SSH host alias, if any), Vercel login folders with the username and team (slug and ID), the Claude config folder with organization ID and name (plus the email when pinned), and the Codex home with its plan (plus the account ID when pinned). Finally: MCP server name patterns, `[settings]`, and the names of Keychain items Keyfit stored. It never holds a key, token or password |
-| `cache/checks.json` (mode 600) | successful online checks; see below |
-| `bin/claude`, `bin/codex`, `bin/aws`, `bin/gh`, `bin/vercel`, `bin/.keyfit-shims` | the shims: two-line `sh` scripts that run Keyfit with the Python that ran `keyfit setup` |
-| `shell.zsh`, `shell.sh` | the PATH snippets your startup file loads |
-| `claude/NAME/` | Only after `keyfit add claude --new --name NAME`: a config folder for another Claude login. It holds symlinks to your shared Claude settings (`settings.json`, `keybindings.json`, `CLAUDE.md`, `skills`, `commands`, `agents`) and a `.claude.json` that marks the project's folders as trusted. Claude Code keeps that login's credentials itself, as it does for any config folder |
-| `vercel/NAME/` (mode 700) | Only after `keyfit add vercel --new --name NAME`: an empty folder for another Vercel login. `vercel login` inside the project then writes that login's `auth.json` and `config.json` into it; Keyfit only reads them |
+| `~/.config/keyfit/registry.toml` and `cache/checks.json` | your projects, and recent successful checks |
+| The environment of the shell that starts the tool | to clean it up; an `env:NAME` reference reads the key from `$NAME` |
+| Keychain items named by `keychain:service/account` references | the key, read with `/usr/bin/security find-generic-password -w` only when a launch or check needs it |
+| `~/.aws/config`, `~/.aws/credentials`, `~/.aws/sso/cache`, `~/.aws/login/cache` | the profile's type and account hints, whether it has a static key, sign-in expiry times. Keyfit never uses or sends the AWS tokens in these files |
+| gh's token for the mapped account (`gh auth token --user LOGIN`) | to hand it to the tool as `GH_TOKEN` and ask GitHub whose it is |
+| The Vercel login folder's `auth.json` and `config.json` | the token, to ask Vercel whose it is, and the selected team |
+| `~/.claude.json` (or the account's), Claude's `settings.json`, `~/.codex/auth.json`, `~/.codex/config.toml` | MCP server lists, organization and account IDs, the login type, whether you set your own status line. Codex tokens are never used or sent |
+| In the project folder: `.mcp.json`, `.vercel/project.json` and `repo.json`, the git config | server names to hide, the Vercel team the folder is linked to, the author email and origin host |
+| `.envrc` of the repository, on `keyfit init` only | `use aws` and `export LINEAR_API_KEY=$VAR` lines. It is read as text and never run |
+| `PATH` | to find the real tool behind each shim |
 
-**Keychain.** Keyfit creates generic passwords with the service `keyfit`:
+Programs Keyfit runs, all read-only: `git rev-parse`, `git config user.email` and `git remote get-url origin`; `aws sts get-caller-identity`; `claude auth status --json`; `gh auth token` and `gh auth status`; `vercel whoami` (only to let the CLI renew an expired token); `/usr/bin/security`. Apart from `security`, each is the first one found on PATH (skipping Keyfit's shims and Superset's wrappers), and runs in the current folder, as the tool itself will.
 
-- `linear-WORKSPACE`, made by `keyfit add linear` when you paste a key
-- `NAME`, made by `keyfit secret set NAME`
+## What Keyfit stores, and where
 
-`keyfit secret list` shows their names. Keychain Access shows them too (search for "keyfit"). Keyfit only stores printable ASCII values, and it reads each value back once to confirm it was stored. `keyfit setup --remove --purge` keeps these items and prints their names. Delete them in Keychain Access or with `security delete-generic-password -s keyfit -a NAME`.
+Everything lives under `~/.config/keyfit` (or `$KEYFIT_CONFIG_DIR`), apart from Keychain items and one optional line in a shell startup file.
 
-**Shell startup file.** `keyfit setup --rc` appends one line that loads `shell.zsh` or `shell.sh`. Without `--rc`, Keyfit only prints the line. `keyfit setup --remove` takes it out again, with the blank line before it.
+| Path | Mode | Contents |
+|---|---|---|
+| `registry.toml` | 600 | Projects, their folders and account labels: AWS profile names and 12-digit account IDs, Linear workspace slugs, where each key lives (`env:NAME` or `keychain:service/account`), GitHub logins, Vercel users and teams, Claude organizations, Codex plans (plus the email or account ID when you pin one), MCP server name patterns, and the names of Keychain items Keyfit stored. Never a key, token or password |
+| `cache/` and `cache/checks.json` | 700, 600 | Successful online checks: time, status and a short label such as `account confirmed`, under a SHA-256 of the project, the connection and a login fingerprint. For Linear, GitHub and Vercel the fingerprint is the first 16 hex characters of a SHA-256 of the key or token |
+| `bin/` (the shims), `shell.zsh`, `shell.sh` | 755, 644 | Two-line `sh` scripts and the PATH snippets. Nothing secret |
+| `claude/NAME/` | 700 | Only after `keyfit add claude --new`: a config folder for another Claude login, where Claude keeps that login's history and transcripts. Its `.claude.json` (600) marks the project's folders as trusted only where your default Claude login already trusts them, so a new login never trusts more than the old one |
+| `vercel/NAME/` | 700 | Only after `keyfit add vercel --new`: the Vercel CLI keeps that login's `auth.json` here |
+| macOS Keychain, service `keyfit` | Keychain | Keys you pasted into `keyfit add linear` (`linear-WORKSPACE`) or `keyfit secret set NAME`. They are written through the stdin of `security -i`, never through its arguments |
+| Your shell startup file | | One line that loads `shell.zsh` or `shell.sh`, only with `keyfit setup --rc` |
 
-## The verification cache
+`~/.config/keyfit` itself gets your usual permissions (usually 755). The registry, the cache and Claude's `.claude.json` are owner-only from the first byte. `keyfit setup --remove --purge` deletes the folder but never Keychain items; it lists their names so you can delete them in Keychain Access.
 
-`~/.config/keyfit/cache/checks.json` (mode 600) remembers successful online checks, so daily launches don't wait for the network.
+## What Keyfit sends, and to whom
 
-- **What is in it.** Each entry has a key, the time of the check, its status and a short detail such as `account confirmed` or `Acme (team) confirmed`. The key is a SHA-256 hash of four things: the project name, the connection kind, the connection's registry entry, and a fingerprint of the current login. No key, token or password is stored, not even hashed on its own.
-- **The fingerprint** changes when the identity behind a connection changes, and then the cached entry no longer matches:
-  - AWS: the modification time of the SSO or console sign-in cache file, so a new sign-in counts
-  - Linear, GitHub and Vercel: the first 16 hex characters of a SHA-256 of the key or token
-  - Claude: the organization ID (and the account ID when pinned) in `.claude.json`
-- **30 minutes (fresh).** A launch reuses a successful check for 30 minutes instead of asking the service again. Local checks (files, expiry times, key shape) still run on every launch.
-- **24 hours (stale), for network failures only.** Sometimes a service doesn't answer: a connection error, a DNS failure or a timeout. Keyfit then retries once. If that also fails, it accepts a success from the last 24 hours and shows it as a warning, for example `workspace confirmed 3h 5m ago · could not re-check now (…)`. A rejected key, an expired sign-in or a wrong account always fails, however recent the last success was.
-- **Failures are never cached.** Entries older than 24 hours are dropped the next time the file is written.
-- **Forcing a fresh check.** `keyfit status` always checks online and refreshes the cache. Deleting the file is always safe.
+Nothing in folders that aren't registered. In a project, Keyfit only asks each service who you are:
+
+| To | What | When |
+|---|---|---|
+| `api.linear.app` (`POST /graphql`) | the project's Linear key and the query `{ organization { urlKey name } }` | a Linear check without a fresh cached success, `keyfit status`, `keyfit add linear`, `keyfit init` importing a key from `.envrc`. Only a value shaped like a Linear key is ever sent |
+| `api.github.com/user` | gh's token for the account | a GitHub check without a fresh cached success, `keyfit status`, `keyfit add github` |
+| `api.vercel.com` (`/v2/user`, `/v2/teams/…`) | the login's token from `auth.json` | a Vercel check without a fresh cached success, `keyfit status`, `keyfit add vercel`, guided `keyfit init` |
+| AWS STS, through the real `aws` | whatever `aws sts get-caller-identity --profile P` sends | an AWS check without a fresh cached success, `keyfit status`, `keyfit add aws` when the profile doesn't name its account |
+| Anthropic, through the real `claude` | whatever `claude auth status` sends | a Claude check without a fresh cached success, `keyfit status`, `keyfit add claude` |
+| Vercel, through the real `vercel` | whatever `vercel whoami` sends to renew its token | only when the stored Vercel token has expired |
+
+Keyfit's own requests use HTTPS with certificate and hostname checks (Python's default; when Python has no CA certificates of its own, Keyfit uses the bundle macOS keeps at `/etc/ssl/cert.pem`). They never follow a redirect, because a redirect would carry the key to another address. Each has a 15 s timeout. Like other tools, they honor `HTTPS_PROXY` and `SSL_CERT_FILE` from your environment. Codex is checked offline, from `auth.json`.
+
+**The cache.** A successful online check is reused for 30 minutes. If a service can't be reached (a connection error, a DNS failure or a timeout; for Vercel also a rate limit or server error), Keyfit retries once. If that also fails, it accepts a success from the last 24 hours for the same login and shows it as a warning. A rejected key, an expired sign-in or a wrong account always fails, and failures are never cached. AWS profiles that aren't SSO or console sign-ins (`credential_process`, static keys, roles) have no login fingerprint: a credential swapped behind the same profile name is noticed when the 30 minutes run out, or at once with `keyfit status`.
 
 ## What Keyfit never does
 
-- **Print, log or store secret values.** Output names the variable or the Keychain item (`$LINEAR_ACME_API_KEY`, `Keychain item keyfit/linear-acme`), never the value. AWS account IDs are shown as their last four digits. `KEYFIT_DRY_RUN=1` lists the names of changed environment variables only. Keyfit keeps no log file.
-- **Put a secret on a command line,** where every process could read it with `ps`. Keys are stored through the stdin of `security -i`, and values travel through pipes and environments. `vercel` gets only a folder (`--global-config`) and a team slug (`--scope`) as arguments; the CLI reads its token from that folder, and `vercel --token …` is refused in a project. MCP configuration refers to variables (`${LINEAR_API_KEY}`), never to keys.
-- **Send a secret anywhere but its own service.** The Linear key goes only to `api.linear.app`, the GitHub token only to `api.github.com` and the Vercel token only to `api.vercel.com`. AWS and Claude credentials are never used by Keyfit; the `aws` and `claude` programs authenticate themselves.
-- **Telemetry.** No analytics, no update checks, no crash reports. The [network calls](#network-calls) below are all of them.
-- **Write into your repositories.** Keyfit reads a project's `.envrc` (on `keyfit init`), `.mcp.json` and git configuration. It never creates or changes files in a project folder, its worktrees or its `.git`. Per-session settings reach the tool through its environment or command line: Claude's `--settings`, and Codex's `-c` and `--no-daemon`.
-- **Change other tools' logins or configuration.**
-  - It reads gh's token with `gh auth token --user`; it never switches or adds gh logins.
-  - It never runs `aws sso login`, `claude auth login`, `codex login` or `vercel login` by itself. It prints them as the fix.
-  - It doesn't edit `~/.aws/config`, `~/.claude.json`, Claude's settings, `~/.codex/config.toml` or the Vercel CLI's `auth.json` and `config.json`. When the stored Vercel access token has expired, it lets the CLI renew it (`vercel whoami`), which any `vercel` command would do first.
-
-  When you type a sign-in command yourself, Keyfit lets it through with the project's environment, so it signs in the right account. The only places Keyfit creates configuration for another tool are a new, separate Claude config folder (`keyfit add claude --new`) and an empty Vercel login folder (`keyfit add vercel --new`), and only when you ask for them.
-- **Start a tool after a failed check.** A failed check, and also an error inside Keyfit (`keyfit: internal error …`), stops the tool. These are the documented exceptions:
-  - `KEYFIT_DISABLE=1`
-  - sign-in commands
-  - folders that aren't registered
-  - AWS profiles listed under `[settings] shared_aws_profiles`
-  - a network failure within 24 hours of a success, shown as a warning
-
-## Network calls
-
-Keyfit makes no network calls in folders that aren't registered. In a project, these are the only ones:
-
-| Call | Made by | What is sent | When |
-|---|---|---|---|
-| AWS STS `GetCallerIdentity` | the real `aws` CLI: `aws sts get-caller-identity --profile P` (connect timeout 5 s, read timeout 10 s) | whatever the AWS CLI sends for that profile. Keyfit reads only the account number from the answer | AWS check without a fresh cached success; `keyfit status`; `keyfit add aws` when the profile's config doesn't name the account |
-| `POST https://api.linear.app/graphql` | Keyfit (Python's `urllib`, 15 s timeout) | the query `{ organization { urlKey name } }`, with the project's Linear key in the `Authorization` header | Linear check without a fresh cached success; `keyfit status`; `keyfit add linear`; `keyfit init` when it imports a key from `.envrc` |
-| `GET https://api.github.com/user` | Keyfit (Python's `urllib`, 15 s timeout) | the account's token as a Bearer token, `User-Agent: keyfit` | GitHub check without a fresh cached success; `keyfit status`; `keyfit add github` |
-| `GET https://api.vercel.com/v2/user` | Keyfit (Python's `urllib`, 15 s timeout) | the login's token from `auth.json` as a Bearer token, `User-Agent: keyfit` | Vercel check without a fresh cached success; `keyfit status`; `keyfit add vercel`; guided `keyfit init` |
-| `GET https://api.vercel.com/v2/teams/TEAM` | Keyfit (Python's `urllib`, 15 s timeout) | the same token. When the API doesn't find a team by its slug, Keyfit looks it up in `GET /v2/teams?limit=100`, the login's teams | the same, for an account with a team |
-| `vercel whoami` | the real Vercel CLI (30 s timeout) | whatever the CLI sends to renew its token; Keyfit sends nothing itself | only when the stored Vercel access token has expired |
-| `claude auth status --json` | the real Claude Code CLI (30 s timeout) | whatever Claude Code sends to report its login; Keyfit sends nothing itself | Claude check without a fresh cached success; `keyfit status`; `keyfit add claude` |
-
-Guided `keyfit init` makes the same calls as the `keyfit add …` commands it runs for you. For Vercel it makes them once before it asks, too, so that it can show whose login it offers. Both `keyfit init` and `keyfit add aws` end with `keyfit status`.
-
-The AWS CLI may do more on its own:
-
-- For an SSO profile it may refresh the SSO token.
-- For a `credential_process` profile it runs that process. A process started with `--auto-login` (Granted, for example) may open a browser; Keyfit warns about it.
-
-**No network:**
-
-- Codex checks, which read `auth.json`
-- `gh auth token` and `gh auth status`, which read gh's local store
-- `keyfit status --offline`, `which`, `projects`, `doctor`, `setup`, `secret`, `add mcp` and `add vercel --new`
+- **Print a key or token.** Output names the variable or the Keychain item, and shows AWS account IDs as their last four digits. `KEYFIT_DRY_RUN=1` lists the names of changed variables only. An internal error shows the exception's type and place, not its message, since messages can quote the file that was read. A key typed where a name or reference belongs (`--key lin_api_…`) is refused without being repeated.
+- **Put a secret on a command line**, where `ps` would show it to every process.
+- **Send a secret anywhere but its own service** (the table above).
+- **Collect telemetry or keep logs.** No analytics, update checks or crash reports.
+- **Write into your repositories, or change another tool's logins or configuration.** It never runs `gh auth login`, `gh auth switch`, `aws sso login`, `claude auth login`, `codex login` or `vercel login` itself; it prints them as the fix. The one exception is `vercel whoami`, which renews an expired Vercel token, as any `vercel` command would.
+- **Start a tool after a failed check, a mistake in the registry (`registry.toml has a mistake`), an error inside Keyfit, or from a shim whose Keyfit installation is gone.** The exceptions are `KEYFIT_DISABLE=1`, sign-in commands (they run with the project's environment but without checks), folders that aren't registered, the AWS profiles under `[settings] shared_aws_profiles`, and a network failure within 24 hours of a success, shown as a warning.
 
 ## Where secrets end up
 
-At launch, the project's Linear key (as `LINEAR_API_KEY`) and GitHub token (as `GH_TOKEN`) are put into the environment of the tool Keyfit starts. The Vercel token is not: the CLI reads it from its own folder. `claude` and `codex` get all of the project's accounts; `aws`, `gh` and `vercel` get only their own. Everything the tool starts inherits that environment: its MCP servers, its hooks, and the commands an agent runs. That is how the agent's `gh` and Linear server work. It is also why Keyfit removes other projects' keys from that environment.
+`claude` and `codex` start with the project's Linear key (as `LINEAR_API_KEY`, and in the project's own `env:` variable) and gh's token for the project's GitHub account (as `GH_TOKEN`). That token is gh's own login token, with all of its scopes. Inside a session Keyfit started, a `gh` call keeps the session's `GH_TOKEN` instead of asking gh again only when the project's check confirmed exactly that token in the last 30 minutes and gh's sign-ins (the time of `hosts.yml`, never its content) haven't changed since. `aws`, `gh` and `vercel` get only their own account. Everything the tool starts inherits its environment: MCP servers, hooks, the commands an agent runs, and the install scripts of the packages it installs. Keyfit removes other projects' variables only for the kinds of account the project maps. In folders that aren't registered, the tool gets your environment unchanged, apart from `KEYFIT_SHIM_DEPTH`, a counter that stops shims from calling each other in a loop.
 
-Keyfit only cleans up the accounts the project maps. A project without a Linear mapping, for example, keeps whatever Linear variables your shell exports.
+## What Keyfit does not protect against
+
+- **Code that already runs as you.** It can read the same files and environment, call the real binaries by full path, set `KEYFIT_DISABLE=1`, edit the registry or remove the shims. It can also read the Keychain items Keyfit stored, without a prompt, through `/usr/bin/security`; that is how Keyfit reads them without asking at every launch. The Keychain protects them at rest and from other users, not from your own processes.
+- **An agent that goes around the five commands:** one that reads `~/.aws`, gh's or Vercel's stored logins or the Keychain directly, or runs a tool by its full path. Keyfit only decides what `claude`, `codex`, `aws`, `gh` and `vercel` get when they are started through PATH. Other programs (`vc`, terraform, npm, IDE extensions, desktop apps) don't go through Keyfit.
+- **What a tool does with the right account.** An agent with the project's AWS profile can do whatever that profile allows. Give each project's profile only the permissions it needs.
+- **Configuration a repository brings with it, once you trust it.** After you trust a folder in Claude, its `.claude/settings.json` applies to the agent's commands, and its `env` can set `KEYFIT_DISABLE`, `KEYFIT_PROJECT` or `AWS_PROFILE`. An `.envrc` you `direnv allow` can do the same. Keyfit can't tell those from your own settings. A project `.mcp.json` server you approve gets the session's environment, or any variable it names, such as `${LINEAR_API_KEY}` or `${GH_TOKEN}`. `keyfit init` imports the repository's `.envrc` lines, so register only repositories you trust and read the `imported …` lines it prints.
+- **`KEYFIT_DISABLE=1` beyond the one command.** It is inherited: an agent started with it runs its own `aws`, `gh` and `vercel` without Keyfit too.
+- **What is on PATH.** Keyfit runs the first `aws`, `claude`, `codex`, `gh`, `vercel` and `git` on PATH after its shims and Superset's wrappers, as your shell would. A compromised binary or a malicious folder early on PATH wins. That includes relative entries such as `.` or `./node_modules/.bin`, which point into whatever folder you are in.
+- **MCP servers Keyfit doesn't see.** It hides servers by name from `~/.claude.json` (user scope), the current folder's `.mcp.json` and `~/.codex/config.toml`. Servers from plugins, claude.ai connectors or Claude's local scope are not hidden, and Keyfit doesn't vet any server. Codex can't hide a server whose name has a dot or `=`, so if such a server must be hidden, `codex` doesn't start until you rename it.
+- **Accounts you didn't map, and identities it can't confirm online.** Unmapped accounts are neither checked nor cleaned up. Codex is checked from its local `auth.json` only, and Claude from what `claude auth status` reports.
 
 ## How to audit it
 
-- `KEYFIT_DRY_RUN=1 claude` in a project runs the checks, then prints three things: the real binary, the arguments it would add, and the names of the environment variables that would change. The arguments include the `--settings` JSON that lists the hidden MCP servers. It starts nothing.
-- `keyfit which -v` shows which project a folder belongs to, why, and its accounts. `keyfit status` shows every check and its result.
-- `cat ~/.config/keyfit/registry.toml` shows plain TOML with nothing secret in it. The same goes for `cat ~/.config/keyfit/cache/checks.json`.
-- `cat ~/.config/keyfit/bin/claude` shows the shim, which is two lines.
-- `keyfit secret list` and Keychain Access (search for "keyfit") show the items Keyfit stored.
-- The code is small and uses Python's standard library only. A launch goes through:
-  - `keyfit/shim.py`: the launch itself
-  - `keyfit/resolve.py`: which project
-  - `keyfit/environment.py` and `keyfit/adapters/`: injecting and checking
-  - `keyfit/mcp.py`: hiding MCP servers
-  - `keyfit/secrets.py`: Keychain and `env:` references
-  - `keyfit/cache.py`: the verification cache
+- `KEYFIT_DRY_RUN=1 claude` in a project runs the checks and prints the real binary, the arguments Keyfit adds (including the `--settings` JSON with the hidden MCP servers) and the names of the variables it changes. It starts nothing.
+- `keyfit which -v` shows which project a folder belongs to, and why. `keyfit status` runs every check online.
+- `cat ~/.config/keyfit/registry.toml`, `cat ~/.config/keyfit/cache/checks.json` and `cat ~/.config/keyfit/bin/claude` show plain files with nothing secret in them.
+- `keyfit secret list`, or Keychain Access (search for "keyfit"), shows the items Keyfit stored.
+- The code uses Python's standard library only. A launch goes through `keyfit/shim.py` (the launch), `resolve.py` (which project), `environment.py` and `adapters/` (injecting and checking), `mcp.py` (hiding MCP servers), `secrets.py` (Keychain and `env:` references), `http.py` (TLS) and `cache.py`.
 
-## Threat model
+## Reporting a problem
 
-**Keyfit protects against using the wrong account by accident:**
+Please don't report a vulnerability in a public issue, pull request or discussion. Report it privately instead:
 
-- an agent in one client's repository running with another client's AWS profile, Linear key, GitHub login, Vercel login or team, or Claude organization
-- a `vercel link` or deploy landing in another team: through the login's selected team, `--scope`, `VERCEL_ORG_ID`/`VERCEL_TEAM_ID`, or a repository already linked to another team
-- a credential inherited from your shell overriding the project's, such as `AWS_ACCESS_KEY_ID`, `GH_TOKEN`, `ANTHROPIC_API_KEY` or `CODEX_API_KEY`
-- an expired or revoked sign-in that would otherwise fail halfway through a task
-- an API key quietly switching Claude or Codex from your subscription to API billing
-- MCP servers of other projects showing up in this one
+- on GitHub, with private vulnerability reporting: the repository's **Security** tab, then **Report a vulnerability** (<https://github.com/FlamurMaliqi/keyfit/security/advisories/new>), or
+- by email to <contact@flamur-maliqi.de>.
 
-**It does not protect against:**
-
-- **Malicious code running as your user.** Such code can read the same files and environment variables, run the real binaries by their full path, set `KEYFIT_DISABLE=1`, edit the registry or remove the shims. Keyfit is not a sandbox and not a secrets vault.
-- **What the tool does with the right account.** An agent with the project's AWS profile can do whatever that profile allows. Give each project's profile only the permissions it needs.
-- **Anything that doesn't go through the shims:** other programs (including `vc`, the Vercel CLI's short name), tools called by their full path, apps that don't start from your shell, and runs with `KEYFIT_DISABLE=1`.
-- **The MCP servers, hooks and plugins you configure.** Keyfit hides some MCP servers; it doesn't vet any of them. Anything the tool starts can read the environment it was given.
-- **Accounts you didn't map.** These are neither checked nor cleaned up.
-- **Changes inside the 30-minute window.** A key revoked after a successful check is noticed when the cached result expires, or at once with `keyfit status`.
-- **Identities Keyfit can't confirm online.** Codex is checked from its local `auth.json` only. Claude is checked from what `claude auth status` reports.
-- **A compromised `aws`, `claude`, `codex`, `gh`, `vercel` or `git`,** or a malicious folder placed on PATH. Keyfit runs the first real binary it finds on PATH after its own shims and Superset's wrappers.
-
-If you find a way around a check that should hold, please [report it privately](../SECURITY.md).
+[SECURITY.md](../SECURITY.md) says what to include and what counts. Never send real keys or tokens, not even expired ones.

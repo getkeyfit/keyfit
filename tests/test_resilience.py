@@ -68,6 +68,13 @@ class ResilienceTests(unittest.TestCase):
         self.assertTrue(check.failed)
         self.assertIn("another account", check.detail)
 
+    def test_unknown_kind_fails_instead_of_going_unchecked(self):
+        typo = Project("demo", ["/tmp"], {"githb": {"login": "octocat", "note": "lin_api_SECRETVALUE"}})
+        check = environment.verify(typo, {}, remote=False)[0]
+        self.assertTrue(check.failed)
+        self.assertIn("unknown connection", check.detail)
+        self.assertNotIn("SECRETVALUE", "\n".join(check.lines()))  # the table itself is never printed
+
     def test_success_older_than_a_day_is_not_trusted(self):
         k = cache.key("demo", "flaky", {"id": 1}, "")
         cache.put(k, "ok", "account confirmed")
