@@ -130,6 +130,15 @@ class ShimTests(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("refusing --profile other", out.stderr)
 
+    def test_abbreviated_profile_option_is_refused_too(self):
+        # the AWS CLI's argparse accepts any unambiguous prefix of --profile
+        for args in (["--prof", "other", "s3", "ls"], ["s3", "ls", "--pro=other"], ["--p", "other", "s3", "ls"]):
+            out = self.run_tool("aws", *args)
+            self.assertEqual(out.returncode, 1, args)
+            self.assertEqual(out.stdout, "")
+            self.assertIn("refusing --profile other", out.stderr)
+        self.assertEqual(self.run_tool("aws", "--prof", "iam", "s3", "ls").returncode, 0)
+
     def test_shared_profile_runs_unchanged(self):
         out = self.run_tool("aws", "--profile", "ci-worker", "s3", "ls", FAKE_ACCOUNT="999999999999")
         self.assertEqual(out.returncode, 0, out.stderr)
