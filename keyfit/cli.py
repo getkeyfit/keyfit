@@ -327,11 +327,19 @@ def cmd_add_aws(args) -> int:
 def _read_secret(prompt: str) -> str | None:
     """Hidden prompt on a terminal, else one line from stdin (scripts). Never echoed, never in argv."""
     import getpass
+    import warnings
 
     try:
         if sys.stdin.isatty():
-            return getpass.getpass(prompt)
+            with warnings.catch_warnings():
+                # getpass falls back to reading with echo when it cannot control the terminal: stop instead
+                warnings.simplefilter("error", getpass.GetPassWarning)
+                return getpass.getpass(prompt)
         return sys.stdin.readline().rstrip("\r\n")
+    except getpass.GetPassWarning:
+        print("\nthis terminal cannot hide what you type, so nothing was read; pipe the key on stdin instead",
+              file=sys.stderr)
+        return None
     except (EOFError, KeyboardInterrupt):
         print(file=sys.stderr)  # end the prompt line; the caller says nothing was stored
         return None
