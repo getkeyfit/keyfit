@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import cache
 from .adapters import ADAPTERS
 from .checks import Check, human
-from .registry import Project
+from .registry import Project, default_path, tilde
 
 
 def _selected(project: Project, kinds) -> list[tuple[str, object]]:
@@ -37,8 +37,9 @@ def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cac
     def one(item):
         kind, conn = item
         adapter = ADAPTERS.get(kind)
-        if adapter is None:
-            return Check(kind, "warn", str(conn), "not supported yet")
+        if adapter is None:  # a typo (`githb = …`) or a newer Keyfit's kind: that account would go unchecked
+            return Check(kind, "fail", "?", "not a kind of account this Keyfit knows",
+                         f"fix or remove it in {tilde(default_path())} (known: {', '.join(sorted(ADAPTERS))})")
         if not remote:
             return adapter.verify(conn, env, remote=False)
         local = adapter.local(conn, env)

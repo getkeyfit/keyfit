@@ -40,7 +40,7 @@ def _fetch(key: str, timeout: float) -> tuple[int, dict]:
     req = urllib.request.Request(GRAPHQL, data=json.dumps({"query": QUERY}).encode(),
                                  headers={"Content-Type": "application/json", "Authorization": auth})
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=http.context()) as resp:
+        with http.urlopen(req, timeout) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as err:
         try:
@@ -104,6 +104,8 @@ class LinearAdapter(Adapter):
             return Check(self.kind, "fail", label, "Linear rejected the key (revoked, expired or wrong)",
                          "create a key in Linear → Settings → Security & access → Personal API keys, "
                          "then: keyfit add linear")
+        if status != 200:  # a redirect (never followed) or a server error: no answer about the key
+            return Check(self.kind, "fail", label, f"Linear answered {status}", "retry, or: keyfit status")
         org = ((body.get("data") or {}).get("organization") or {})
         actual = org.get("urlKey")
         if actual != expected:
@@ -113,7 +115,10 @@ class LinearAdapter(Adapter):
         return Check(self.kind, "ok", label, "workspace confirmed")
 
     def workspace_of(self, key: str) -> tuple[str | None, str]:
-        """Ask Linear which workspace a key belongs to (used when recording a mapping)."""
+        """Ask Linear which workspace a key belongs to (used when recording a mapping). Only a value shaped like a
+        Linear key is sent: `--key env:VAR` or an .envrc line can name any variable, such as a GitHub token."""
+        if not KEY_SHAPE.fullmatch(key or ""):
+            return None, "that is not a Linear API key (lin_api_…), so it was not sent to Linear"
         try:
             status, body = self.fetch(key, self.timeout)
         except (OSError, ValueError) as err:

@@ -13,7 +13,7 @@ from unittest import mock
 from keyfit import mcp
 from keyfit.cli import main
 from keyfit.registry import LEGACY_KINDS, Project, Registry
-from keyfit.shim import adjust_args, subcommand, CLAUDE_SUBCOMMANDS, CODEX_SUBCOMMANDS
+from keyfit.shim import Refused, adjust_args, subcommand, CLAUDE_SUBCOMMANDS, CODEX_SUBCOMMANDS
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -119,10 +119,25 @@ class ShimTests(unittest.TestCase):
         self.assertIn("aws not started, demo needs attention", out.stderr)
         self.assertIn("…9999", out.stderr)
 
+    def test_option_value_that_looks_like_a_sign_in_command_still_runs_the_checks(self):
+        out = self.run_tool("claude", "--add-dir", "auth", FAKE_ACCOUNT="999999999999")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(out.stdout, "")  # the session never started
+        self.assertIn("claude not started, demo needs attention", out.stderr)
+
     def test_other_profile_is_refused(self):
         out = self.run_tool("aws", "--profile", "other", "s3", "ls")
         self.assertEqual(out.returncode, 1)
         self.assertIn("refusing --profile other", out.stderr)
+
+    def test_abbreviated_profile_option_is_refused_too(self):
+        # the AWS CLI's argparse accepts any unambiguous prefix of --profile
+        for args in (["--prof", "other", "s3", "ls"], ["s3", "ls", "--pro=other"], ["--p", "other", "s3", "ls"]):
+            out = self.run_tool("aws", *args)
+            self.assertEqual(out.returncode, 1, args)
+            self.assertEqual(out.stdout, "")
+            self.assertIn("refusing --profile other", out.stderr)
+        self.assertEqual(self.run_tool("aws", "--prof", "iam", "s3", "ls").returncode, 0)
 
     def test_shared_profile_runs_unchanged(self):
         out = self.run_tool("aws", "--profile", "ci-worker", "s3", "ls", FAKE_ACCOUNT="999999999999")
@@ -174,6 +189,12 @@ class ShimTests(unittest.TestCase):
     def test_session_pins_aws_to_its_project(self):
         out = self.run_tool("aws", "s3", "ls", cwd=self.outside, KEYFIT_PROJECT="demo", AWS_PROFILE="other")
         self.assertEqual(json.loads(out.stdout)["AWS_PROFILE"], "iam")
+
+    def test_session_of_a_project_no_longer_registered_does_not_run_unchecked(self):
+        out = self.run_tool("aws", "s3", "ls", KEYFIT_PROJECT="renamed", AWS_PROFILE="other")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(out.stdout, "")
+        self.assertIn("project renamed, which is not in the registry", out.stderr)
 
     def test_claude_session_hides_other_projects_linear_servers(self):
         out = self.run_tool("claude", "-p", "hello", ANTHROPIC_API_KEY="sk-ant-inherited")
@@ -261,6 +282,25 @@ class OwnedServerTests(unittest.TestCase):
         self.assertEqual(self.hidden_in("acme"), ["globex_cloud_eu"])
         self.assertEqual(self.hidden_in("initech"), ["globex_cloud_eu"])
         self.assertEqual(self.hidden_in("globex"), ["auth_team"])
+
+    def test_codex_names_are_never_quoted(self):
+        # Codex splits a -c key on every dot without quoting (tested with codex-cli 0.162.1): a quoted
+        # name makes it refuse to start, while a bare name with an inner space is understood
+        (self.tmp / ".codex" / "config.toml").write_text('[mcp_servers."globex cloud"]\nurl = "https://g.example/mcp"\n')
+        self.registry.add_mcp_servers("globex", ["globex cloud"])
+        args = adjust_args("codex", self.registry.get("acme"), ["exec", "x"], self.env, self.tmp, self.registry.mcp_owners())
+        self.assertEqual(args[:2], ["-c", "mcp_servers.globex cloud.enabled=false"])
+
+    def test_codex_refuses_when_a_server_cannot_be_hidden(self):
+        for name in ("globex_cloud_e.u", "globex_cloud_e=u", "globex_cloud_eu "):  # all match globex_cloud_*
+            with self.subTest(name=name):
+                (self.tmp / ".codex" / "config.toml").write_text(f'[mcp_servers.{json.dumps(name)}]\nurl = "https://g.example/mcp"\n')
+                with self.assertRaises(Refused) as refusal:
+                    adjust_args("codex", self.registry.get("acme"), ["exec", "x"], self.env, self.tmp, self.registry.mcp_owners())
+                self.assertIn("codex not started", str(refusal.exception))
+        # the project that owns it starts normally: nothing has to be hidden there
+        args = adjust_args("codex", self.registry.get("globex"), ["exec", "x"], self.env, self.tmp, self.registry.mcp_owners())
+        self.assertEqual(args, ["exec", "x"])
 
     def test_registry_keeps_ownership_out_of_connections(self):
         self.registry.save()

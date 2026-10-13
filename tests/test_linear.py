@@ -94,6 +94,14 @@ class LinearTests(unittest.TestCase):
         linear.inject(self.conn, env)
         self.assertIn("did not answer", linear.verify(self.conn, env).detail)
 
+    def test_redirect_or_server_error_says_so(self):
+        linear = LinearAdapter(fetch=lambda key, timeout: (302, {}))  # http.urlopen never follows a redirect
+        env = self.shell()
+        linear.inject(self.conn, env)
+        check = linear.verify(self.conn, env)
+        self.assertTrue(check.failed)
+        self.assertIn("Linear answered 302", check.detail)
+
     def test_mcp_config_holds_no_secret(self):
         servers = json.dumps(self.linear.mcp_servers(self.conn))
         self.assertNotIn("lin_api_", servers)

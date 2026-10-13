@@ -20,6 +20,7 @@ from pathlib import Path
 
 from . import environment, mcp
 from .adapters import vercel
+from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, canonical, tilde
 from .resolve import resolve
@@ -55,11 +56,18 @@ class Refused(Exception):
 
 
 def positionals(args: list[str]) -> list[str]:
+    """The command words, skipping options and the values of VALUE_OPTIONS. An option Keyfit does not know may
+    take the next word as its value (`claude --add-dir auth` starts a session), so the words stop there: an
+    unclear command line is never taken for a sign-in command, which would skip every check."""
     out = []
     for i, arg in enumerate(args):
         if arg == "--":
             break
-        if arg.startswith("-") or (i > 0 and args[i - 1] in VALUE_OPTIONS):
+        if i > 0 and args[i - 1] in VALUE_OPTIONS:
+            continue
+        if arg.startswith("-"):
+            if "=" not in arg and arg not in VALUE_OPTIONS and i + 1 < len(args) and not args[i + 1].startswith("-"):
+                break
             continue
         out.append(arg)
     return out
@@ -82,12 +90,17 @@ def subcommand(args: list[str], known: set[str]) -> str | None:
 
 
 def requested_profiles(args: list[str]) -> list[str]:
+    """Profiles named with --profile. The AWS CLI's parser (argparse) also takes an abbreviation that no other
+    global option shares — `--prof x`, `--pro=x`, down to `--p` — so those count too."""
     out = []
     for i, arg in enumerate(args):
-        if arg == "--profile" and i + 1 < len(args):
+        name, eq, value = arg.partition("=")
+        if len(name) < 3 or not "--profile".startswith(name):
+            continue
+        if eq:
+            out.append(value)
+        elif i + 1 < len(args):
             out.append(args[i + 1])
-        elif arg.startswith("--profile="):
-            out.append(arg.split("=", 1)[1])
     return out
 
 
@@ -111,7 +124,12 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         sub = subcommand(args, CODEX_SUBCOMMANDS)
         if sub not in CODEX_SESSIONS:
             return args
-        extra = mcp.codex_overrides(project, env, owners)
+        try:
+            extra = mcp.codex_overrides(project, env, owners)
+        except mcp.Unhideable as server:
+            raise Refused(f"keyfit: codex not started, {project.name} must not see MCP server {printable(str(server))}, "
+                          f"and Codex cannot hide a name with a dot, \"=\" or a space at either end.\n"
+                          f"  Rename it in ~/.codex/config.toml (underscores work), or remove it.") from None
         if sub is None:
             extra.append("--no-daemon")  # the shared daemon keeps the first launcher's environment
         return extra + args
@@ -140,7 +158,7 @@ def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
         if name == "--cwd" and value:
             link = vercel.foreign_link(conn, cwd / value, env)
             if link is not None:
-                raise Refused(f"keyfit: {tilde(link[0])} links {value} to another Vercel team ({link[1]}), but this "
+                raise Refused(f"keyfit: {tilde(link[0])} links {value} to another Vercel team ({printable(link[1])}), but this "
                               f"folder belongs to {project.name} (Vercel team {team}); refusing --cwd {value}.{bypass}")
     names = {name for name, _ in given}
     extra = [] if "--global-config" in names else vercel.config_args(conn, env)
@@ -176,6 +194,9 @@ def main(argv: list[str]) -> int:
         return 1
     if env.get("KEYFIT_DISABLE") == "1":
         os.execve(real, [tool, *args], env)
+    # counted on every path, not only where checks run: a wrapper later on PATH that calls the tool by name
+    # comes back through here also in folders that are not registered
+    env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
 
     try:
         registry = Registry.load()
@@ -185,6 +206,10 @@ def main(argv: list[str]) -> int:
             os.execve(real, [tool, *args], env)
         pinned = env.get("KEYFIT_PROJECT") if tool in PINNED else None
         project = registry.get(pinned) if pinned else resolve(".", registry).project
+        if pinned and project is None:  # the session's environment is that project's: never run it unchecked
+            raise Refused(f"keyfit: this session belongs to project {printable(pinned)}, which is not in the registry "
+                          f"(renamed or removed?), so {tool} was not started.\n  Start the session again, or bypass "
+                          f"once: KEYFIT_DISABLE=1 {tool} …")
         if project is None:
             os.execve(real, [tool, *args], env)  # not a registered project: exactly as before Keyfit
 
@@ -203,7 +228,6 @@ def main(argv: list[str]) -> int:
             raise Refused(f"keyfit: project {project.name} has no {relevant[0]} account mapped, so {tool} was not "
                           f"started.\n  Map one: keyfit add {relevant[0]} …   (bypass once: KEYFIT_DISABLE=1 {tool} …)")
         run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel need only their own connection
-        run_env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
         checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
         failed = [c for c in checks if c.failed]
         if failed:
@@ -220,8 +244,12 @@ def main(argv: list[str]) -> int:
         print(refusal, file=sys.stderr)
         return 1
     except Exception as err:  # a Keyfit bug must not silently drop the checks
-        print(f"keyfit: internal error ({type(err).__name__}: {err}) — {tool} was not started.\n"
-              f"  Bypass once: KEYFIT_DISABLE=1 {tool} …", file=sys.stderr)
+        import traceback
+
+        # the type and the place, never the message: messages can quote the files they read (a key, a token)
+        where = traceback.extract_tb(err.__traceback__)[-1]
+        print(f"keyfit: internal error ({type(err).__name__} in {Path(where.filename).name}:{where.lineno}) — "
+              f"{tool} was not started.\n  Bypass once: KEYFIT_DISABLE=1 {tool} …", file=sys.stderr)
         return 1
     if env.get("KEYFIT_DRY_RUN") == "1":
         changed = sorted(k for k in set(env) | set(run_env) if env.get(k) != run_env.get(k))

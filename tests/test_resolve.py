@@ -147,6 +147,23 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(projects["plain"].connections, {})
         self.assertEqual(projects["direnv"].connections["aws"], {"profile": "acme", "account": "123456789012"})
 
+    def test_git_file_pointing_at_a_registered_repo_does_not_borrow_its_project(self):
+        # an unpacked archive can carry a `.git` file or symlink naming any repository on the machine
+        for name, make in (("gitfile", lambda d: (d / ".git").write_text(f"gitdir: {self.repo / '.git'}\n")),
+                           ("symlink", lambda d: (d / ".git").symlink_to(self.repo / ".git")),
+                           ("worktree-entry", lambda d: (d / ".git").write_text(
+                               f"gitdir: {self.repo / '.git' / 'worktrees' / 'feature'}\n"))):
+            folder = self.tmp / "downloads" / name
+            folder.mkdir(parents=True)
+            make(folder)
+            r = resolve(folder, self.registry)
+            self.assertIsNone(r.project, f"{name}: {r.how}")
+
+    def test_worktree_listed_with_a_relative_path_still_resolves(self):
+        admin = self.repo / ".git" / "worktrees" / "feature"
+        (admin / "gitdir").write_text(os.path.relpath(self.worktree / ".git", admin) + "\n")
+        self.assertEqual(resolve(self.worktree, self.registry).project.name, "demo")
+
     def test_cli_init_and_which(self):
         reg_path = self.tmp / "cli-registry.toml"
         other = self.tmp / "cli-repo"
