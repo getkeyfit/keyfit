@@ -23,7 +23,7 @@ from pathlib import Path
 
 from ..checks import Check
 from ..realbin import find_real
-from ..registry import canonical
+from ..registry import canonical, write_private
 from .base import Adapter
 
 SCRUB = (
@@ -67,8 +67,9 @@ def auth_status(env: dict, timeout: float = 30) -> tuple[dict | None, str]:
 
 
 def seed(config_dir: Path, env: dict, trust: list[Path] = ()) -> list[str]:
-    """Create a new account's config dir: shared settings symlinked from ~/.claude, repos pre-trusted."""
-    config_dir.mkdir(parents=True, exist_ok=True)
+    """Create a new account's config dir: shared settings symlinked from ~/.claude, repos pre-trusted. Owner-only:
+    Claude keeps the account's session transcripts and history there."""
+    config_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     made = []
     source = default_dir(env)
     for item in SHARED:
@@ -79,8 +80,7 @@ def seed(config_dir: Path, env: dict, trust: list[Path] = ()) -> list[str]:
     state = config_dir / ".claude.json"
     if not state.exists():
         projects = {str(canonical(root)): {"hasTrustDialogAccepted": True} for root in trust}
-        state.write_text(json.dumps({"projects": projects}, indent=2))
-        state.chmod(0o600)
+        write_private(state, json.dumps({"projects": projects}, indent=2))
         made.append(".claude.json (trusted: " + ", ".join(p.name for p in trust) + ")" if trust else ".claude.json")
     return made
 

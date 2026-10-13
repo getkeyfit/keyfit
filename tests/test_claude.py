@@ -108,6 +108,13 @@ class ClaudeTests(unittest.TestCase):
         self.assertTrue(state["projects"][str(repo)]["hasTrustDialogAccepted"])
         self.assertIn("settings.json", made)
 
+    def test_seed_creates_an_owner_only_folder(self):
+        # Claude keeps the account's transcripts and history in this folder
+        fresh = self.tmp / "accounts" / "fresh"
+        seed(fresh, {"HOME": str(self.home)}, [])
+        self.assertEqual((fresh.stat().st_mode & 0o777, (fresh / ".claude.json").stat().st_mode & 0o777),
+                         (0o700, 0o600))
+
     def test_registry_expands_account_reference(self):
         reg = Registry(self.tmp / "r.toml")
         reg.add_project("demo", self.tmp)
