@@ -12,6 +12,7 @@ os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the re
 from keyfit import environment  # noqa: E402
 from keyfit.adapters import ADAPTERS  # noqa: E402
 from keyfit.adapters.base import Adapter  # noqa: E402
+from keyfit.adapters.github import git_identity  # noqa: E402
 from keyfit.checks import Check  # noqa: E402
 from keyfit.cli import _check_shims  # noqa: E402
 from keyfit.realbin import MARKER  # noqa: E402
@@ -19,6 +20,10 @@ from keyfit.registry import Project  # noqa: E402
 from keyfit.shim import TOOLS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def git(*args, cwd):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
 
 
 class ImportTests(unittest.TestCase):
@@ -71,6 +76,18 @@ class VerifyTests(unittest.TestCase):
         for connections in ({"broken": {}}, {"fine": {}, "broken": {}}):
             with self.assertRaises(RuntimeError):  # the shim turns this into "internal error", tool not started
                 environment.verify(Project("demo", ["/tmp"], connections), {})
+
+
+class GitIdentityTests(unittest.TestCase):
+    def test_email_and_ssh_host_asked_together(self):
+        tmp = Path(tempfile.mkdtemp()).resolve()
+        git("init", "-q", cwd=tmp)
+        git("config", "user.email", "me@work.io", cwd=tmp)
+        self.assertEqual(git_identity(str(tmp))[1], None)  # no origin
+        git("remote", "add", "origin", "git@github.com-work:org/repo.git", cwd=tmp)
+        self.assertEqual(git_identity(str(tmp)), ("me@work.io", "github.com-work"))
+        plain = tmp / "missing"
+        self.assertEqual(git_identity(str(plain)), ("", None))
 
 
 class ShimScriptTests(unittest.TestCase):

@@ -81,12 +81,23 @@ def _fetch(token: str, timeout: float) -> tuple[int, dict]:
 
 
 def git_identity(cwd: str) -> tuple[str, str | None]:
-    """(author email, ssh host of origin) for the repository at cwd."""
-    def git(*args):
-        out = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=10, check=False)
-        return out.stdout.strip() if out.returncode == 0 else ""
-    m = SSH_REMOTE.match(git("remote", "get-url", "origin"))
-    return git("config", "user.email"), (m.group(1) if m else None)
+    """(author email, ssh host of origin) for the repository at cwd; both questions go to git at the same time."""
+    asks, answers = [], []
+    try:
+        for args in (("config", "user.email"), ("remote", "get-url", "origin")):
+            asks.append(subprocess.Popen(["git", "-C", cwd, *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                         text=True))
+        for ask in asks:
+            out, _ = ask.communicate(timeout=10)
+            answers.append(out.strip() if ask.returncode == 0 else "")
+    finally:
+        for ask in asks:
+            if ask.poll() is None:
+                ask.kill()
+                ask.wait()
+    email, origin = answers
+    m = SSH_REMOTE.match(origin)
+    return email, (m.group(1) if m else None)
 
 
 class GithubAdapter(Adapter):
