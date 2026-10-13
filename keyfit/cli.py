@@ -343,6 +343,11 @@ def cmd_add_linear(args) -> int:
     if project is None:
         return 1
     if args.key is not None:
+        if secrets.looks_like_key(args.key):
+            print("--key takes where the key lives (env:VAR or keychain:service/account), not the key itself: "
+                  "run `keyfit add linear` without --key to paste it at a hidden prompt "
+                  "(the key may now be in your shell history)", file=sys.stderr)
+            return 1
         ref = secrets.normalise(args.key)
         key = secrets.resolve(ref, os.environ)
         if not key:
@@ -388,6 +393,10 @@ def cmd_secret_set(args) -> int:
     """Store a value typed at a hidden prompt as Keychain item keyfit/NAME and print its reference."""
     if not secrets.can_store():
         print(secrets.NOT_MACOS, file=sys.stderr)
+        return 1
+    if secrets.looks_like_key(args.name):
+        print("NAME is a label such as linear-acme; the key itself goes in at the hidden prompt "
+              "(it may now be in your shell history)", file=sys.stderr)
         return 1
     if not secrets.NAME.fullmatch(args.name):
         print("a name is letters, digits, '.', '_' and '-' (at most 64)", file=sys.stderr)

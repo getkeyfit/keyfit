@@ -115,7 +115,10 @@ class LinearAdapter(Adapter):
         return Check(self.kind, "ok", label, "workspace confirmed")
 
     def workspace_of(self, key: str) -> tuple[str | None, str]:
-        """Ask Linear which workspace a key belongs to (used when recording a mapping)."""
+        """Ask Linear which workspace a key belongs to (used when recording a mapping). Only a value shaped like a
+        Linear key is sent: `--key env:VAR` or an .envrc line can name any variable, such as a GitHub token."""
+        if not KEY_SHAPE.fullmatch(key or ""):
+            return None, "that is not a Linear API key (lin_api_…), so it was not sent to Linear"
         try:
             status, body = self.fetch(key, self.timeout)
         except (OSError, ValueError) as err:
