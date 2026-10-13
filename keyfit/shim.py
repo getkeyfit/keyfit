@@ -21,10 +21,15 @@ from pathlib import Path
 from . import environment, mcp
 from .adapters import vercel
 from .realbin import find_real
-from .registry import Project, Registry, canonical, tilde
+from .registry import Project, Registry, RegistryError, canonical, tilde
 from .resolve import resolve
 
 TOOLS = ("claude", "codex", "aws", "gh", "vercel")
+INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "npm install -g @openai/codex",
+           "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel"}
+# How to map the one account `aws`, `gh` and `vercel` need inside a project before they start there.
+MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github --login <login>",
+       "vercel": "keyfit add vercel"}
 RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "claude": None, "codex": None}
 PINNED = ("aws", "gh", "vercel")
 MAX_DEPTH = 6
@@ -152,7 +157,7 @@ def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
 def vercel_login_args(project: Project, args: list[str], env: dict) -> list[str]:
     """Sign-in commands (`vercel login`, …) go to the project's login folder, unless the user named one."""
     conn = project.connections.get("vercel")
-    if conn is None or any(name == "--global-config" for name, _ in vercel.options(args)):
+    if not isinstance(conn, dict) or any(name == "--global-config" for name, _ in vercel.options(args)):
         return args
     return vercel.config_args(conn, env) + args
 
@@ -167,7 +172,8 @@ def main(argv: list[str]) -> int:
     env = dict(os.environ)
     real = find_real(tool, env, skip_wrappers=True)
     if real is None:
-        print(f"keyfit: the real {tool} was not found on PATH", file=sys.stderr)
+        print(f"keyfit: {tool} is not installed (no {tool} on PATH besides Keyfit's shim).\n"
+              f"  Install it: {INSTALL[tool]}   (keyfit doctor shows where each tool is found)", file=sys.stderr)
         return 127
     depth = int(env.get("KEYFIT_SHIM_DEPTH") or 0)
     if depth >= MAX_DEPTH:  # shims calling shims: stop instead of recursing until the process table is full
@@ -201,7 +207,7 @@ def main(argv: list[str]) -> int:
             os.execve(real, [tool, *args], login_env)
         if relevant and not any(kind in project.connections for kind in relevant):
             raise Refused(f"keyfit: project {project.name} has no {relevant[0]} account mapped, so {tool} was not "
-                          f"started.\n  Map one: keyfit add {relevant[0]} …   (bypass once: KEYFIT_DISABLE=1 {tool} …)")
+                          f"started.\n  Map one: {MAP[relevant[0]]}   (bypass once: KEYFIT_DISABLE=1 {tool} …)")
         run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel need only their own connection
         run_env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
         checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
@@ -218,6 +224,10 @@ def main(argv: list[str]) -> int:
         args = adjust_args(tool, project, args, run_env, Path.cwd(), registry.mcp_owners())
     except Refused as refusal:
         print(refusal, file=sys.stderr)
+        return 1
+    except RegistryError as err:  # a hand edit: no project can be told apart, so nothing starts checked
+        _say([f"keyfit: {tool} not started, {tilde(err.path)} has a mistake", f"  ✘ {err}", f"    → {err.fix}",
+              f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"])
         return 1
     except Exception as err:  # a Keyfit bug must not silently drop the checks
         print(f"keyfit: internal error ({type(err).__name__}: {err}) — {tool} was not started.\n"

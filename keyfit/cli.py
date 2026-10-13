@@ -16,19 +16,23 @@ from .adapters import linear as linear_adapter
 from .adapters import vercel as vercel_adapter
 from .adapters.aws import ACCOUNT_RE, parse_envrc, read_profile
 from .checks import Check, mask_account
-from .registry import Project, Registry, canonical, config_dir, default_path, tilde  # noqa: F401  (config_dir used by setup)
+from .registry import Project, Registry, RegistryError, canonical, config_dir, default_path, tilde  # noqa: F401
 from .resolve import git_main_checkout, resolve
+from .shim import INSTALL, MAP, RELEVANT
+
+TOOL_OF = {kinds[0]: tool for tool, kinds in RELEVANT.items() if kinds}  # github → gh
 
 
 def _project_from_args(reg: Registry, args) -> Project | None:
     if getattr(args, "project", None):
         project = reg.get(args.project)
         if project is None:
-            print(f"no project named '{args.project}'", file=sys.stderr)
+            print(f"no project named '{args.project}' (keyfit projects lists them)", file=sys.stderr)
         return project
     r = resolve(".", reg)
     if not r.registered:
-        print(f"this folder is not part of a registered project ({r.how}); run `keyfit init` first",
+        print(f"this folder is not part of a registered project ({r.how}).\n"
+              "  Run this inside the project's repository, name it with --project NAME, or register it: keyfit init",
               file=sys.stderr)
     return r.project
 
@@ -58,26 +62,60 @@ def _import_envrc(reg: Registry, name: str, root: Path) -> list[str]:
     return imported
 
 
+def _not_active() -> str:
+    """Why the shims would not run in this terminal yet, with the fix; "" when they are on PATH."""
+    from .realbin import MARKER, shim_dir
+
+    folder = canonical(shim_dir())
+    if not (folder / MARKER).is_file():
+        return "Keyfit is not set up yet, so claude, codex, aws, gh and vercel still run without checks.\n" \
+               "  Set it up: keyfit setup --rc, then open a new terminal"
+    if folder not in [canonical(e) for e in os.environ.get("PATH", "").split(os.pathsep) if e]:
+        return f"{tilde(folder)} is not on PATH in this terminal, so tools here still run without checks.\n" \
+               "  Open a new terminal (or, if you never ran it: keyfit setup --rc)"
+    return ""
+
+
 def cmd_init(args) -> int:
     reg = Registry.load(args.registry)
     start = canonical(args.root or ".")
-    root = git_main_checkout(start) or start
+    if not start.is_dir():
+        print(f"no folder {args.root}", file=sys.stderr)
+        return 1
+    git = git_main_checkout(start)
+    root = git or start
+    home = Path.home().resolve()
+    if root == home or root in home.parents:
+        print(f"Not registering {'your home folder' if root == home else root}: every folder under it "
+              f"{'' if root == home else '(your home folder too) '}would belong to one project.\n"
+              "  Go to a project's repository first (cd ~/code/acme-api), or pass --root PATH", file=sys.stderr)
+        return 1
     name = args.name or root.name
     existing = reg.project_for_root(root)
     if existing is not None and existing.name != name:
-        print(f"{root} is already registered as project '{existing.name}'", file=sys.stderr)
+        print(f"{tilde(root)} is already registered as project '{existing.name}'", file=sys.stderr)
         return 1
     reg.add_project(name, root)
     imported = _import_envrc(reg, name, root)
     reg.save()
-    print(f"Registered project '{name}' → {root}")
+    print(f"Registered project '{name}' → {tilde(root)}")
     for line in imported:
         print(f"  imported {line}")
+    if git is None:
+        print(f"  {tilde(root)} is not a git repository: every folder under it belongs to {name}")
+    worktrees = "Worktrees of this repository resolve to it automatically." if git else ""
+    note = _not_active()
     if args.yes or not sys.stdin.isatty():
-        print("Worktrees of this repository resolve to it automatically. Check it with: keyfit status")
+        print(f"{worktrees} Check it with: keyfit status".lstrip())
+        if note:
+            print(note)
         return 0
-    print("Worktrees of this repository resolve to it automatically.")
-    return _guided_init(args, name, root)
+    if worktrees:
+        print(worktrees)
+    code = _guided_init(args, name, root)
+    if note:
+        print(f"\n{note}")
+    return code
 
 
 # Guided `keyfit init` (a terminal on stdin): offer what this machine already has, one account at a time.
@@ -114,9 +152,13 @@ def _choose(question: str, options: list[str]) -> str | None:
 
 def _offer_aws(name: str, base: dict) -> None:
     from .adapters.aws import config_path, profile_names
+    from .realbin import find_real
 
     where = tilde(config_path(os.environ))
     profiles = profile_names(os.environ)
+    if not profiles and find_real("aws", dict(os.environ), skip_wrappers=True) is None:
+        print("AWS: aws not found on PATH — skipped")
+        return
     if not profiles:
         print(f"AWS: no named profiles in {where} — create one (aws configure sso --profile <name>), "
               "then: keyfit add aws --profile <name>")
@@ -214,7 +256,7 @@ def _guided_init(args, name: str, root: Path) -> int:
             print()
             conn = Registry.load(args.registry).get(name).connections.get(kind)
             if conn is not None:  # imported from .envrc or set earlier: left as it is
-                print(f"{title}: already set — {ADAPTERS[kind].label(conn)}")
+                print(f"{title}: already set — {environment.label(kind, conn)}")
                 continue
             offer(name, base)
     except KeyboardInterrupt:
@@ -231,8 +273,7 @@ def cmd_which(args) -> int:
         print(f"{r.project.name}  ({r.how})")
         if args.verbose:
             for kind, value in r.project.connections.items():
-                label = ADAPTERS[kind].label(value) if kind in ADAPTERS else value
-                print(f"  {kind:<10} {label}")
+                print(f"  {kind:<10} {environment.label(kind, value)}")
             if r.project.mcp_servers:
                 print(f"  {'mcp':<10} owns {', '.join(r.project.mcp_servers)}")
         return 0
@@ -244,7 +285,7 @@ def cmd_projects(args) -> int:
     reg = Registry.load(args.registry)
     projects = reg.projects()
     if not projects:
-        print(f"no projects registered yet ({reg.path})")
+        print(f"no projects registered yet ({tilde(reg.path)}) — register one inside its repository: keyfit init")
         return 0
     for p in projects.values():
         kinds = ", ".join(p.connections) or "no connections yet"
@@ -257,35 +298,45 @@ def cmd_status(args) -> int:
     reg = Registry.load(args.registry)
     r = resolve(args.path or ".", reg)
     if not r.registered:
-        print(f"not registered  ({r.how})")
+        print(f"not registered  ({r.how})\n  Tools run here unchanged. To register a repository, run inside it: "
+              "keyfit init")
         return 1
     print(r.project.name + (f"  ({r.how})" if args.verbose else ""))
     if r.project.legacy:
         print(f"  note: {', '.join(r.project.legacy)} no longer supported (ignored) — "
               f"can be removed from {tilde(reg.path)}")
+    checks = []
     if not r.project.connections:
-        print("  no connections yet — add one with: keyfit add aws --profile <name>")
-        return 0
-    env = environment.build(r.project)
-    checks = environment.verify(r.project, env, remote=not args.offline)  # fresh; refreshes the cache
-    for check in checks:
-        for line in check.lines():
-            print(line)
+        print("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add aws|github|"
+              "claude|codex|vercel|linear …")
+    else:
+        env = environment.build(r.project)
+        checks = environment.verify(r.project, env, remote=not args.offline)  # fresh; refreshes the cache
+        for check in checks:
+            for line in check.lines():
+                print(line)
+    waiting = [kind for kind in MAP if kind not in r.project.connections]
+    if waiting:  # inside a project, `aws`, `gh` and `vercel` start only once it has their account
+        tools = " and ".join(", ".join(TOOL_OF[k] for k in waiting).rsplit(", ", 1))
+        print(f"  {tools} won't start here until mapped: keyfit add {'|'.join(waiting)} …")
     return 1 if any(c.failed for c in checks) else 0
 
 
 def cmd_add_aws(args) -> int:
+    from .adapters.aws import config_path, fix_for, profile_names
+
     reg = Registry.load(args.registry)
     project = _project_from_args(reg, args)
     if project is None:
         return 1
+    found = f"named profiles in {tilde(config_path(os.environ))}: {', '.join(profile_names(os.environ)) or 'none'}"
     if args.profile == "default":
-        print("use a named profile, never `default`", file=sys.stderr)
+        print(f"use a named profile, never `default` ({found})", file=sys.stderr)
         return 1
     profile = read_profile(args.profile, os.environ)
     if profile.kind == "missing":
-        print(f"no AWS profile named '{args.profile}' — create it first (aws configure sso --profile {args.profile})",
-              file=sys.stderr)
+        print(f"no AWS profile named '{args.profile}' ({found})\n"
+              f"  Create it first: aws configure sso --profile {args.profile}", file=sys.stderr)
         return 1
     conn = {"profile": args.profile}
     if os.environ.get("AWS_CONFIG_FILE"):  # the shims scrub the variable: the project keeps the file the profile is in
@@ -301,12 +352,12 @@ def cmd_add_aws(args) -> int:
         print(f"Account taken from the profile's config ({profile.kind} profile)")
     else:
         asked_aws = True
-        print(f"Asking AWS which account profile '{args.profile}' belongs to …")
+        print(f"Asking AWS which account profile '{args.profile}' belongs to …", flush=True)
         probe = dict(os.environ)
         ADAPTERS["aws"].inject(dict(conn, account="000000000000"), probe)
         account, reason, _ = ADAPTERS["aws"].identify(args.profile, probe)
         if account is None:
-            print(f"could not read the account: {reason}", file=sys.stderr)
+            print(f"could not read the account: {reason}\n  → {fix_for(profile, reason)}", file=sys.stderr)
             return 1
         conn["account"] = account
     if args.region:
@@ -342,7 +393,8 @@ def cmd_add_linear(args) -> int:
         ref = secrets.normalise(args.key)
         key = secrets.resolve(ref, os.environ)
         if not key:
-            print(f"{secrets.describe(ref)} is empty or missing", file=sys.stderr)
+            print(f"{secrets.describe(ref)} is empty or missing in this shell.\n  Set it first, or paste the key "
+                  "instead (stored in the Keychain): keyfit add linear", file=sys.stderr)
             return 1
     else:  # paste the key: verified with Linear first, then stored in the Keychain
         if not secrets.can_store():
@@ -358,7 +410,9 @@ def cmd_add_linear(args) -> int:
             return 1
     workspace, reason = ADAPTERS["linear"].workspace_of(key)
     if workspace is None:
-        print(f"could not read the workspace: {reason}", file=sys.stderr)
+        fix = ("check the network and retry" if "did not answer" in reason else
+               "create a key in Linear → Settings → Security & access → Personal API keys, then: keyfit add linear")
+        print(f"could not read the workspace: {reason}\n  → {fix}", file=sys.stderr)
         return 1
     if args.workspace and args.workspace != workspace:
         print(f"that key belongs to workspace '{workspace}', not '{args.workspace}'", file=sys.stderr)
@@ -463,7 +517,8 @@ def cmd_add_claude(args) -> int:
     folder = Path(args.config_dir).expanduser() if args.config_dir else claude_adapter.default_dir(os.environ)
     status, reason = _claude_status(folder)
     if status is None:
-        print(f"could not ask Claude Code: {reason}", file=sys.stderr)
+        install = f"\n  Install it: {INSTALL['claude']}" if "not found" in reason else ""
+        print(f"could not ask Claude Code: {reason}{install}", file=sys.stderr)
         return 1
     if not status.get("loggedIn") or status.get("authMethod") != "claude.ai":
         print(f"no claude.ai login in {tilde(folder)} (auth method: {status.get('authMethod')})", file=sys.stderr)
@@ -488,7 +543,9 @@ def cmd_add_github(args) -> int:
         return 1
     token, reason = read_token(args.login, dict(os.environ))
     if token is None:
-        print(f"{reason} — sign in first: gh auth login --hostname github.com --web", file=sys.stderr)
+        fix = (f"install it ({INSTALL['gh']}), then sign in" if "not found" in reason else
+               f"sign in first as {args.login}")
+        print(f"{reason} — {fix}: gh auth login --hostname github.com --web", file=sys.stderr)
         return 1
     actual = ADAPTERS["github"].whoami(token)
     del token
@@ -616,7 +673,8 @@ def cmd_run(args) -> int:
     reg = Registry.load(args.registry)
     r = resolve(".", reg)
     if not r.registered:
-        print(f"keyfit run: this folder is not part of a registered project ({r.how})", file=sys.stderr)
+        print(f"keyfit run: this folder is not part of a registered project ({r.how}).\n"
+              "  Run it inside the project's repository, or register this one: keyfit init", file=sys.stderr)
         return 1
     project = r.project
     env = environment.build(project)
@@ -672,6 +730,17 @@ unset _kf _kf_ss _kf_rest _kf_out _kf_has _kf_p
 
 # shell → (PATH file in the config dir, its template, the command that loads it)
 SHELLS = {"zsh": ("shell.zsh", SHELL_ZSH, "source"), "bash": ("shell.sh", SHELL_SH, ".")}
+
+# One shim per tool. When the Python or the package it names is gone (Keyfit uninstalled before `keyfit setup
+# --remove`, or moved), it says so instead of sh's "No such file or directory", and the tool still doesn't start.
+SHIM = """#!/bin/sh
+[ -x "@PYTHON@" ] && [ -f "@ENTRY@" ] || { printf '%s\\n' \\
+  "keyfit: @TOOL@ not started: Keyfit is not installed where its shims expect it (@ENTRY@)." \\
+  "  Upgraded or reinstalled Keyfit? Run: keyfit setup" \\
+  "  Uninstalled it? Remove the line ending in '# keyfit: claude/codex/aws/gh shims on PATH' from your shell startup \\
+file, then open a new terminal." >&2; exit 127; }
+exec "@PYTHON@" -I "@ENTRY@" @TOOL@ "$@"
+"""
 
 
 def _rc_files(shell: str) -> list[Path]:
@@ -753,7 +822,7 @@ def cmd_setup(args) -> int:
     (folder / MARKER).write_text("Keyfit shims live here; Keyfit never resolves a real binary from this folder.\n")
     for tool in TOOLS:
         script = folder / tool
-        script.write_text(f'#!/bin/sh\nexec "{python}" -I "{entry}" {tool} "$@"\n')
+        script.write_text(SHIM.replace("@PYTHON@", python).replace("@ENTRY@", entry).replace("@TOOL@", tool))
         script.chmod(0o755)
     for filename, template, _ in SHELLS.values():
         (config_dir() / filename).write_text(template.replace("@SHIMS@", str(folder)))
@@ -770,7 +839,9 @@ def cmd_setup(args) -> int:
     else:
         for path in [Path(rc).expanduser()] if rc else _rc_files(shell):
             _add_line(path, line)
-    print("Undo any time: keyfit setup --remove; run a tool once without checks: KEYFIT_DISABLE=1 claude")
+        print("Next: open a new terminal, go to a project's repository and run: keyfit init")
+    undo = "keyfit setup --remove" + (f" --rc {tilde(Path(rc).expanduser())}" if rc else "")
+    print(f"Undo any time: {undo}; run a tool once without checks: KEYFIT_DISABLE=1 claude")
     return 0
 
 
@@ -873,10 +944,6 @@ def _remove_setup(args) -> int:
     return 0
 
 
-INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "npm install -g @openai/codex",
-           "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel"}
-
-
 def _short(path: str) -> str:
     """A path as found (symlinks kept, unlike tilde()), with the home folder shown as ~."""
     home = str(Path.home())
@@ -963,19 +1030,21 @@ def cmd_doctor(args) -> int:
         count = len(reg.projects())
         checks.append(Check("registry", "ok", tilde(path), f"{count} project{'s' if count != 1 else ''}"
                             if path.exists() else "no projects yet"))
-    except (OSError, ValueError) as err:
+    except RegistryError as err:
         reg = None
-        checks.append(Check("registry", "fail", tilde(path), f"unreadable ({err})",
-                            f"fix that line in {tilde(path)}" if isinstance(err, ValueError) else f"chmod 600 {tilde(path)}"))
+        checks.append(Check("registry", "fail", tilde(path), f"unreadable ({err})", err.fix))
     reason = secrets.keychain_reachable()
     checks.append(Check("keychain", "fail", "macOS Keychain", reason,
                         "/usr/bin/security list-keychains   (then repair the login keychain in Keychain Access)")
                   if reason else Check("keychain", "ok", "macOS Keychain", "reachable"))
     if reg is not None:
         r = resolve(".", reg)
-        checks.append(Check("project", "ok", r.project.name, r.how) if r.registered else
-                      Check("project", "warn", "this folder", f"not registered ({r.how}): tools run here unchanged",
-                            "keyfit init"))
+        if r.registered:
+            checks.append(Check("project", "ok", r.project.name, r.how))
+        else:  # outside a repository, `keyfit init` would register the whole folder (the home folder, say)
+            fix = "keyfit init" if git_main_checkout(r.path) else "cd into a project's repository, then: keyfit init"
+            checks.append(Check("project", "warn", "this folder", f"not registered ({r.how}): tools run here unchanged",
+                                fix))
     for check in checks:
         for line in check.lines():
             print(line)
@@ -984,106 +1053,88 @@ def cmd_doctor(args) -> int:
     return 1 if failed else 0
 
 
+START = """start here:
+  keyfit setup --rc     put Keyfit in front of claude, codex, aws, gh and vercel, then open a new terminal
+  keyfit init           inside a project's repository: register it and pick its accounts
+  claude                starts with that project's accounts, checked
+something off? keyfit doctor
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="keyfit", description="Per-project, verified environments for AI coding tools.")
+    parser = argparse.ArgumentParser(prog="keyfit", description="Per-project, verified environments for AI coding tools.",
+                                     epilog=START, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--registry", type=Path, help="registry file (default: ~/.config/keyfit/registry.toml)")
     parser.add_argument("--version", action="version", version=f"keyfit {__version__}")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    p = sub.add_parser("init", help="register the current repository as a project, then offer the AWS, GitHub, "
-                                    "Claude, Codex, Vercel and Linear accounts found on this Mac "
-                                    "(imports `use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
+    def command(parent, name: str, text: str):  # the one-line help is also the command's own --help description
+        return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
+
+    p = command(sub, "setup", "write the claude/codex/aws/gh/vercel shims; with --rc also put them on PATH")
+    p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
+                   help="shell to set up (default: auto, from $SHELL)")
+    p.add_argument("--rc", nargs="?", const="", metavar="FILE",
+                   help="add Keyfit's line to the end of FILE; without FILE, to the shell's startup file: ~/.zshrc, "
+                        "or for bash the login profile (plus ~/.bashrc when the profile sources it)")
+    p.add_argument("--zshrc", metavar="FILE", help="same as --shell zsh --rc FILE")
+    p.add_argument("--remove", action="store_true",
+                   help="undo setup: delete the shims and PATH files and take Keyfit's line out of ~/.zshrc, "
+                        "~/.bash_profile, ~/.bash_login, ~/.profile and ~/.bashrc (or only --rc FILE); "
+                        "the registry stays")
+    p.add_argument("--purge", action="store_true",
+                   help="with --remove: also delete ~/.config/keyfit (registry, cache, Claude and Vercel account "
+                        "folders it made), after asking; Keychain items stay")
+    p.add_argument("-y", "--yes", action="store_true", help="with --purge: do not ask")
+    p.set_defaults(func=cmd_setup)
+
+    p = command(sub, "init", "register the current repository as a project, then offer the AWS, GitHub, Claude, "
+                             "Codex, Vercel and Linear accounts found on this Mac (imports `use aws` / "
+                             "LINEAR_API_KEY lines from its .envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
     p.add_argument("-y", "--yes", action="store_true",
                    help="ask nothing: register and import from .envrc only (also when stdin is not a terminal)")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("doctor", help="check that Keyfit is installed and on PATH (names only, never secrets)")
-    p.set_defaults(func=cmd_doctor)
-
-    p = sub.add_parser("which", help="which project does this folder resolve to, and why")
-    p.add_argument("path", nargs="?")
-    p.add_argument("-v", "--verbose", action="store_true")
-    p.set_defaults(func=cmd_which)
-
-    p = sub.add_parser("projects", help="list registered projects")
-    p.set_defaults(func=cmd_projects)
-
-    p = sub.add_parser("setup", help="write the claude/codex/aws/gh/vercel shims (and optionally add them to PATH)")
-    p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
-                   help="shell to set up (default: auto, from $SHELL)")
-    p.add_argument("--rc", nargs="?", const="", metavar="PATH",
-                   help="append the PATH line to PATH, or by default to the shell's startup file: ~/.zshrc; "
-                        "for bash the login profile, plus ~/.bashrc when the profile sources it")
-    p.add_argument("--zshrc", metavar="PATH", help="same as --shell zsh --rc PATH")
-    p.add_argument("--remove", action="store_true",
-                   help="undo setup: delete the shims and PATH files and take Keyfit's line out of ~/.zshrc, "
-                        "~/.bash_profile, ~/.bash_login, ~/.profile and ~/.bashrc (or only --rc PATH); "
-                        "the registry stays")
-    p.add_argument("--purge", action="store_true",
-                   help="with --remove: also delete ~/.config/keyfit (registry, cache, Claude and Vercel account "
-                        "folders it made), "
-                        "after asking; Keychain items stay")
-    p.add_argument("-y", "--yes", action="store_true", help="with --purge: do not ask")
-    p.set_defaults(func=cmd_setup)
-
-    p = sub.add_parser("status", help="check every connection of the current project")
-    p.add_argument("path", nargs="?")
-    p.add_argument("-v", "--verbose", action="store_true")
+    p = command(sub, "status", "check every account of the current project now (online, unless --offline)")
+    p.add_argument("path", nargs="?", help="a folder of the project (default: the current folder)")
+    p.add_argument("-v", "--verbose", action="store_true", help="also say how the folder was matched to the project")
     p.add_argument("--offline", action="store_true", help="local checks only, no network")
     p.set_defaults(func=cmd_status)
 
-    secret = sub.add_parser("secret", help="store keys in the macOS Keychain (values never shown)")
-    actions = secret.add_subparsers(dest="action", required=True)
-    p = actions.add_parser("set", help="store a key from a hidden prompt as keychain:keyfit/NAME")
-    p.add_argument("name", metavar="NAME")
-    p.set_defaults(func=cmd_secret_set)
-    p = actions.add_parser("list", help="names of the keys Keyfit stored")
-    p.set_defaults(func=cmd_secret_list)
-
-    add = sub.add_parser("add", help="add or change one connection of the current project")
-    kinds = add.add_subparsers(dest="kind", required=True)
-    p = kinds.add_parser("aws", help="AWS profile and the account it must resolve to")
-    p.add_argument("--profile", required=True)
-    p.add_argument("--account", help="expected 12-digit account (default: ask AWS once and record it)")
-    p.add_argument("--region")
-    p.add_argument("--project", help="project name (default: the project of the current folder)")
+    add = command(sub, "add", "add or change one account of the current project")
+    kinds = add.add_subparsers(dest="kind", required=True, metavar="ACCOUNT")
+    project = {"help": "project name (default: the project of the current folder)"}
+    p = command(kinds, "aws", "AWS profile and the account it must resolve to")
+    p.add_argument("--profile", required=True, help="a named profile from ~/.aws/config (never `default`)")
+    p.add_argument("--account", help="expected 12-digit account (default: from the profile, else ask AWS once)")
+    p.add_argument("--region", help="AWS region the tools get (default: the profile's own)")
+    p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_aws)
-    p = kinds.add_parser("linear", help="Linear workspace and where its API key lives")
-    p.add_argument("--key", help="env:VAR, keychain:service/account, or a bare variable name "
-                                 "(default: paste the key; it is verified, then stored in the Keychain)")
-    p.add_argument("--workspace", help="expected workspace slug (default: ask Linear once and record it)")
-    p.add_argument("--readonly", action="store_true", help="expose Linear's read-only MCP endpoint")
-    p.add_argument("--project", help="project name (default: the project of the current folder)")
-    p.set_defaults(func=cmd_add_linear)
-    p = kinds.add_parser("mcp", help="MCP servers that belong to this project (hidden in all others)")
-    p.add_argument("servers", nargs="+", metavar="NAME", help="server name or pattern, e.g. 'globex_cloud_*'")
-    p.add_argument("--project", help="project name (default: the project of the current folder)")
-    p.set_defaults(func=cmd_add_mcp)
-    p = kinds.add_parser("claude", help="Claude Code login (config directory) for this project")
+    p = command(kinds, "github", "GitHub account (from `gh auth status`) this project acts as")
+    p.add_argument("--login", required=True, help="GitHub login, e.g. octocat")
+    p.add_argument("--name", help="short account name, reusable across projects (default: the login)")
+    p.add_argument("--email", help="expected git author email (default: the repo's current user.email)")
+    p.add_argument("--ssh-host", help="expected ssh host alias of origin (default: the current one)")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_github)
+    p = command(kinds, "claude", "Claude Code login (config directory) for this project")
     p.add_argument("--name", help="short account name, reusable across projects (default: from the org name)")
     p.add_argument("--config-dir", help="the account's config directory (default: ~/.claude, your current login)")
     p.add_argument("--new", action="store_true", help="create a new config directory for another account")
     p.add_argument("--pin-email", action="store_true",
                    help="require this exact login, not just the org (default: any login of the org, e.g. claude-swap pools)")
-    p.add_argument("--project", help="project name (default: the project of the current folder)")
+    p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_claude)
-    p = kinds.add_parser("github", help="GitHub account (from `gh auth status`) this project acts as")
-    p.add_argument("--login", required=True, help="GitHub login, e.g. octocat")
-    p.add_argument("--name", help="short account name, reusable across projects (default: the login)")
-    p.add_argument("--email", help="expected git author email (default: the repo's current user.email)")
-    p.add_argument("--ssh-host", help="expected ssh host alias of origin (default: the current one)")
-    p.add_argument("--project", help="project name (default: the project of the current folder)")
-    p.set_defaults(func=cmd_add_github)
-    p = kinds.add_parser("codex", help="Codex (ChatGPT) login for this project")
+    p = command(kinds, "codex", "Codex (ChatGPT) login for this project")
     p.add_argument("--name", help="short account name, reusable across projects (default: the plan, e.g. pro)")
     p.add_argument("--codex-home", help="the account's CODEX_HOME (default: ~/.codex, your current login)")
     p.add_argument("--pin-account", action="store_true",
                    help="require this exact ChatGPT account (default: any ChatGPT login, e.g. codex-multi-auth pools)")
-    p.add_argument("--project", help="project name (default: the project of the current folder)")
+    p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_codex)
-    p = kinds.add_parser("vercel", help="Vercel login (global config folder) and team for this project")
+    p = command(kinds, "vercel", "Vercel login (global config folder) and team for this project")
     p.add_argument("--name", help="short account name, reusable across projects (default: the team slug, "
                                   "else the username)")
     where = p.add_mutually_exclusive_group()
@@ -1092,15 +1143,55 @@ def build_parser() -> argparse.ArgumentParser:
     where.add_argument("--new", action="store_true",
                        help="create a folder for another login (~/.config/keyfit/vercel/NAME); sign in afterwards")
     p.add_argument("--team", help="team slug or ID the project deploys to (default: the team selected in that login)")
-    p.add_argument("--project", help="project name (default: the project of the current folder)")
+    p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_vercel)
+    p = command(kinds, "linear", "Linear workspace and where its API key lives")
+    p.add_argument("--key", help="env:VAR, keychain:service/account, or a bare variable name "
+                                 "(default: paste the key; it is verified, then stored in the Keychain)")
+    p.add_argument("--workspace", help="expected workspace slug (default: ask Linear once and record it)")
+    p.add_argument("--readonly", action="store_true", help="expose Linear's read-only MCP endpoint")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_linear)
+    p = command(kinds, "mcp", "MCP servers that belong to this project (hidden in all others)")
+    p.add_argument("servers", nargs="+", metavar="NAME", help="server name or pattern, e.g. 'globex_cloud_*'")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_mcp)
 
-    p = sub.add_parser("run", help="run a command with the project's accounts: keyfit run -- <command>")
-    p.add_argument("command", nargs=argparse.REMAINDER)
+    p = command(sub, "doctor", "check that Keyfit is installed and on PATH, with the fix for each problem "
+                               "(names only, never secrets)")
+    p.set_defaults(func=cmd_doctor)
+
+    p = command(sub, "which", "which project this folder belongs to, and why")
+    p.add_argument("path", nargs="?", help="a folder (default: the current folder)")
+    p.add_argument("-v", "--verbose", action="store_true", help="also list the project's accounts")
+    p.set_defaults(func=cmd_which)
+
+    p = command(sub, "projects", "list registered projects")
+    p.set_defaults(func=cmd_projects)
+
+    p = command(sub, "run", "run any other command with the project's accounts, checked first "
+                            "(keyfit run -- terraform plan)")
+    p.add_argument("command", nargs=argparse.REMAINDER, metavar="-- COMMAND …", help="the command and its arguments")
     p.set_defaults(func=cmd_run)
+
+    secret = command(sub, "secret", "store keys in the macOS Keychain (values never shown)")
+    actions = secret.add_subparsers(dest="action", required=True, metavar="ACTION")
+    p = command(actions, "set", "store a key from a hidden prompt as keychain:keyfit/NAME")
+    p.add_argument("name", metavar="NAME", help="letters, digits, '.', '_' and '-', e.g. openai-acme")
+    p.set_defaults(func=cmd_secret_set)
+    p = command(actions, "list", "names of the keys Keyfit stored")
+    p.set_defaults(func=cmd_secret_list)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    return args.func(args)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:  # plain `keyfit`: what it is and where to start
+        parser.print_help()
+        return 0
+    try:
+        return args.func(args)
+    except RegistryError as err:  # a hand edit: say where and how to fix it, not a traceback
+        print(f"keyfit: cannot use {tilde(err.path)}: {err}\n  → {err.fix}", file=sys.stderr)
+        return 1
