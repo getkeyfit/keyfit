@@ -32,6 +32,7 @@ from .base import Adapter
 ACCOUNT_RE = re.compile(r"^\d{12}$")
 ARN_ACCOUNT = re.compile(r"^arn:aws[a-z-]*:(?:iam|sts)::(\d{12}):")
 CONSOLE_SESSION_MAX = timedelta(hours=12)  # `aws login` refreshes for at most 12 hours
+NO_CLI, INSTALL = "aws CLI not found on PATH", "brew install awscli"
 
 # Inherited variables that could override or confuse the project's profile.
 SCRUB = (
@@ -162,7 +163,15 @@ def _login_fix(p: Profile) -> str:
         return _sso_login_command(p)
     if p.kind == "login":
         return f"aws login --profile {p.name}"
-    return f"aws sts get-caller-identity --profile {p.name}   (shows the full error)"
+    if p.kind == "static":  # `aws configure` is a sign-in command: it runs inside the project although checks fail
+        return f"aws configure --profile {p.name}   (enter a working access key)"
+    # inside the project the shim would stop this command for the same failed check
+    return f"KEYFIT_DISABLE=1 aws sts get-caller-identity --profile {p.name}   (shows the full error)"
+
+
+def fix_for(p: Profile, reason: str) -> str:
+    """The next step when `sts get-caller-identity` gave no account for this profile."""
+    return INSTALL if reason == NO_CLI else _login_fix(p)
 
 
 class AwsAdapter(Adapter):
@@ -179,8 +188,8 @@ class AwsAdapter(Adapter):
     def inject(self, conn, env: dict) -> None:
         for var in SCRUB:
             env.pop(var, None)
-        env["AWS_PROFILE"] = conn["profile"]
-        env["AWS_EXPECTED_ACCOUNT_ID"] = str(conn["account"])
+        env["AWS_PROFILE"] = conn.get("profile", "")  # missing in a hand-edited registry: the local check says so
+        env["AWS_EXPECTED_ACCOUNT_ID"] = str(conn.get("account", ""))
         if conn.get("config_file"):
             env["AWS_CONFIG_FILE"] = str(Path(conn["config_file"]).expanduser())
         if conn.get("region"):
@@ -282,7 +291,7 @@ class AwsAdapter(Adapter):
         """Return (account, "", False) or (None, reason, transient) from `aws sts get-caller-identity`."""
         aws = find_real("aws", env)
         if aws is None:
-            return None, "aws CLI not found on PATH", False
+            return None, NO_CLI, False
         cmd = [aws, "sts", "get-caller-identity", "--profile", profile, "--query", "Account",
                "--output", "text", "--cli-connect-timeout", "5", "--cli-read-timeout", "10"]
         try:
@@ -318,7 +327,7 @@ class AwsAdapter(Adapter):
             p = read_profile(profile, env)
             if p.kind == "process" and "did not answer" in reason:
                 reason += " (a Keychain prompt may be waiting — choose Always Allow)"
-            return Check(self.kind, "fail", label, reason, _login_fix(p), transient=network)
+            return Check(self.kind, "fail", label, reason, fix_for(p, reason), transient=network)
         if actual != account:
             return Check(self.kind, "fail", label,
                          f"profile '{profile}' is signed in to account {mask_account(actual)}, "

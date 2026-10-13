@@ -72,7 +72,7 @@ class ResilienceTests(unittest.TestCase):
         typo = Project("demo", ["/tmp"], {"githb": {"login": "octocat", "note": "lin_api_SECRETVALUE"}})
         check = environment.verify(typo, {}, remote=False)[0]
         self.assertTrue(check.failed)
-        self.assertIn("not a kind of account this Keyfit knows", check.detail)
+        self.assertIn("unknown connection", check.detail)
         self.assertNotIn("SECRETVALUE", "\n".join(check.lines()))  # the table itself is never printed
 
     def test_success_older_than_a_day_is_not_trusted(self):

@@ -81,6 +81,8 @@ Run the command after `→`. Sign-in commands always go through, even while chec
 | **AWS** `not signed in (aws login)`, `console sign-in expired (12 h limit)` | `aws login --profile PROFILE`. A console sign-in lasts at most 12 hours |
 | **AWS** `profile 'P' is signed in to account …1234, project expects …5678` | the profile belongs to another account. Map the right one: `keyfit add aws --profile <the right profile>` |
 | **AWS** `no profile 'P' in ~/.aws/config` | create it (`aws configure sso --profile P`), or map an existing profile |
+| **AWS** `InvalidClientTokenId`, `SignatureDoesNotMatch` (a profile with an access key) | AWS rejected the key. `aws configure --profile P` and enter a working one; it runs inside the project although the check fails |
+| **AWS** `aws CLI not found on PATH` | install it: `brew install awscli` |
 | **AWS** `AWS did not answer within 40 s (a Keychain prompt may be waiting — choose Always Allow)` | a `credential_process` profile (Granted, for example) is waiting for a Keychain prompt. Answer it, then try again |
 | **Linear** `key not found ($LINEAR_ACME_API_KEY)` | `env:` keys are read from the environment you start the tool in, and that variable isn't set there. Export it, or run `keyfit add linear` to keep the key in the Keychain instead |
 | **Linear** `Linear rejected the key (revoked, expired or wrong)` | create a new personal API key in Linear (Settings → Security & access), then run `keyfit add linear` |
@@ -99,7 +101,8 @@ Run the command after `→`. Sign-in commands always go through, even while chec
 | **Codex** `not signed in` | `codex login` (another home: `CODEX_HOME=… codex login`) |
 | **Codex** `Codex is signed in with an API key`, `auth.json holds an API key next to the ChatGPT login` | `codex logout && codex login`, with your ChatGPT account |
 | `… did not answer (…)`, `→ check the network and retry` | the service could not be reached, even after one retry, and there is no success from the last 24 hours to fall back on. Check the network |
-| `project acme-api has no aws account mapped, so aws was not started` (same for `gh` and `github`, `vercel` and `vercel`) | map one: `keyfit add aws --profile …`, `keyfit add github --login …` or `keyfit add vercel`. To skip Keyfit once: `KEYFIT_DISABLE=1 aws …` |
+| `project acme-api has no aws account mapped, so aws was not started` (same for `gh` and `github`, `vercel` and `vercel`) | inside a project, these three start only with the project's account for them. Map one: `keyfit add aws --profile …`, `keyfit add github --login …` or `keyfit add vercel`. To skip Keyfit once: `KEYFIT_DISABLE=1 aws …` |
+| `✘ github  octocta  no account [accounts.github.octocta]`, `✘ asw … unknown connection (a typo? …)` | a hand edit of `~/.config/keyfit/registry.toml` names an account that isn't there, or a connection Keyfit doesn't know. Fix the name, or map it again with `keyfit add …`. Only this project is affected |
 | `this folder belongs to acme-api (AWS profile acme-dev); refusing --profile other` | another project's profile was asked for inside this project. If the profile belongs to a machine-wide tool, list it under `[settings] shared_aws_profiles` in `~/.config/keyfit/registry.toml` |
 
 When a service doesn't answer but a check succeeded within the last 24 hours, the tool starts and Keyfit shows a warning, for example `workspace confirmed 3h 5m ago · could not re-check now (…)`. This fallback only covers network failures. A rejected key or a wrong account always fails.
@@ -131,17 +134,28 @@ With the checks cached, a shim adds about 0.1 s, and about 0.2 s for `gh`, `clau
 
 To see what a start costs, run `time KEYFIT_DRY_RUN=1 gh` in the project. It runs the checks and starts nothing.
 
+## "registry.toml has a mistake"
+
+```
+keyfit: claude not started, ~/.config/keyfit/registry.toml has a mistake
+  ✘ Expected ']' at the end of a table declaration (at line 1, column 12)
+    → fix that line in ~/.config/keyfit/registry.toml
+  (bypass once: KEYFIT_DISABLE=1 claude …)
+```
+
+Usually a hand edit. Without a readable registry Keyfit can't tell projects apart, so this happens in every folder, including folders that aren't registered, and `keyfit` commands say the same (`keyfit: cannot use ~/.config/keyfit/registry.toml: …`). Fix the line it names; `keyfit doctor` checks the file again. Besides TOML mistakes, Keyfit refuses `roots` that aren't a list of folders (`roots = ["~/code/acme"]`) and a root that is your home folder or above it, since every folder under it would belong to that project.
+
 ## "internal error"
 
 ```
-keyfit: internal error (TOMLDecodeError: Expected ']' at the end of a table declaration (at line 1, column 12)) — claude was not started.
+keyfit: internal error (TypeError: …) — claude was not started.
   Bypass once: KEYFIT_DISABLE=1 claude …
 ```
 
-When Keyfit itself fails, it stops the tool instead of starting it unchecked. If it cannot read its registry, that happens in every folder, including folders that aren't registered.
+When Keyfit itself fails, it stops the tool instead of starting it unchecked.
 
-1. Run `keyfit doctor`. If the `registry` line fails with a TOML error, fix the line it names in `~/.config/keyfit/registry.toml` (usually a hand edit).
-2. Otherwise, please [open a bug report](https://github.com/FlamurMaliqi/keyfit/issues/new/choose) and include:
+1. Run `keyfit doctor` and fix anything it marks with ✘.
+2. If that doesn't help, please [open a bug report](https://github.com/FlamurMaliqi/keyfit/issues/new/choose) and include:
    - the full `internal error` line
    - the output of `keyfit doctor`, run in the same folder
    - the output of `keyfit --version`
@@ -152,16 +166,18 @@ When Keyfit itself fails, it stops the tool instead of starting it unchecked. If
 
 ## Other messages
 
-- **`keyfit: the real claude was not found on PATH`.** The tool isn't installed, or its folder isn't on PATH. Keyfit skips its own shims and Superset's wrappers when looking for the real tool. `keyfit doctor` shows where it found each tool.
+- **`keyfit: claude is not installed (no claude on PATH besides Keyfit's shim)`.** The tool isn't installed, or its folder isn't on PATH. Keyfit skips its own shims and Superset's wrappers when looking for the real tool. Install it with the command printed below the message; `keyfit doctor` shows where it found each tool.
+- **`keyfit: claude not started: Keyfit is not installed where its shims expect it`.** The Python or the package that ran `keyfit setup` is gone. After an upgrade, a reinstall or a move to another Python, run `keyfit setup` again. If you uninstalled Keyfit before running `keyfit setup --remove`, remove its line from your shell startup file (see [Uninstall](#uninstall)) and open a new terminal.
+- **`keyfit needs Python 3.11 or newer`.** The `python3` that comes with macOS is 3.9. Install a newer one (`brew install python@3.13`, or `brew install pipx`, which brings one) and install Keyfit with it.
 - **`keyfit: claude nested 6 levels deep through Keyfit — stopping to avoid a loop`.** Another wrapper on PATH calls the tool by name and leads back into Keyfit. Look at `type -a claude`.
 - **A Keychain prompt appears.** Keys stored through Keyfit are read with `/usr/bin/security`, which those items trust without asking. A `keychain:service/account` reference to an item another app created may make macOS ask for permission. Allow it, or store the key through Keyfit with `keyfit secret set NAME`.
 
 ## Uninstall
 
 ```bash
-keyfit setup --remove            # delete the shims and PATH files; take Keyfit's line out of your startup files
-keyfit setup --remove --purge    # also delete ~/.config/keyfit, after asking (--yes skips the question)
-pipx uninstall keyfit            # or: brew uninstall keyfit
+keyfit setup --remove            # first: delete the shims and PATH files; take Keyfit's line out of your startup files
+keyfit setup --remove --purge    # or also delete ~/.config/keyfit, after asking (--yes skips the question)
+pipx uninstall keyfit            # last, or: brew uninstall keyfit
 ```
 
 - **Which startup files.** `--remove` takes Keyfit's line, and the blank line before it, out of `~/.zshrc` (and `$ZDOTDIR/.zshrc`), `~/.bash_profile`, `~/.bash_login`, `~/.profile` and `~/.bashrc`. If you used `keyfit setup --rc PATH` for another file, run `keyfit setup --remove --rc PATH`.

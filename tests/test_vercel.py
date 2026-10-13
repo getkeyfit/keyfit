@@ -577,7 +577,8 @@ class AddVercelTests(VercelCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(main(["status"]), 0)
-        self.assertEqual(out.getvalue(), "client\n  ✔ vercel    octocat → acme   login and team confirmed\n")
+        self.assertEqual(out.getvalue(), "client\n  ✔ vercel    octocat → acme   login and team confirmed\n"
+                                         "  aws and gh won't start here until mapped: keyfit add aws|github …\n")
 
 
 if __name__ == "__main__":

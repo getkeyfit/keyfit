@@ -42,6 +42,46 @@ from . import tomlwrite
 LEGACY_KINDS = ("workos", "bitwarden")
 
 
+class RegistryError(ValueError):
+    """registry.toml cannot be used as it is: unreadable, not TOML, or not shaped like a registry (a hand edit).
+    The message says where; `fix` is the next step. Callers print both instead of a traceback."""
+
+    def __init__(self, path: Path, reason: str, fix: str = ""):
+        super().__init__(reason)
+        self.path = path
+        self.fix = fix or f"fix it in {tilde(path)}"
+
+
+def _check_shape(data: dict, path: Path) -> None:
+    """Refuse a registry every project would misread: a hand edit must stop with its place named, never crash or
+    (roots = "~/code/acme" read as the letters "~", "/", …) quietly make the home folder a project. A connection
+    Keyfit cannot use fails only its own project's check (environment.unusable)."""
+    def bad(reason: str, fix: str = ""):
+        raise RegistryError(path, reason, fix)
+
+    for table in ("projects", "accounts", "settings", "secrets"):
+        if not isinstance(data.get(table, {}), dict):
+            bad(f"`{table}` must be a table, like [{table}.…]")
+    for kind, named in data.get("accounts", {}).items():
+        if not isinstance(named, dict) or not all(isinstance(a, dict) for a in named.values()):
+            bad(f"[accounts.{kind}] must hold one table per account, like [accounts.{kind}.NAME]")
+    home = Path.home().resolve()
+    for name, body in data.get("projects", {}).items():
+        where = f"[projects.{name}]"
+        if not isinstance(body, dict):
+            bad(f"{where} must be a table")
+        roots = body.get("roots")
+        if not isinstance(roots, list) or not roots or not all(isinstance(r, str) and r.strip() for r in roots):
+            bad(f'{where}: roots must be a list of folders, like roots = ["~/code/{name}"]')
+        for root in roots:
+            if canonical(root) == home or canonical(root) in home.parents:
+                bad(f'{where}: roots holds "{root}", which would put every folder under it in {name}',
+                    f"remove that root from {tilde(path)}; register repositories with: keyfit init")
+        servers = body.get("mcp_servers", [])
+        if not isinstance(servers, list) or not all(isinstance(s, str) for s in servers):
+            bad(f'{where}: mcp_servers must be a list of names, like mcp_servers = ["{name}_*"]')
+
+
 def config_dir() -> Path:
     return Path(os.environ.get("KEYFIT_CONFIG_DIR", "~/.config/keyfit")).expanduser()
 
@@ -92,8 +132,14 @@ class Registry:
         p = Path(path) if path else default_path()
         if not p.exists():
             return cls(p)
-        with p.open("rb") as fh:
-            data = tomllib.load(fh)
+        try:
+            with p.open("rb") as fh:
+                data = tomllib.load(fh)
+        except OSError as err:
+            raise RegistryError(p, f"cannot read it ({err.strerror})", f"chmod 600 {tilde(p)}") from None
+        except ValueError as err:  # TOMLDecodeError names the line and column; also text that is not UTF-8
+            raise RegistryError(p, str(err), f"fix that line in {tilde(p)}") from None
+        _check_shape(data, p)
         return cls(p, data)
 
     def save(self) -> None:
@@ -175,6 +221,7 @@ def tilde(path: str | Path) -> str:
     p = canonical(path)
     home = Path.home().resolve()
     try:
-        return "~/" + str(p.relative_to(home))
+        rel = p.relative_to(home)
     except ValueError:
         return str(p)
+    return "~" if rel == Path(".") else f"~/{rel}"

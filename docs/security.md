@@ -69,7 +69,7 @@ Keyfit's own requests use HTTPS with certificate and hostname checks (Python's d
 - **Send a secret anywhere but its own service** (the table above).
 - **Collect telemetry or keep logs.** No analytics, update checks or crash reports.
 - **Write into your repositories, or change another tool's logins or configuration.** It never runs `gh auth login`, `gh auth switch`, `aws sso login`, `claude auth login`, `codex login` or `vercel login` itself; it prints them as the fix. The one exception is `vercel whoami`, which renews an expired Vercel token, as any `vercel` command would.
-- **Start a tool after a failed check or an error inside Keyfit.** The exceptions are `KEYFIT_DISABLE=1`, sign-in commands (they run with the project's environment but without checks), folders that aren't registered, the AWS profiles under `[settings] shared_aws_profiles`, and a network failure within 24 hours of a success, shown as a warning.
+- **Start a tool after a failed check, a mistake in the registry (`registry.toml has a mistake`), an error inside Keyfit, or from a shim whose Keyfit installation is gone.** The exceptions are `KEYFIT_DISABLE=1`, sign-in commands (they run with the project's environment but without checks), folders that aren't registered, the AWS profiles under `[settings] shared_aws_profiles`, and a network failure within 24 hours of a success, shown as a warning.
 
 ## Where secrets end up
 
