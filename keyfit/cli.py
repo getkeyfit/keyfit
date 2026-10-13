@@ -231,7 +231,7 @@ def cmd_which(args) -> int:
         print(f"{r.project.name}  ({r.how})")
         if args.verbose:
             for kind, value in r.project.connections.items():
-                label = ADAPTERS[kind].label(value) if kind in ADAPTERS else value
+                label = ADAPTERS[kind].label(value) if kind in ADAPTERS else "(not a kind Keyfit knows)"
                 print(f"  {kind:<10} {label}")
             if r.project.mcp_servers:
                 print(f"  {'mcp':<10} owns {', '.join(r.project.mcp_servers)}")
