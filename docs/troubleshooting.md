@@ -109,7 +109,7 @@ When a service doesn't answer but a check succeeded within the last 24 hours, th
 Successful online checks are reused for 30 minutes (see [the verification cache](security.md#the-verification-cache)). Keyfit checks again right away when the identity behind a connection changes:
 
 - a new AWS SSO or console sign-in
-- a different Linear key, GitHub token or Vercel login
+- a different Linear key, GitHub token or Vercel login, and any `gh auth login`, `logout` or `switch`
 - a different Claude organization
 - a connection changed with `keyfit add`
 
@@ -120,6 +120,16 @@ keyfit status        # always checks online and refreshes the cache
 ```
 
 Deleting `~/.config/keyfit/cache/checks.json` is also safe; the next launch simply checks everything online. `keyfit status --offline` runs the local checks only and marks the online ones `not checked online`.
+
+## Starts feel slow
+
+With the checks cached, a shim adds about 0.1 s, and about 0.2 s for `gh`, `claude` and `codex` in a project with a GitHub account (see [Speed](../README.md#speed)). If every start takes longer:
+
+- **A check goes online every time.** Only successful checks are cached. A check that fails, or that is accepted only from the last 24 hours because the service did not answer (`could not re-check now`), is tried online again at the next start, with one retry. Run `keyfit status` and fix what it shows.
+- **The cache can't be written.** Keyfit keeps it in `~/.config/keyfit/cache/checks.json`. If that folder isn't writable, every start checks online.
+- **gh answers slowly.** In a project with a GitHub account, every `gh`, `claude` and `codex` start runs `gh auth token`. Time it with `time gh auth token --hostname github.com --user <login> >/dev/null`; it should take about 0.1 s.
+
+To see what a start costs, run `time KEYFIT_DRY_RUN=1 gh` in the project. It runs the checks and starts nothing.
 
 ## "internal error"
 

@@ -16,11 +16,8 @@ from __future__ import annotations
 
 import json
 import re
-import urllib.error
-import urllib.request
 
 from .. import secrets
-from .. import http
 from ..checks import Check
 from .base import Adapter
 
@@ -36,6 +33,11 @@ def is_linear_key_var(name: str) -> bool:
 
 def _fetch(key: str, timeout: float) -> tuple[int, dict]:
     """POST the identity query; return (http_status, json_body)."""
+    import urllib.error  # only for online checks: urllib.request and TLS take ~30 ms to import
+    import urllib.request
+
+    from .. import http
+
     auth = f"Bearer {key}" if key.startswith("lin_oauth_") else key  # personal API keys take no Bearer prefix
     req = urllib.request.Request(GRAPHQL, data=json.dumps({"query": QUERY}).encode(),
                                  headers={"Content-Type": "application/json", "Authorization": auth})

@@ -101,6 +101,16 @@ Some details:
 - **Claude Code's status line** shows the project and its accounts, unless you configured a status line of your own.
 - **Superset:** when Superset's agent wrapper (`~/.superset/bin`) is on PATH, it goes first and the shims right behind it, ahead of everything else. The chain is Superset wrapper → Keyfit → real tool, and Superset's hooks keep working. Without Superset, the shims go first.
 
+## Speed
+
+Measured on a MacBook Pro with an Apple M4 (16 GB, macOS 26.6, Python 3.13.3), with other apps running, a shim adds:
+
+- **About 0.1 s** in a folder you haven't registered, and for `aws` and `vercel` in a registered project when its checks are cached.
+- **About 0.2 s** for `gh`, `claude` and `codex` in a project with a GitHub account. Half of that is `gh auth token`, which Keyfit runs to get the account's token. Inside a Claude or Codex session that Keyfit started, `gh` keeps the token its check already confirmed, and costs about 0.1 s.
+- **0.5–2 s** when the checks have to go online, at most once every 30 minutes per project (and right after a new sign-in). GitHub, Linear, Vercel and Claude are checked in parallel. AWS takes longest, 5–15 s on this Mac, because its check starts the AWS CLI and your credential process.
+
+`--version` is checked like any other command, so `time gh --version` inside a project shows the full cost. To measure Keyfit alone on your Mac, with stub tools and no accounts or network: `python3 scripts/bench_shim.py`.
+
 ## What is checked
 
 | Connection | Map it with | What the tool gets | Checked before it starts |

@@ -82,7 +82,9 @@ bin/keyfit setup         # shims and shell files go into $KEYFIT_CONFIG_DIR; no 
    - Avoid a new subprocess per launch, and import heavy modules inside the function that needs
      them, not at the top of a module the shim loads.
    - Time a change to the shim path before and after, for example
-     `time KEYFIT_DRY_RUN=1 claude` in a registered project (checks run, the tool does not).
+     `time KEYFIT_DRY_RUN=1 claude` in a registered project (checks run, the tool does not), or
+     `python3 scripts/bench_shim.py --baseline <a checkout of main>`: it compares two checkouts run by
+     run, per tool and case, in a throwaway folder with stub tools (no accounts, no network).
 
 ## Pull requests
 
