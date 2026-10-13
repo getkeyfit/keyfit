@@ -31,13 +31,19 @@ class Check:
         return Check(self.kind, status, self.label, detail, self.fix or remote.fix)
 
     def lines(self) -> list[str]:
-        head = f"  {_SYMBOL[self.status]} {self.kind:<9} {self.label}"
+        head = f"  {_SYMBOL[self.status]} {self.kind:<9} {printable(self.label)}"
         if self.detail:
-            head += f"   {self.detail}"
+            head += f"   {printable(self.detail)}"
         out = [head]
         if self.fix and self.status != "ok":
-            out.append(f"    → {self.fix}")
+            out.append(f"    → {printable(self.fix)}")
         return out
+
+
+def printable(text) -> str:
+    """Text safe for a terminal: control and format characters (escape sequences, bidi overrides) are shown as
+    \\x1b, \\u202e. Details can quote what a repository holds (the team ID in .vercel/project.json)."""
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in str(text))
 
 
 def mask_account(account: str | None) -> str:
