@@ -283,6 +283,10 @@ def cmd_add_aws(args) -> int:
         print("use a named profile, never `default`", file=sys.stderr)
         return 1
     profile = read_profile(args.profile, os.environ)
+    if profile.kind == "unreadable":
+        print("your AWS config or credentials file does not parse — find it with: "
+              f"aws configure list --profile {args.profile}", file=sys.stderr)
+        return 1
     if profile.kind == "missing":
         print(f"no AWS profile named '{args.profile}' — create it first (aws configure sso --profile {args.profile})",
               file=sys.stderr)

@@ -232,8 +232,12 @@ def main(argv: list[str]) -> int:
         print(refusal, file=sys.stderr)
         return 1
     except Exception as err:  # a Keyfit bug must not silently drop the checks
-        print(f"keyfit: internal error ({type(err).__name__}: {err}) — {tool} was not started.\n"
-              f"  Bypass once: KEYFIT_DISABLE=1 {tool} …", file=sys.stderr)
+        import traceback
+
+        # the type and the place, never the message: messages can quote the files they read (a key, a token)
+        where = traceback.extract_tb(err.__traceback__)[-1]
+        print(f"keyfit: internal error ({type(err).__name__} in {Path(where.filename).name}:{where.lineno}) — "
+              f"{tool} was not started.\n  Bypass once: KEYFIT_DISABLE=1 {tool} …", file=sys.stderr)
         return 1
     if env.get("KEYFIT_DRY_RUN") == "1":
         changed = sorted(k for k in set(env) | set(run_env) if env.get(k) != run_env.get(k))

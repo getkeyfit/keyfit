@@ -126,6 +126,17 @@ class AwsTests(unittest.TestCase):
         self.assertTrue(c.failed)
         self.assertIn("aws configure sso --profile nope", c.fix)
 
+    def test_unparsable_credentials_file_fails_without_quoting_it(self):
+        # a key pasted on a line of its own: configparser's error would quote it
+        secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        (self.home / ".aws" / "credentials").write_text(f"[static]\naws_access_key_id = AKIAEXAMPLE\n{secret}\n")
+        check = self.aws.local({"profile": "static", "account": "444444444444"}, self.env)
+        self.assertTrue(check.failed)
+        self.assertIn("does not parse", check.detail)
+        self.assertNotIn(secret, "\n".join(check.lines()))
+        (self.home / ".aws" / "credentials").write_text("[static]\naws_access_key_id = AKIAEXAMPLE\n")
+        self.assertFalse(self.aws.local({"profile": "static", "account": "444444444444"}, self.env).failed)
+
     def test_sso_account_mismatch_is_caught_without_network(self):
         c = self.aws.local({"profile": "sso", "account": "999999999999"}, self.env)
         self.assertTrue(c.failed)
