@@ -198,6 +198,10 @@ def main(argv: list[str]) -> int:
             os.execve(real, [tool, *args], env)
         pinned = env.get("KEYFIT_PROJECT") if tool in PINNED else None
         project = registry.get(pinned) if pinned else resolve(".", registry).project
+        if pinned and project is None:  # the session's environment is that project's: never run it unchecked
+            raise Refused(f"keyfit: this session belongs to project {printable(pinned)}, which is not in the registry "
+                          f"(renamed or removed?), so {tool} was not started.\n  Start the session again, or bypass "
+                          f"once: KEYFIT_DISABLE=1 {tool} …")
         if project is None:
             os.execve(real, [tool, *args], env)  # not a registered project: exactly as before Keyfit
 
