@@ -55,11 +55,18 @@ class Refused(Exception):
 
 
 def positionals(args: list[str]) -> list[str]:
+    """The command words, skipping options and the values of VALUE_OPTIONS. An option Keyfit does not know may
+    take the next word as its value (`claude --add-dir auth` starts a session), so the words stop there: an
+    unclear command line is never taken for a sign-in command, which would skip every check."""
     out = []
     for i, arg in enumerate(args):
         if arg == "--":
             break
-        if arg.startswith("-") or (i > 0 and args[i - 1] in VALUE_OPTIONS):
+        if i > 0 and args[i - 1] in VALUE_OPTIONS:
+            continue
+        if arg.startswith("-"):
+            if "=" not in arg and arg not in VALUE_OPTIONS and i + 1 < len(args) and not args[i + 1].startswith("-"):
+                break
             continue
         out.append(arg)
     return out

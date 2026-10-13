@@ -119,6 +119,12 @@ class ShimTests(unittest.TestCase):
         self.assertIn("aws not started, demo needs attention", out.stderr)
         self.assertIn("…9999", out.stderr)
 
+    def test_option_value_that_looks_like_a_sign_in_command_still_runs_the_checks(self):
+        out = self.run_tool("claude", "--add-dir", "auth", FAKE_ACCOUNT="999999999999")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(out.stdout, "")  # the session never started
+        self.assertIn("claude not started, demo needs attention", out.stderr)
+
     def test_other_profile_is_refused(self):
         out = self.run_tool("aws", "--profile", "other", "s3", "ls")
         self.assertEqual(out.returncode, 1)
