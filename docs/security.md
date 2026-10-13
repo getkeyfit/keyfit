@@ -99,7 +99,7 @@ Everything Keyfit writes lives under `~/.config/keyfit` (or `$KEYFIT_CONFIG_DIR`
   - It doesn't edit `~/.aws/config`, `~/.claude.json`, Claude's settings, `~/.codex/config.toml` or the Vercel CLI's `auth.json` and `config.json`. When the stored Vercel access token has expired, it lets the CLI renew it (`vercel whoami`), which any `vercel` command would do first.
 
   When you type a sign-in command yourself, Keyfit lets it through with the project's environment, so it signs in the right account. The only places Keyfit creates configuration for another tool are a new, separate Claude config folder (`keyfit add claude --new`) and an empty Vercel login folder (`keyfit add vercel --new`), and only when you ask for them.
-- **Start a tool after a failed check.** A failed check, and also an error inside Keyfit (`keyfit: internal error …`), stops the tool. These are the documented exceptions:
+- **Start a tool after a failed check.** A failed check stops the tool. So do a mistake in the registry (`keyfit: claude not started, ~/.config/keyfit/registry.toml has a mistake`), an error inside Keyfit (`keyfit: internal error …`) and a shim whose Keyfit installation is gone. These are the documented exceptions:
   - `KEYFIT_DISABLE=1`
   - sign-in commands
   - folders that aren't registered
