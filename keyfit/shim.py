@@ -189,6 +189,9 @@ def main(argv: list[str]) -> int:
         return 1
     if env.get("KEYFIT_DISABLE") == "1":
         os.execve(real, [tool, *args], env)
+    # counted on every path, not only where checks run: a wrapper later on PATH that calls the tool by name
+    # comes back through here also in folders that are not registered
+    env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
 
     try:
         registry = Registry.load()
@@ -220,7 +223,6 @@ def main(argv: list[str]) -> int:
             raise Refused(f"keyfit: project {project.name} has no {relevant[0]} account mapped, so {tool} was not "
                           f"started.\n  Map one: keyfit add {relevant[0]} …   (bypass once: KEYFIT_DISABLE=1 {tool} …)")
         run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel need only their own connection
-        run_env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
         checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
         failed = [c for c in checks if c.failed]
         if failed:
