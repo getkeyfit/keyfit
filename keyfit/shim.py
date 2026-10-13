@@ -20,6 +20,7 @@ from pathlib import Path
 
 from . import environment, mcp
 from .adapters import vercel
+from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, canonical, tilde
 from .resolve import resolve
@@ -152,7 +153,7 @@ def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
         if name == "--cwd" and value:
             link = vercel.foreign_link(conn, cwd / value, env)
             if link is not None:
-                raise Refused(f"keyfit: {tilde(link[0])} links {value} to another Vercel team ({link[1]}), but this "
+                raise Refused(f"keyfit: {tilde(link[0])} links {value} to another Vercel team ({printable(link[1])}), but this "
                               f"folder belongs to {project.name} (Vercel team {team}); refusing --cwd {value}.{bypass}")
     names = {name for name, _ in given}
     extra = [] if "--global-config" in names else vercel.config_args(conn, env)
