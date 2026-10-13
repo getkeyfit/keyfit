@@ -48,7 +48,7 @@ SCRUB = (
 @dataclass
 class Profile:
     name: str
-    kind: str  # sso | login | role | process | static | unknown | missing
+    kind: str  # sso | login | role | process | static | unknown | missing | unreadable
     account_hint: str | None = None
     sso_session: str | None = None
     sso_start_url: str | None = None
@@ -84,31 +84,43 @@ def login_cache_file(p: Profile, env: dict) -> Path:
     return folder / (hashlib.sha256((p.login_session or "").encode()).hexdigest() + ".json")
 
 
-def profile_names(env: dict) -> list[str]:
-    """The named profiles in the AWS config file, in file order (never `default`)."""
+def _parse(path: Path) -> configparser.RawConfigParser | None:
+    """The INI file, or None when it does not parse. configparser's errors quote the offending line, and in
+    ~/.aws/credentials that line can be a secret key: no such error may reach a message."""
     cfg = configparser.RawConfigParser()
     try:
-        cfg.read(config_path(env))
-    except configparser.Error:
+        cfg.read(path)
+    except (configparser.Error, UnicodeDecodeError):
+        return None
+    return cfg
+
+
+def profile_names(env: dict) -> list[str]:
+    """The named profiles in the AWS config file, in file order (never `default`)."""
+    cfg = _parse(config_path(env))
+    if cfg is None:
         return []
     return [section[8:].strip() for section in cfg.sections() if section.startswith("profile ")]
 
 
 def read_profile(name: str, env: dict) -> Profile:
-    cfg = configparser.RawConfigParser()
-    cfg.read(config_path(env))
+    cfg = _parse(config_path(env))
+    if cfg is None:
+        return Profile(name, "unreadable")
     section = "default" if name == "default" else f"profile {name}"
 
     def get(key: str) -> str | None:
         return cfg.get(section, key).strip() if cfg.has_option(section, key) else None
 
-    def in_credentials_file() -> bool:
-        creds = configparser.RawConfigParser()
-        creds.read(credentials_path(env))
-        return creds.has_option(name, "aws_access_key_id")
+    def from_credentials_file() -> str:
+        """"static" when the credentials file has a key for the profile, "unreadable" when it does not parse."""
+        creds = _parse(credentials_path(env))
+        if creds is None:
+            return "unreadable"
+        return "static" if creds.has_option(name, "aws_access_key_id") else ""
 
     if not cfg.has_section(section):
-        return Profile(name, "static") if in_credentials_file() else Profile(name, "missing")
+        return Profile(name, from_credentials_file() or "missing")
     if get("sso_session") or get("sso_start_url"):
         session, url = get("sso_session"), get("sso_start_url")
         session_section = f"sso-session {session}"
@@ -123,9 +135,9 @@ def read_profile(name: str, env: dict) -> Profile:
         return Profile(name, "role", account_hint=m.group(1) if m else None, source_profile=get("source_profile"))
     if get("credential_process"):
         return Profile(name, "process", process=get("credential_process"))
-    if get("aws_access_key_id") or in_credentials_file():
+    if get("aws_access_key_id"):
         return Profile(name, "static")
-    return Profile(name, "unknown")
+    return Profile(name, from_credentials_file() or "unknown")
 
 
 def _parse_time(value) -> datetime | None:
@@ -190,6 +202,10 @@ class AwsAdapter(Adapter):
                         f"keyfit add aws --profile {profile} --account <12 digits>")
 
         p = read_profile(profile, env)
+        if p.kind == "unreadable":
+            return fail(f"{config_path(env)} or {credentials_path(env)} does not parse "
+                        "(the line is not shown: it may hold a key)",
+                        f"aws configure list --profile {profile}   (names the file)")
         if p.kind == "missing":
             return fail(f"no profile '{profile}' in {config_path(env)}",
                         f"aws configure sso --profile {profile}   (or: keyfit add aws --profile <existing profile>)")

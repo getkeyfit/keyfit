@@ -40,5 +40,25 @@ class RecursionTests(unittest.TestCase):
             os.environ.update(saved)
 
 
+class InternalErrorTests(unittest.TestCase):
+    def test_internal_error_names_the_type_never_the_message(self):
+        # exception messages can quote what was read (configparser quotes the bad line, which may be a key)
+        import contextlib
+        import io
+        from unittest import mock
+
+        bin_ = Path(tempfile.mkdtemp()).resolve()
+        exe = bin_ / "aws"
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"PATH": f"{bin_}{os.pathsep}/usr/bin:/bin"}), \
+                mock.patch.object(shim.Registry, "load", side_effect=ValueError("lin_api_SECRETVALUE")), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(shim.main(["aws", "s3", "ls"]), 1)
+        self.assertIn("internal error (ValueError in ", err.getvalue())
+        self.assertNotIn("SECRETVALUE", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
