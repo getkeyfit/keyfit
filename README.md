@@ -14,7 +14,7 @@ If you work with a single set of accounts, you don't need Keyfit.
 
 ## Install
 
-You need macOS, Python 3.11 or newer, and zsh or bash.
+You need macOS, Python 3.11 or newer, and zsh or bash. The `python3` that comes with macOS is 3.9, which is too old; `brew install pipx` installs pipx together with a current Python (then run `pipx ensurepath` and open a new terminal).
 
 ```bash
 pipx install keyfit                       # coming with the first release
@@ -25,7 +25,7 @@ Nothing is published yet. Until then, install from source:
 
 ```bash
 git clone https://github.com/FlamurMaliqi/keyfit.git
-pipx install ./keyfit        # or run it without installing: ./keyfit/bin/keyfit … (uses python3 from PATH)
+pipx install ./keyfit        # or run it without installing: ./keyfit/bin/keyfit … (uses the python3 on PATH, 3.11 or newer)
 ```
 
 The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkout they also run that checkout. If you move Keyfit to another Python, virtualenv or folder, run `keyfit setup` again.
@@ -36,7 +36,7 @@ The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkou
 keyfit setup --rc     # shims for claude, codex, aws, gh and vercel, plus one line in your shell startup file
 ```
 
-Open a new terminal, then go to a repository of one of your clients:
+Open a new terminal, then go to a repository of one of your clients (a repository, not your home folder: everything under the folder you register belongs to that project):
 
 ```bash
 cd ~/code/acme-api
@@ -51,6 +51,8 @@ claude                # starts with this project's accounts, checked
 - **Claude and Codex:** whether to use the login currently in `~/.claude` or `~/.codex`.
 - **Vercel:** whether to use the login the `vercel` CLI has now, with the team selected in it.
 - **Linear:** a personal API key, typed at a hidden prompt. Keyfit checks it with Linear, then stores it in the macOS Keychain.
+
+Skipped accounts are simply not checked, with one catch: inside the project, `aws`, `gh` and `vercel` start only once it has an AWS, GitHub or Vercel account. Skip GitHub, and `gh` waits in that repository until you run `keyfit add github --login <login>`. `keyfit status` lists what is still unmapped.
 
 It ends with `keyfit status`:
 
@@ -193,7 +195,7 @@ keyfit secret list                 # names of the keys Keyfit stored (never the 
 - **See what would run:** `KEYFIT_DRY_RUN=1 claude` runs the checks in a registered project, then prints the command and the names of the environment variables that would change, and starts nothing. In a folder that isn't registered, and for sign-in commands, the tool runs as usual.
 - **Turn it off:** `keyfit setup --remove` deletes the shims and PATH files and takes Keyfit's line out of your shell startup files. Open a new terminal afterwards. Your registry stays, so `keyfit setup --rc` turns everything back on.
 - **Delete its data too:** `keyfit setup --remove --purge` also deletes `~/.config/keyfit`: the registry, the check cache, and the Claude and Vercel login folders Keyfit made (with the logins in them). It asks first (`--yes` skips the question). Keys Keyfit stored in the Keychain are kept; it lists their names so you can delete them in Keychain Access.
-- **Uninstall:** run `pipx uninstall keyfit` or `brew uninstall keyfit`.
+- **Uninstall:** run `keyfit setup --remove` first, then `pipx uninstall keyfit` or `brew uninstall keyfit`. Done the other way round, the five tools stop with a note that names the line to remove.
 
 ## More
 

@@ -11,6 +11,24 @@ from .checks import Check, human
 from .registry import Project, default_path, tilde
 
 
+def label(kind: str, conn) -> str:
+    adapter = ADAPTERS.get(kind)
+    return adapter.label(conn) if adapter is not None and isinstance(conn, dict) else str(conn)
+
+
+def unusable(kind: str, conn) -> Check | None:
+    """A connection the registry holds in a form Keyfit cannot use (a hand edit): it fails, so the tool does not
+    start without it, and says how to fix it. None for a usable one."""
+    registry, shown = tilde(default_path()), conn if isinstance(conn, str) else ""
+    if kind not in ADAPTERS:
+        return Check(kind, "fail", shown, f"unknown connection (a typo? Keyfit knows {', '.join(ADAPTERS)})",
+                     f"rename or remove {kind} in {registry}")
+    if isinstance(conn, dict):
+        return None
+    reason = f"no account [accounts.{kind}.{conn}]" if shown else f"not a table ({kind} = {{ … }})"
+    return Check(kind, "fail", shown, reason, f"map it again: keyfit add {kind} …   (or fix it in {registry})")
+
+
 def _selected(project: Project, kinds) -> list[tuple[str, object]]:
     """kinds=None means every connection of the project."""
     return [(kind, conn) for kind, conn in project.connections.items() if kinds is None or kind in kinds]
@@ -22,10 +40,9 @@ def build(project: Project, base_env: dict | None = None, kinds=None) -> dict:
     env["KEYFIT_PROJECT"] = project.name
     labels = []
     for kind, conn in _selected(project, kinds):
-        adapter = ADAPTERS.get(kind)
-        if adapter is not None:
-            adapter.inject(conn, env)
-            labels.append(f"{kind} {adapter.label(conn)}")
+        if unusable(kind, conn) is None:  # an unusable one fails its check; nothing is injected for it
+            ADAPTERS[kind].inject(conn, env)
+            labels.append(f"{kind} {label(kind, conn)}")
     env["KEYFIT_SUMMARY"] = " · ".join([project.name, *labels])  # shown by the Claude status line
     return env
 
@@ -35,10 +52,10 @@ def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cac
 
     def one(item):
         kind, conn = item
-        adapter = ADAPTERS.get(kind)
-        if adapter is None:  # a typo (`githb = …`) or a newer Keyfit's kind: that account would go unchecked
-            return Check(kind, "fail", "?", "not a kind of account this Keyfit knows",
-                         f"fix or remove it in {tilde(default_path())} (known: {', '.join(sorted(ADAPTERS))})")
+        broken = unusable(kind, conn)
+        if broken is not None:
+            return broken
+        adapter = ADAPTERS[kind]
         if not remote:
             return adapter.verify(conn, env, remote=False)
         local = adapter.local(conn, env)

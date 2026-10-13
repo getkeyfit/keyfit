@@ -25,6 +25,7 @@ class Keyfit < Formula
         keyfit setup --rc
       The shims run #{opt_libexec}/bin/python, so they survive `brew upgrade`.
       Run `keyfit setup` again if this formula ever moves to another Python version.
+      Before `brew uninstall keyfit`, run: keyfit setup --remove
     EOS
   end
 

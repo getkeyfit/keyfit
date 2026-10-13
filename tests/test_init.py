@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -234,7 +235,9 @@ class GuidedInitTests(Machine):
         code, out, err = self.init("", "", "n", "", "")
         self.assertEqual(code, 0, out + err)
         self.assertEqual(list(self.registry()["projects"]["acme"]), ["roots"])
-        self.assertIn("no connections yet", out)
+        self.assertIn("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add "
+                      "aws|github|claude|codex|vercel|linear …\n"
+                      "  aws, gh and vercel won't start here until mapped: keyfit add aws|github|vercel …\n", out)
         self.assertEqual(self.hidden, [])
         self.assertEqual(self.sts.read_text(), "")
 
@@ -250,10 +253,41 @@ class GuidedInitTests(Machine):
 
     def test_without_a_terminal_or_with_yes_nothing_is_asked(self):
         expected = (f"Registered project 'acme' → {self.repo}\n"
-                    "Worktrees of this repository resolve to it automatically. Check it with: keyfit status\n")
+                    "Worktrees of this repository resolve to it automatically. Check it with: keyfit status\n"
+                    "Keyfit is not set up yet, so claude, codex, aws, gh and vercel still run without checks.\n"
+                    "  Set it up: keyfit setup --rc, then open a new terminal\n")
         self.assertEqual(self.init(stdin=io.StringIO("1\ny\n")), (0, expected, ""))
         self.assertEqual(self.init(argv=["--yes"]), (0, expected, ""))
         self.assertEqual(self.gh_calls.read_text(), "")
+
+    def test_init_says_when_keyfit_is_not_active_in_this_terminal(self):
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["setup"]), 0)
+        _, out, _ = self.init(argv=["--yes"])
+        self.assertIn(f"{self.config / 'bin'} is not on PATH in this terminal, so tools here still run without "
+                      "checks.\n  Open a new terminal", out)
+        os.environ["PATH"] = f"{self.config / 'bin'}{os.pathsep}{os.environ['PATH']}"
+        _, out, _ = self.init(argv=["--yes"])
+        self.assertNotIn("without checks", out)
+
+    def test_init_refuses_the_home_folder_and_above(self):
+        # one project for every folder under it: tools anywhere in home would run with (or wait for) its accounts
+        for folder in (self.home, self.home.parent, Path("/")):
+            with self.subTest(folder=folder):
+                code, out, err = self.init(argv=["--yes", "--root", str(folder)])
+                self.assertEqual(code, 1)
+                self.assertIn("would belong to one project.\n", err)
+                self.assertIn("Go to a project's repository first", err)
+        self.assertFalse((self.config / "registry.toml").exists())
+        code, _, err = self.init(argv=["--yes", "--root", str(self.tmp / "missing")])
+        self.assertEqual((code, err), (1, f"no folder {self.tmp / 'missing'}\n"))
+
+    def test_folder_outside_git_is_registered_with_a_note(self):
+        plain = self.tmp / "clients"
+        plain.mkdir()
+        code, out, _ = self.init(argv=["--yes", "--root", str(plain)])
+        self.assertEqual(code, 0)
+        self.assertIn(f"{plain} is not a git repository: every folder under it belongs to clients\n", out)
 
     def test_aws_config_file_is_respected(self):
         other = self.tmp / "aws-config"
@@ -293,6 +327,115 @@ class GuidedInitTests(Machine):
     def test_gh_logins_from_older_gh_on_stderr(self):
         os.environ["FAKE_GH_OLD"] = "1"
         self.assertEqual(logins(dict(os.environ)), (["octocat", "hubot"], ""))
+
+
+class MessagesTests(Machine):
+    """What a first-time user sees when something is missing or mistyped: what is wrong and the next command,
+    never a traceback."""
+
+    def run_main(self, *argv, stdin=None):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err), mock.patch("sys.stdin", stdin or io.StringIO()):
+            code = main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def write_registry(self, text):
+        self.config.mkdir(exist_ok=True)
+        (self.config / "registry.toml").write_text(text)
+
+    def register(self):
+        self.assertEqual(self.run_main("init", "--yes")[0], 0)
+
+    def test_registry_that_is_not_toml(self):
+        self.write_registry("[projects.acme\nroots = ['~/acme']\n")
+        reg = re.escape(str(self.config / "registry.toml"))
+        for argv in (["status"], ["which"], ["projects"], ["init", "--yes"], ["add", "aws", "--profile", "acme-dev"]):
+            with self.subTest(argv=argv):
+                code, out, err = self.run_main(*argv)
+                self.assertEqual((code, out), (1, ""))
+                self.assertRegex(err, rf"^keyfit: cannot use {reg}: .*\(at line 1, column \d+\)\n"
+                                      rf"  → fix that line in {reg}\n$")
+
+    def test_roots_must_be_a_list_of_folders(self):
+        # read as a string, the root "~/acme" would have been "~", "/", "a", …: the home folder as a project
+        self.write_registry(f'[projects.acme]\nroots = "{self.repo}"\n')
+        code, out, err = self.run_main("which", str(self.home))
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn('[projects.acme]: roots must be a list of folders, like roots = ["~/code/acme"]', err)
+        self.write_registry('[projects.acme]\nroots = ["~"]\n')
+        code, out, err = self.run_main("which", str(self.home))
+        self.assertIn('roots holds "~", which would put every folder under it in acme', err)
+        self.assertIn("→ remove that root from", err)
+
+    def test_unusable_connections_fail_their_check_with_the_fix(self):
+        self.write_registry(f'[projects.acme]\nroots = ["{self.repo}"]\ngithub = "octocta"\n'
+                            'asw = { profile = "acme-dev" }\naws = { profile = "acme-dev" }\n\n'
+                            '[accounts.github.octocat]\nlogin = "octocat"\n')
+        code, out, err = self.run_main("status", "--offline")
+        self.assertEqual((code, err), (1, ""))
+        self.assertIn("✘ github    octocta   no account [accounts.github.octocta]\n"
+                      "    → map it again: keyfit add github …", out)
+        self.assertRegex(out, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, "
+                              r"github, vercel\)")
+        self.assertIn("✘ aws       acme-dev → ?   the expected account must be a 12-digit AWS account ID", out)
+        self.assertIn("  vercel won't start here until mapped: keyfit add vercel …\n", out)
+        code, out, _ = self.run_main("which", "-v")
+        self.assertEqual(code, 0)
+        self.assertIn("  github     octocta\n", out)
+
+    def test_status_outside_a_project_says_how_to_register(self):
+        os.chdir(self.tmp)
+        self.assertEqual(self.run_main("status"), (1, "not registered  (not inside a registered project)\n"
+                                                      "  Tools run here unchanged. To register a repository, run "
+                                                      "inside it: keyfit init\n", ""))
+        code, _, err = self.run_main("add", "aws", "--profile", "acme-dev")
+        self.assertEqual(code, 1)
+        self.assertIn("  Run this inside the project's repository, name it with --project NAME, or register it: "
+                      "keyfit init\n", err)
+
+    def test_add_aws_names_the_profiles_there_are(self):
+        self.register()
+        code, _, err = self.run_main("add", "aws", "--profile", "acme-prod")
+        self.assertEqual((code, err), (1, "no AWS profile named 'acme-prod' (named profiles in ~/.aws/config: "
+                                          "acme-dev, globex)\n  Create it first: aws configure sso --profile acme-prod\n"))
+        code, _, err = self.run_main("add", "aws", "--profile", "default")
+        self.assertEqual((code, err), (1, "use a named profile, never `default` (named profiles in ~/.aws/config: "
+                                          "acme-dev, globex)\n"))
+
+    def test_add_aws_says_what_next_when_aws_has_no_answer(self):
+        self.register()
+        executable(self.bin / "aws", "#!/bin/sh\necho 'An error occurred (AccessDenied) when calling it' >&2\nexit 255\n")
+        code, _, err = self.run_main("add", "aws", "--profile", "acme-dev")
+        self.assertEqual((code, err), (1, "could not read the account: An error occurred (AccessDenied) when calling it\n"
+                                          "  → KEYFIT_DISABLE=1 aws sts get-caller-identity --profile acme-dev   "
+                                          "(shows the full error)\n"))
+        (self.bin / "aws").unlink()
+        code, _, err = self.run_main("add", "aws", "--profile", "acme-dev")
+        self.assertEqual(err, "could not read the account: aws CLI not found on PATH\n  → brew install awscli\n")
+
+    def test_add_without_the_tool_says_how_to_install_it(self):
+        self.register()
+        for name in ("gh", "claude"):
+            (self.bin / name).unlink()
+        code, _, err = self.run_main("add", "github", "--login", "octocat")
+        self.assertEqual((code, err), (1, "gh not found on PATH — install it (brew install gh), then sign in: "
+                                          "gh auth login --hostname github.com --web\n"))
+        code, _, err = self.run_main("add", "claude")
+        self.assertEqual((code, err), (1, "could not ask Claude Code: claude not found on PATH\n"
+                                          "  Install it: curl -fsSL https://claude.ai/install.sh | bash\n"))
+
+    def test_add_linear_says_what_next(self):
+        self.register()
+        code, _, err = self.run_main("add", "linear", "--key", "env:LINEAR_ACME_API_KEY")
+        self.assertEqual((code, err), (1, "$LINEAR_ACME_API_KEY is empty or missing in this shell.\n  Set it first, or "
+                                          "paste the key instead (stored in the Keychain): keyfit add linear\n"))
+        wrong = "lin_api_" + "W9" * 20  # well-formed, but Linear does not know it: nothing is stored
+        code, _, err = self.run_main("add", "linear", stdin=io.StringIO(wrong + "\n"))
+        self.assertEqual((code, err), (1, "could not read the workspace: Linear rejected the key\n  → create a key in "
+                                          "Linear → Settings → Security & access → Personal API keys, then: "
+                                          "keyfit add linear\n"))
+        self.assertFalse((self.stub / "argv.log").exists())  # the Keychain was never asked
+        self.assertNotIn(wrong, err)
 
 
 # Stands in for /usr/bin/security in doctor: answers only `list-keychains`, logs every argv.
@@ -417,9 +560,13 @@ class DoctorTests(Machine):
 
     def test_unregistered_folder_is_a_note(self):
         self.setup_shims()
-        code, out = self.doctor(self.shims, self.bin, cwd=self.tmp)
+        code, out = self.doctor(self.shims, self.bin)  # a git repository: register it
         self.assertEqual(code, 0, out)
-        self.assertRegex(out, r"! project\s+this folder\s+not registered .*\n    → keyfit init")
+        self.assertRegex(out, r"! project\s+this folder\s+not registered .*\n    → keyfit init\n")
+        code, out = self.doctor(self.shims, self.bin, cwd=self.tmp)  # not one (the home folder, say): find one first
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out, r"! project\s+this folder\s+not registered .*\n"
+                              r"    → cd into a project's repository, then: keyfit init\n")
 
     def test_other_systems_fail_clearly(self):
         self.setup_shims()
