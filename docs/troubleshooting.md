@@ -31,6 +31,7 @@ Signs that the tool started without Keyfit:
    - zsh uses `$ZDOTDIR/.zshrc` when `ZDOTDIR` is set. If your terminal app sets `ZDOTDIR`, that may not be the file you expect. Pass the file yourself: `keyfit setup --rc ~/.zshrc`.
    - bash uses the login profile macOS terminals read. It also uses `~/.bashrc`, but only when that profile sources it; a `bash` started inside a terminal reads only `~/.bashrc`.
 5. **The folder may not be registered.** If `keyfit which` says `not registered`, run `keyfit init`. In folders that aren't registered, tools run unchanged on purpose.
+   A worktree counts for its repository's project only when the repository lists it (`git worktree list`). If you moved a worktree's folder by hand, run `git worktree repair` inside it.
 6. **The tool may not be found through PATH.** IDE extensions, desktop apps and tools started by their full path bypass the shims. For any other command, use `keyfit run -- <command>`.
 
 ## Superset terminals
