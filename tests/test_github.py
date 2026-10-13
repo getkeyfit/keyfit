@@ -108,6 +108,14 @@ class GithubTests(unittest.TestCase):
         self.assertFalse(is_login_command("aws", ["s3", "ls"]))
         self.assertFalse(is_login_command("claude", ["-p", "auth the user"]))
         self.assertEqual(positionals(["--profile", "x", "sso", "login"]), ["sso", "login"])
+        self.assertTrue(is_login_command("gh", ["auth", "login", "--git-protocol", "ssh", "--web"]))
+
+    def test_a_word_that_may_be_an_option_value_is_no_login_command(self):
+        # `--add-dir auth` starts a Claude session in which `auth` is a folder; taking it for `claude auth`
+        # would skip every check and start the session without the project's environment
+        self.assertFalse(is_login_command("claude", ["--add-dir", "auth"]))
+        self.assertFalse(is_login_command("codex", ["-C", "login"]))
+        self.assertTrue(is_login_command("claude", ["--model=opus", "auth", "login"]))
 
 
 class AddGithubMergeTests(unittest.TestCase):
