@@ -22,10 +22,7 @@ import json
 import os
 import re
 import subprocess
-import urllib.error
-import urllib.request
 
-from .. import http
 from ..checks import Check
 from ..realbin import find_real
 from .base import Adapter
@@ -69,6 +66,11 @@ def logins(env: dict, timeout: float = 30) -> tuple[list[str], str]:
 
 
 def _fetch(token: str, timeout: float) -> tuple[int, dict]:
+    import urllib.error  # only for online checks: urllib.request and TLS take ~30 ms to import
+    import urllib.request
+
+    from .. import http
+
     req = urllib.request.Request(API, headers={"Authorization": f"Bearer {token}", "User-Agent": "keyfit",
                                                "Accept": "application/vnd.github+json"})
     try:
