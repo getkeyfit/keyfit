@@ -751,9 +751,9 @@ def cmd_setup(args) -> int:
     folder.mkdir(parents=True, exist_ok=True)
     python, entry = stable_path(sys.executable), stable_path(Path(__file__).resolve().parent / "_shim_entry.py")
     (folder / MARKER).write_text("Keyfit shims live here; Keyfit never resolves a real binary from this folder.\n")
-    for tool in TOOLS:
-        script = folder / tool
-        script.write_text(f'#!/bin/sh\nexec "{python}" -I "{entry}" {tool} "$@"\n')
+    for tool in TOOLS:  # -I: no PYTHONPATH, user site or current folder; -S: no site-packages and their .pth files
+        script = folder / tool  # (Keyfit needs only the standard library), which also saves ~5 ms per launch
+        script.write_text(f'#!/bin/sh\nexec "{python}" -I -S "{entry}" {tool} "$@"\n')
         script.chmod(0o755)
     for filename, template, _ in SHELLS.values():
         (config_dir() / filename).write_text(template.replace("@SHIMS@", str(folder)))
@@ -895,7 +895,7 @@ def _check_shims(folder: Path) -> Check:
     if missing:
         return Check("shims", "fail", label, f"missing: {', '.join(missing)}", "keyfit setup")
     for tool in TOOLS:  # each shim runs the Python and the checkout `keyfit setup` was run with
-        m = re.search(r'exec "([^"]+)" -I "([^"]+)"', (folder / tool).read_text(errors="replace"))
+        m = re.search(r'exec "([^"]+)" -I (?:-S )?"([^"]+)"', (folder / tool).read_text(errors="replace"))
         gone = [p for p in (m.groups() if m else ()) if not Path(p).exists()]
         if gone:
             return Check("shims", "fail", label, f"{tool} runs {gone[0]}, which no longer exists",
