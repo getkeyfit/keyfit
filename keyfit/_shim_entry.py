@@ -1,4 +1,5 @@
-"""Entry point for the generated shims; run with `python3 -I` so PYTHONPATH and user site never leak in."""
+"""Entry point for the generated shims; run with `python3 -I -S` so PYTHONPATH, user site and site-packages
+(with their .pth files) never leak in: Keyfit needs only the standard library."""
 
 import sys
 from pathlib import Path

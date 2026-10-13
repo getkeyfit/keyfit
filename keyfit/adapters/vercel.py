@@ -31,12 +31,9 @@ import re
 import shlex
 import subprocess
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
-from .. import http
 from ..checks import Check
 from ..realbin import find_real
 from ..registry import canonical, tilde
@@ -185,6 +182,11 @@ def foreign_link(conn, start, env: dict) -> tuple[Path, str] | None:
 
 
 def _fetch(path: str, token: str, timeout: float) -> tuple[int, dict]:
+    import urllib.error  # only for online checks: urllib.request and TLS take ~30 ms to import
+    import urllib.request
+
+    from .. import http
+
     req = urllib.request.Request(API + path, headers={"Authorization": f"Bearer {token}", "User-Agent": "keyfit",
                                                       "Accept": "application/json"})
     try:
