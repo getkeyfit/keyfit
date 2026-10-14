@@ -240,6 +240,10 @@ def mismatch(conn, folder, env: dict, asked: str | None = None, config: Path | N
         used, where = bound(folder, bindings(env))
         if used != profile:
             top = _top(folder)
+            home = str(_home(env).resolve())
+            if top == home or home.startswith(top.rstrip(os.sep) + os.sep):  # never bind everything under it
+                return (f"wrangler in {tilde(folder)} would use profile {used}, not {profile}",
+                        "run wrangler inside the project's folder")
             if where is None:
                 return (f"{tilde(folder)} is not bound to wrangler profile {profile} (wrangler would use its default "
                         f"login)", f"wrangler auth activate {profile} {shell_path(top)}")
