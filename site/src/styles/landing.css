@@ -663,7 +663,7 @@ code {
 }
 .soon {
 	padding: 0.85rem 1rem;
-	border: 1px dashed var(--term-line);
+	border: 1px dashed var(--line);
 	border-radius: var(--radius);
 	color: var(--muted);
 	font-family: var(--mono);
