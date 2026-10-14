@@ -13,6 +13,7 @@ from . import __version__, environment, mcp, secrets
 from .adapters import ADAPTERS
 from .adapters import claude as claude_adapter
 from .adapters import linear as linear_adapter
+from .adapters import supabase as supabase_adapter
 from .adapters import vercel as vercel_adapter
 from .adapters.aws import ACCOUNT_RE, parse_envrc, read_profile
 from .checks import Check, mask_account
@@ -68,7 +69,7 @@ def _not_active() -> str:
 
     folder = canonical(shim_dir())
     if not (folder / MARKER).is_file():
-        return "Keyfit is not set up yet, so claude, codex, aws, gh and vercel still run without checks.\n" \
+        return "Keyfit is not set up yet, so claude, codex, aws, gh, vercel and supabase still run without checks.\n" \
                "  Set it up: keyfit setup --rc, then open a new terminal"
     if folder not in [canonical(e) for e in os.environ.get("PATH", "").split(os.pathsep) if e]:
         return f"{tilde(folder)} is not on PATH in this terminal, so tools here still run without checks.\n" \
@@ -234,6 +235,24 @@ def _offer_vercel(name: str, base: dict) -> None:
         cmd_add_vercel(argparse.Namespace(**base, name=None, config_dir=None, new=False, team=None))
 
 
+def _offer_supabase(name: str, base: dict) -> None:
+    from .realbin import find_real
+
+    env = dict(os.environ)
+    if find_real("supabase", env, skip_wrappers=True) is None:
+        print("Supabase: supabase not found on PATH — skipped")
+        return
+    where = supabase_adapter.cli_signed_in(env)  # its token is read only after a yes
+    if not where:
+        print("Supabase: the supabase CLI is not signed in — later: keyfit add supabase (paste a token from "
+              f"{supabase_adapter.TOKENS_PAGE})")
+        return
+    print(f"Supabase: the supabase CLI is signed in ({where}). Keyfit can keep a copy of that login's token "
+          "in the Keychain (macOS may ask to allow access once).")
+    if _yes(f"Use this Supabase login for {name}?"):
+        cmd_add_supabase(argparse.Namespace(**base, name=None, token=None, cli=True, org=None))
+
+
 def _offer_linear(name: str, base: dict) -> None:
     if not secrets.can_store():
         print("Linear: later, with a key in an environment variable: keyfit add linear --key env:<VARIABLE>")
@@ -245,7 +264,8 @@ def _offer_linear(name: str, base: dict) -> None:
 
 
 GUIDED = (("aws", "AWS", _offer_aws), ("github", "GitHub", _offer_github), ("claude", "Claude", _offer_claude),
-          ("codex", "Codex", _offer_codex), ("vercel", "Vercel", _offer_vercel), ("linear", "Linear", _offer_linear))
+          ("codex", "Codex", _offer_codex), ("vercel", "Vercel", _offer_vercel),
+          ("supabase", "Supabase", _offer_supabase), ("linear", "Linear", _offer_linear))
 
 
 def _guided_init(args, name: str, root: Path) -> int:
@@ -308,7 +328,7 @@ def cmd_status(args) -> int:
     checks = []
     if not r.project.connections:
         print("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add aws|github|"
-              "claude|codex|vercel|linear …")
+              "claude|codex|vercel|supabase|linear …")
     else:
         env = environment.build(r.project)
         checks = environment.verify(r.project, env, remote=not args.offline)  # fresh; refreshes the cache
@@ -689,6 +709,128 @@ def cmd_add_vercel(args) -> int:
     return 0
 
 
+def _supabase_org(token: str, wanted: str | None, start: Path | None) -> tuple[tuple[str, str] | None, str]:
+    """(slug, name) of the organization the project uses: --org (slug or name), else the organization of the project
+    the folder is linked to, else the token's only one, else one picked at the terminal. Labels only."""
+    adapter = ADAPTERS["supabase"]
+    orgs, reason, _ = adapter.organizations(token)
+    if orgs is None:
+        return None, reason
+    if not orgs:
+        return None, "this login belongs to no Supabase organization"
+    listing = ", ".join(f"{title} ({slug})" for slug, title in orgs.items())
+    if wanted:
+        found = [(s, t) for s, t in orgs.items() if wanted == s or wanted.lower() == t.lower()]
+        return (found[0], "") if found else (None, f"this login has no organization {wanted} (it has {listing})")
+    ref, source = supabase_adapter.linked_ref(start, os.environ) if start else (None, "")
+    if ref and supabase_adapter.REF.fullmatch(ref):
+        project, reason, _ = adapter.project(token, ref)
+        if project is not None:
+            return (project["org"], orgs.get(project["org"], project["org"])), ""
+        if reason != "not found":  # not found: a preview branch, which names no organization
+            return None, f"{source} links this folder to project {ref}: {reason}"
+    if len(orgs) == 1:
+        return next(iter(orgs.items())), ""
+    if sys.stdin.isatty():
+        print("This login belongs to several Supabase organizations:")
+        options = [f"{title} ({slug})" for slug, title in orgs.items()]
+        picked = _choose("Organization of this project", options)
+        if picked:
+            return list(orgs.items())[options.index(picked)], ""
+    return None, f"this login belongs to {len(orgs)} organizations ({listing}): pick one with --org SLUG"
+
+
+def _account_name(text: str) -> str:
+    """A name Keyfit can store a Keychain item under: ASCII letters, digits and dashes."""
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "supabase"
+
+
+def cmd_add_supabase(args) -> int:
+    """Record which Supabase account (a token Keyfit keeps in the Keychain) and organization a project uses."""
+    reg = Registry.load(args.registry)
+    project = _project_from_args(reg, args)
+    if project is None:
+        return 1
+    if any(secrets.looks_like_key(v) or supabase_adapter.TOKEN.search(v or "") for v in (args.name, args.org)):
+        print("--name and --org take a short name, not a token: run `keyfit add supabase` and paste the token at the "
+              "hidden prompt (the token may now be in your shell history)", file=sys.stderr)
+        return 1
+    if args.name and not secrets.NAME.fullmatch(f"supabase-{args.name}"):
+        print("a name is letters, digits, '.', '_' and '-' (at most 55)", file=sys.stderr)
+        return 1
+    env, ref = dict(os.environ), None
+    if args.cli:  # a copy of the CLI's login: supabase keeps one login per Mac, Keyfit one token per account
+        if not secrets.can_store():
+            print(secrets.NOT_MACOS, file=sys.stderr)
+            return 1
+        token, where = supabase_adapter.read_cli_login(env)
+        if not token:
+            print(f"could not copy the supabase CLI's login: {where}\n  → sign in (supabase login, outside a "
+                  "project with a Supabase account), then: keyfit add supabase --cli", file=sys.stderr)
+            return 1
+    elif args.token is not None:
+        if secrets.looks_like_key(args.token) or supabase_adapter.TOKEN.search(args.token):
+            print("--token takes where the token lives (env:VAR or keychain:service/account), not the token itself: "
+                  "run `keyfit add supabase` without --token to paste it at a hidden prompt "
+                  "(the token may now be in your shell history)", file=sys.stderr)
+            return 1
+        ref = secrets.normalise(args.token)
+        token, where = secrets.resolve(ref, env), secrets.describe(ref)
+        if not token:
+            print(f"{where} is empty or missing in this shell.\n  Set it first, or paste the token instead "
+                  "(stored in the Keychain): keyfit add supabase", file=sys.stderr)
+            return 1
+    else:  # paste the token: checked with Supabase first, then stored in the Keychain
+        if not secrets.can_store():
+            print(secrets.NOT_MACOS, file=sys.stderr)
+            return 1
+        token = (_read_secret("Supabase access token (input hidden): ") or "").strip()
+        where = None
+        if not token:
+            print("no token given — paste it at the prompt, or pipe it on stdin", file=sys.stderr)
+            return 1
+    if not supabase_adapter.TOKEN.fullmatch(token):  # anything else is never sent to Supabase
+        print("that is not a Supabase access token (sbp_…), so it was not sent to Supabase — create one at "
+              "supabase.com/dashboard/account/tokens", file=sys.stderr)
+        return 1
+    here = resolve(".", reg).project
+    org, reason = _supabase_org(token, args.org, Path.cwd() if here and here.name == project.name else None)
+    if org is None:
+        fix = ("check the network and retry" if "did not answer" in reason else
+               "create a token at supabase.com/dashboard/account/tokens as a member of the project's organization")
+        print(f"could not read the organization: {reason}\n  → {fix}", file=sys.stderr)
+        return 1
+    slug, title = org
+    taken = reg.data["accounts"].get("supabase", {})
+    name = args.name
+    if not name:  # from the organization's name, which Supabase does not keep unique: never another org's account
+        base = name = _account_name(title)
+        n = 1
+        while isinstance(taken.get(name), dict) and taken[name].get("org") != slug:
+            n += 1
+            name = f"{base}-{n}"
+    copied = f", a copy of the supabase CLI's login ({where})" if args.cli else ""
+    if ref is None:
+        item = f"supabase-{name}"
+        reason = secrets.store(secrets.SERVICE, item, token)
+        if reason:
+            print(f"could not store the token in the Keychain: {reason}", file=sys.stderr)
+            return 1
+        reg.add_stored_secret(item)
+        ref = f"keychain:{secrets.SERVICE}/{item}"
+    before = taken.get(name) if isinstance(taken.get(name), dict) else None
+    reg.set_account("supabase", name, {"token": ref, "org": slug, "org_name": title})
+    reg.set_connection(project.name, "supabase", name)
+    reg.save()
+    print(f"{project.name}: supabase account '{name}' → organization {title} ({slug}) via {secrets.describe(ref)}"
+          f"{copied}")
+    others = sorted(p for p, body in reg.data["projects"].items() if p != project.name and body.get("supabase") == name)
+    if before and others and before.get("org") != slug:
+        print(f"  account '{name}' was organization {before.get('org_name') or before.get('org')}; it changed for "
+              f"{', '.join(others)} too")
+    return 0
+
+
 def cmd_run(args) -> int:
     """Run a command with the project's environment (its accounts, checked first)."""
     reg = Registry.load(args.registry)
@@ -726,7 +868,7 @@ NOT_MACOS = "Keyfit supports macOS for now (it stores keys in the Keychain); Lin
 # is Superset wrapper → Keyfit shim → real tool (Superset finds "the next claude"). Both move to the very front:
 # a login profile that prepends another folder after Superset set PATH (e.g. `brew shellenv` in ~/.zprofile)
 # must not put real tools ahead of the shims.
-SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel shims on PATH (written by `keyfit setup`).
+SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 () {
   local kf="@SHIMS@" ss="$HOME/.superset/bin"
@@ -736,7 +878,7 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel shims on PATH (writt
 
 # The same rule in POSIX sh, for bash (macOS ships 3.2): no arrays or `local`, so _kf_ variables unset at the
 # end; PATH is walked with parameter expansion (never word-split or globbed). Like zsh, it drops empty entries.
-SHELL_SH = """# Keyfit: put the claude/codex/aws/gh/vercel shims on PATH (written by `keyfit setup`).
+SHELL_SH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 _kf="@SHIMS@"; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
 while [ -n "$_kf_rest" ]; do
@@ -967,7 +1109,7 @@ def _remove_setup(args) -> int:
             folder.rmdir()  # only when nothing else is left in it
         except OSError:
             pass
-    print("Open a new terminal (or run: hash -r): claude, codex, aws, gh and vercel run directly again.")
+    print("Open a new terminal (or run: hash -r): claude, codex, aws, gh, vercel and supabase run directly again.")
     return 0
 
 
@@ -1081,7 +1223,7 @@ def cmd_doctor(args) -> int:
 
 
 START = """start here:
-  keyfit setup --rc     put Keyfit in front of claude, codex, aws, gh and vercel, then open a new terminal
+  keyfit setup --rc     put Keyfit in front of claude, codex, aws, gh, vercel and supabase, then open a new terminal
   keyfit init           inside a project's repository: register it and pick its accounts
   claude                starts with that project's accounts, checked
 something off? keyfit doctor
@@ -1098,7 +1240,7 @@ def build_parser() -> argparse.ArgumentParser:
     def command(parent, name: str, text: str):  # the one-line help is also the command's own --help description
         return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
 
-    p = command(sub, "setup", "write the claude/codex/aws/gh/vercel shims; with --rc also put them on PATH")
+    p = command(sub, "setup", "write the claude/codex/aws/gh/vercel/supabase shims; with --rc also put them on PATH")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
     p.add_argument("--rc", nargs="?", const="", metavar="FILE",
@@ -1116,7 +1258,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_setup)
 
     p = command(sub, "init", "register the current repository as a project, then offer the AWS, GitHub, Claude, "
-                             "Codex, Vercel and Linear accounts found on this Mac (imports `use aws` / "
+                             "Codex, Vercel, Supabase and Linear accounts found on this Mac (imports `use aws` / "
                              "LINEAR_API_KEY lines from its .envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
@@ -1172,6 +1314,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--team", help="team slug or ID the project deploys to (default: the team selected in that login)")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_vercel)
+    p = command(kinds, "supabase", "Supabase account (access token) and organization for this project")
+    p.add_argument("--name", help="short account name, reusable across projects (default: from the organization's name)")
+    where = p.add_mutually_exclusive_group()
+    where.add_argument("--token", help="env:VAR, keychain:service/account, or a bare variable name "
+                                       "(default: paste the token; it is verified, then stored in the Keychain)")
+    where.add_argument("--cli", action="store_true",
+                       help="copy the token of the supabase CLI's login (supabase login) into the Keychain")
+    p.add_argument("--org", help="organization slug or name (default: the linked project's, else the login's only one)")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_supabase)
     p = command(kinds, "linear", "Linear workspace and where its API key lives")
     p.add_argument("--key", help="env:VAR, keychain:service/account, or a bare variable name "
                                  "(default: paste the key; it is verified, then stored in the Keychain)")
