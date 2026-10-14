@@ -468,11 +468,6 @@ code {
 .tool-logo.wide {
 	width: 54px;
 }
-.tool-icon {
-	font-size: 32px;
-	width: 32px;
-	height: 32px;
-}
 .tool-name {
 	font-family: var(--mono);
 	font-size: 12px;

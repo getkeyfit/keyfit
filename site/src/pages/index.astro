@@ -40,7 +40,7 @@ const tools = [
 	{ name: 'Linear', logo: 'linear' },
 	{ name: 'GitHub', logo: 'github' },
 	{ name: 'Claude Code', logo: 'claude' },
-	{ name: 'Codex', icon: true },
+	{ name: 'Codex', logo: 'openai' },
 	{ name: 'Vercel', logo: 'vercel' },
 ];
 
@@ -179,11 +179,7 @@ const faq = [
 					<ul class="tools-grid">
 						{tools.map((tool) => (
 							<li>
-								{tool.icon ? (
-									<Icon name="terminal" class="tool-icon" />
-								) : (
-									<span class:list={['tool-logo', { wide: tool.wide }]} style={`--logo:url(/logos/${tool.logo}.svg)`} />
-								)}
+								<span class:list={['tool-logo', { wide: tool.wide }]} style={`--logo:url(/logos/${tool.logo}.svg)`} />
 								<span class="tool-name">{tool.name}</span>
 							</li>
 						))}
