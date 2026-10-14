@@ -93,13 +93,15 @@ def signed_in(db: Path) -> tuple[dict | None, str]:
 
 def auth_list(env: dict, timeout: float = 30) -> tuple[list | None, str]:
     """`opencode auth list --standalone --format json` in *env*, from the real opencode (never a wrapper or shim),
-    with an empty configuration: no MCP server or plugin starts, no model list is fetched."""
+    with an empty configuration: no MCP server or plugin starts, no model list or update is fetched. It needs no
+    network (OpenCode 2.0.25 answered with every outbound connection but localhost blocked)."""
     binary = find_real("opencode", env, skip_wrappers=True)
     if binary is None:
         return None, "opencode not found on PATH"
     with tempfile.TemporaryDirectory(prefix="keyfit-opencode-") as empty:
         quiet = {k: v for k, v in env.items() if k not in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT")}
-        quiet.update(OPENCODE_CONFIG_DIR=empty, OPENCODE_DISABLE_PROJECT_CONFIG="1", OPENCODE_DISABLE_MODELS_FETCH="1")
+        quiet.update(OPENCODE_CONFIG_DIR=empty, OPENCODE_DISABLE_PROJECT_CONFIG="1", OPENCODE_DISABLE_MODELS_FETCH="1",
+                     OPENCODE_DISABLE_AUTOUPDATE="1")
         try:
             out = subprocess.run([binary, "auth", "list", "--standalone", "--format", "json"], env=quiet, cwd=empty,
                                  capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, check=False)
@@ -182,11 +184,13 @@ class OpenCodeAdapter(Adapter):
                     stored[entry["id"]] = str(entry.get("name") or entry["id"])
                 elif item.get("type") == "env":
                     shell.append((entry["id"], str(item.get("name"))))
-        missing = [p for p in wanted if p not in stored] if wanted else ([] if stored else ["any provider"])
+        missing = [p for p in wanted if p not in stored]
         if missing:
             return Check(self.kind, "fail", label,
                          f"OpenCode does not see the {', '.join(missing)} sign-in in {tilde(db)}",
-                         sign_in(db, env, missing[0] if wanted else None))
+                         sign_in(db, env, missing[0]))
+        if not stored:
+            return Check(self.kind, "fail", label, f"OpenCode sees no sign-in in {tilde(db)}", sign_in(db, env))
         competing = [(stored[p], var) for p, var in shell if p in stored]
         if competing:
             name, var = competing[0]
