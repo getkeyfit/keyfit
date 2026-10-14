@@ -1,5 +1,5 @@
-"""The shim in front of `claude`, `codex`, `opencode`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex`
-(ambient mode).
+"""The shim in front of `claude`, `codex`, `opencode`, `copilot`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and
+`convex` (ambient mode).
 
 Three outcomes only:
   folder not registered      → run the real tool unchanged
@@ -8,8 +8,8 @@ Three outcomes only:
                                is only a sign-in, offer to run it and then start the tool)
 
 Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel`, `supabase`, `wrangler` and
-`convex` stay on that session's project even after `cd` elsewhere; `claude`, `codex` and `opencode`
-re-resolve from the folder, since starting a new agent elsewhere is deliberate.
+`convex` stay on that session's project even after `cd` elsewhere; `claude`, `codex`, `opencode` and
+`copilot` re-resolve from the folder, since starting a new agent elsewhere is deliberate.
 Bypass once: KEYFIT_DISABLE=1 <tool> …
 """
 
@@ -21,15 +21,15 @@ import sys
 from pathlib import Path
 
 from . import cache, environment, mcp, secrets
-from .adapters import ADAPTERS, cloudflare, convex, opencode, supabase, vercel
+from .adapters import ADAPTERS, cloudflare, convex, copilot, opencode, supabase, vercel
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
 from .resolve import resolve
 
-TOOLS = ("claude", "codex", "opencode", "aws", "gh", "vercel", "supabase", "wrangler", "convex")
+TOOLS = ("claude", "codex", "opencode", "copilot", "aws", "gh", "vercel", "supabase", "wrangler", "convex")
 INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "npm install -g @openai/codex",
-           "opencode": "brew install opencode",
+           "opencode": "brew install opencode", "copilot": "npm install -g @github/copilot",
            "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel",
            "supabase": "brew install supabase/tap/supabase",
            "wrangler": "npm install -g wrangler   (projects that have it run their own: npx wrangler …)",
@@ -40,9 +40,9 @@ MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github
        "vercel": "keyfit add vercel"}
 RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",),
             "wrangler": ("cloudflare",), "convex": ("convex",), "claude": None, "codex": None,
-            "opencode": None}
+            "opencode": None, "copilot": None}
 # The agents: they start with all of the project's accounts, checked.
-AGENTS = ("claude", "codex", "opencode")
+AGENTS = ("claude", "codex", "opencode", "copilot")
 # Tools that run unchanged in a project without an account of their kind: Supabase is often used only locally
 # (supabase start), with no account at all, and so are wrangler (wrangler dev) and convex (an anonymous local
 # deployment).
@@ -66,6 +66,11 @@ OPENCODE_NO_SERVER = {"upgrade", "update", "uninstall"}
 # Commands that take --standalone: a private server, with the session's environment and the project's sign-ins.
 OPENCODE_STANDALONE = {None, "run", "mini", "models", "stats", "session", "auth", "api", "reload"}
 OPENCODE_VALUED = {"--server", "--session", "-s", "--prompt", "--log-level", "--completions"}
+COPILOT_SUBCOMMANDS = {"app", "login", "help", "init", "config", "update", "version", "workflow", "sessions",
+                       "memories", "plugin", "mcp", "skill", "instruction", "lsp", "sandbox", "completion"}
+COPILOT_SESSIONS = {None, "init", "workflow"}  # they run the agent: its MCP servers start
+# Copilot's options whose values matter to Keyfit (the folder it works in, where its servers come from).
+COPILOT_VALUED = ("-C", "--config-dir", "--additional-mcp-config", "--enable-mcp-server")
 # Sign-in and setup commands always run — they are how a failed check gets fixed.
 LOGIN_COMMANDS = {
     "aws": (("sso", "login"), ("sso", "logout"), ("login",), ("logout",), ("configure",)),
@@ -78,14 +83,17 @@ LOGIN_COMMANDS = {
                  ("auth", "delete"), ("auth", "list"), ("auth", "keyring")),
     "convex": (("login",), ("logout",)),  # not `login status`: it only reads the login
     "opencode": (("auth",),),
+    "copilot": (("login",),),
 }
 LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",),
                "supabase": ("supabase",), "wrangler": ("cloudflare",), "convex": ("convex",), "npx": ("convex",),
-               "opencode": ("opencode",)}
-# Variables sign-in commands run without: gh must manage its own tokens, and convex its own login (with the override
-# set, `convex login` would only say the injected token is valid). (`supabase login` runs only in a project without a
+               "opencode": ("opencode",), "copilot": ("copilot",)}
+# Variables sign-in commands run without: gh must manage its own tokens, Copilot CLI its own login (`copilot login`
+# takes a token from the environment instead of signing in), and convex its own login (with the override set,
+# `convex login` would only say the injected token is valid). (`supabase login` runs only in a project without a
 # Supabase account, where Keyfit has removed the token it set for another project, and nothing else.)
-LOGIN_SCRUB = {"gh": ("GH_TOKEN", "GITHUB_TOKEN"), "convex": (convex.OVERRIDE,), "npx": (convex.OVERRIDE,)}
+LOGIN_SCRUB = {"gh": ("GH_TOKEN", "GITHUB_TOKEN"), "copilot": (copilot.TOKEN, "GH_TOKEN", "GITHUB_TOKEN"),
+               "convex": (convex.OVERRIDE,), "npx": (convex.OVERRIDE,)}
 # Fixes that are nothing but a sign-in, which Keyfit offers to run when you start a tool yourself in a terminal
 # (None: one value such as a profile name). Every other fix, including gh's (it switches gh's active account), is
 # only printed. A variable a fix may set in front: Claude's and Codex's config folder of the account.
@@ -199,6 +207,8 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         return extra + args
     if tool == "opencode":
         return opencode_args(project, args, env, cwd, owners)
+    if tool == "copilot":
+        return copilot_args(project, args, env, cwd, owners)
     return args
 
 
@@ -287,10 +297,9 @@ def opencode_folder(args: list[str]) -> str | None:
     return None
 
 
-def opencode_folder_check(args: list[str], registry: Registry, project: Project | None) -> None:
-    """`opencode DIRECTORY` works in that folder with this folder's accounts: refuse when the two folders belong to
-    different projects (or only one is registered)."""
-    folder = opencode_folder(args)
+def folder_check(tool: str, folder: str | None, registry: Registry, project: Project | None) -> None:
+    """`opencode DIRECTORY` and `copilot -C DIRECTORY` work in that folder with this folder's accounts: refuse when
+    the two folders belong to different projects (or only one is registered)."""
     if folder is None:
         return
     there = resolve(folder, registry).project
@@ -298,11 +307,71 @@ def opencode_folder_check(args: list[str], registry: Registry, project: Project 
         return
     import shlex
 
-    raise Refused(f"keyfit: opencode not started: {printable(folder)} belongs to "
+    raise Refused(f"keyfit: {tool} not started: {printable(folder)} belongs to "
                   f"{there.name if there else 'no registered project'}, this folder to "
                   f"{project.name if project else 'no registered project'}, and the session would get this folder's "
-                  f"accounts.\n  Start it there: cd {shlex.quote(folder)} && opencode   "
-                  f"(bypass once: KEYFIT_DISABLE=1 opencode …)")
+                  f"accounts.\n  Start it there: cd {shlex.quote(folder)} && {tool}   "
+                  f"(bypass once: KEYFIT_DISABLE=1 {tool} …)")
+
+
+def copilot_options(args: list[str]) -> list[tuple[str, str | None]]:
+    """(option, value) of COPILOT_VALUED on the command line, in any form Copilot takes (`-C dir`, `-Cdir`,
+    `--config-dir=dir`); words after `--` are a prompt."""
+    out = []
+    for i, arg in enumerate(args):
+        if arg == "--":
+            break
+        for name in COPILOT_VALUED:
+            if arg == name:
+                out.append((name, args[i + 1] if i + 1 < len(args) else None))
+            elif arg.startswith(name + "=") or (name == "-C" and arg.startswith("-C") and len(arg) > 2):
+                out.append((name, arg[len(name):].removeprefix("=")))
+    return out
+
+
+def copilot_folder(args: list[str], cwd: Path | None = None) -> str | None:
+    """The folder `copilot -C DIRECTORY` works in (relative to *cwd*, default the current folder), when it is one."""
+    folders = [value for name, value in copilot_options(args) if name == "-C" and value]
+    return folders[-1] if folders and os.path.isdir(os.path.join(cwd or os.curdir, folders[-1])) else None
+
+
+def copilot_args(project: Project, args: list[str], env: dict, cwd: Path, owners: dict | None = None) -> list[str]:
+    """Sessions (and `init` and `workflow`, which run the agent) start with every MCP server the project must not
+    see switched off by name, for the folder Copilot works in; `--enable-mcp-server` cannot bring one back."""
+    sub = subcommand(args, COPILOT_SUBCOMMANDS)
+    if sub == "login":  # an option before it hid it from the sign-in commands (`copilot -C DIR login`)
+        copilot_login_check(project)
+        for var in LOGIN_SCRUB["copilot"]:
+            env.pop(var, None)
+        return args
+    if sub not in COPILOT_SESSIONS:
+        return args
+    given = copilot_options(args)
+    folder = copilot_folder(args, cwd)
+    config = [value for name, value in given if name == "--config-dir" and value]
+    names = mcp.copilot_hidden(project, env, (cwd / folder).resolve() if folder else cwd, owners,
+                               config_dir=str(cwd / Path(config[-1]).expanduser()) if config else None,
+                               additional=[value for name, value in given if name == "--additional-mcp-config" and value])
+    for name, value in given:
+        if name == "--enable-mcp-server" and value in names:
+            raise Refused(f"keyfit: this folder belongs to {project.name}; refusing --enable-mcp-server "
+                          f"{printable(value)}: that MCP server belongs to another project.\n"
+                          f"  Bypass once: KEYFIT_DISABLE=1 copilot …")
+    return [f"--disable-mcp-server={name}" for name in names] + args
+
+
+def copilot_login_check(project: Project) -> None:
+    """`copilot login` changes only Copilot's own login, which a project with a Copilot account does not use (Keyfit
+    hands Copilot gh's token for the account): refuse there rather than seem to work, and name the sign-in that
+    counts."""
+    conn = project.connections.get("copilot")
+    if not isinstance(conn, dict):
+        return  # no Copilot account: Copilot's own login is what copilot uses here
+    raise Refused(f"keyfit: this folder belongs to {project.name}, whose Copilot CLI runs as GitHub "
+                  f"{printable(conn.get('login', '?'))} with the token gh keeps for it; `copilot login` would change "
+                  f"only Copilot's own login, which {project.name} does not use.\n"
+                  f"  Sign gh in instead: {ADAPTERS['copilot'].login_fix(conn)}\n"
+                  f"  Bypass once: KEYFIT_DISABLE=1 copilot …")
 
 
 def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
@@ -678,8 +747,8 @@ def main(argv: list[str]) -> int:
             raise Refused(f"keyfit: this session belongs to project {printable(pinned)}, which is not in the registry "
                           f"(renamed or removed?), so {tool} was not started.\n  Start the session again, or bypass "
                           f"once: KEYFIT_DISABLE=1 {tool} …")
-        if tool == "opencode":
-            opencode_folder_check(args, registry, project)
+        if tool in ("opencode", "copilot"):
+            folder_check(tool, opencode_folder(args) if tool == "opencode" else copilot_folder(args), registry, project)
         if project is None:  # not a registered project: exactly as before Keyfit
             os.execve(real, [tool, *(opencode_private(args, env) if tool == "opencode" else args)], env)
 
@@ -693,6 +762,8 @@ def main(argv: list[str]) -> int:
                 wrangler_login_check(project, args, registry, env)
             if tool == "convex":
                 convex_login_check(project, args)
+            if tool == "copilot":
+                copilot_login_check(project)
             login_env = login_environment(tool, project, env)
             if tool == "vercel":  # `vercel login` signs in to the project's folder
                 args = vercel_login_args(project, args, login_env)

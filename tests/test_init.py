@@ -112,7 +112,7 @@ class Machine(unittest.TestCase):
         for name, text in (("gh", FAKE_GH), ("claude", FAKE_CLAUDE), ("aws", FAKE_AWS), ("codex", "#!/bin/sh\n"),
                            ("vercel", "#!/bin/sh\nexit 97\n"), ("supabase", "#!/bin/sh\nexit 97\n"),
                            ("wrangler", "#!/bin/sh\nexit 97\n"), ("convex", "#!/bin/sh\nexit 97\n"),
-                           ("opencode", "#!/bin/sh\nexit 97\n")):
+                           ("opencode", "#!/bin/sh\nexit 97\n"), ("copilot", "#!/bin/sh\nexit 97\n")):
             executable(self.bin / name, text)
         self.stub = self.tmp / "stub"
         self.stub.mkdir()
@@ -139,6 +139,8 @@ class Machine(unittest.TestCase):
                 mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
                 mock.patch.object(ADAPTERS["vercel"], "fetch", vercel_api),
                 mock.patch.object(ADAPTERS["github"], "fetch",
+                                  lambda token, timeout: (200, {"login": who[token]}) if token in who else (401, {})),
+                mock.patch.object(ADAPTERS["copilot"], "fetch",
                                   lambda token, timeout: (200, {"login": who[token]}) if token in who else (401, {})),
                 mock.patch.object(ADAPTERS["linear"], "fetch", lambda key, timeout: (
                     (200, {"data": {"organization": {"urlKey": workspaces[key]}}}) if key in workspaces
@@ -179,7 +181,7 @@ class Machine(unittest.TestCase):
 
 class GuidedInitTests(Machine):
     def test_new_user_gets_a_fully_configured_project_from_init_alone(self):
-        code, out, err = self.init("9", "1", "2", "y", "y", "y", password=KEY)
+        code, out, err = self.init("9", "1", "2", "y", "y", "y", "y", password=KEY)
         self.assertEqual(code, 0, out + err)
         self.assertIn("  1. acme-dev\n  2. globex\n", out)  # `default` is never offered
         self.assertIn("type a number from 1-2", out)
@@ -188,19 +190,21 @@ class GuidedInitTests(Machine):
         self.assertIn("Codex: signed in with ChatGPT pro in ~/.codex", out)
         self.assertEqual(self.asked, ["AWS profile for acme [1-2, Enter to skip]: "] * 2 + [
             "GitHub account for acme [1-2, Enter to skip]: ", "Use this Claude login for acme? [y/N] ",
-            "Use this Codex login for acme? [y/N] ", "Add a Linear API key for acme? [y/N] "])
+            "Use this Codex login for acme? [y/N] ", "Start Copilot CLI in acme as its GitHub account hubot? [y/N] ",
+            "Add a Linear API key for acme? [y/N] "])
         self.assertEqual(self.hidden, ["Linear API key (input hidden): "])
 
         reg = self.registry()
         project = reg["projects"]["acme"]
         self.assertEqual(project["aws"], {"profile": "acme-dev", "account": "123456789012"})
-        self.assertEqual((project["github"], project["claude"], project["codex"]), ("hubot", "work", "pro"))
+        self.assertEqual((project["github"], project["claude"], project["codex"], project["copilot"]),
+                         ("hubot", "work", "pro", "hubot"))
         self.assertEqual(project["linear"], {"workspace": "acme", "key": "keychain:keyfit/linear-acme"})
         self.assertEqual(reg["accounts"]["github"]["hubot"], {"login": "hubot", "email": "me@acme.io"})
         self.assertEqual(reg["accounts"]["claude"]["work"]["org_name"], "Work")
 
         status = out[out.index("\nacme\n"):]  # ends with `keyfit status`
-        for kind in ("aws", "github", "claude", "codex", "linear"):
+        for kind in ("aws", "github", "claude", "codex", "copilot", "linear"):
             self.assertRegex(status, rf"✔ {kind}\s")
         self.assertNotIn("✘", out)
         self.assertEqual(self.sts.read_text(), "xx")  # the account asked once, then confirmed by the status check
@@ -238,7 +242,7 @@ class GuidedInitTests(Machine):
         self.assertEqual(code, 0, out + err)
         self.assertEqual(list(self.registry()["projects"]["acme"]), ["roots"])
         self.assertIn("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add "
-                      "aws|github|claude|codex|opencode|vercel|supabase|cloudflare|convex|linear …\n"
+                      "aws|github|claude|codex|opencode|copilot|vercel|supabase|cloudflare|convex|linear …\n"
                       "  aws, gh and vercel won't start here until mapped: keyfit add aws|github|vercel …\n", out)
         self.assertEqual(self.hidden, [])
         self.assertEqual(self.sts.read_text(), "")
@@ -256,8 +260,8 @@ class GuidedInitTests(Machine):
     def test_without_a_terminal_or_with_yes_nothing_is_asked(self):
         expected = (f"Registered project 'acme' → {self.repo}\n"
                     "Worktrees of this repository resolve to it automatically. Check it with: keyfit status\n"
-                    "Keyfit is not set up yet, so claude, codex, opencode, aws, gh, vercel, supabase, wrangler and convex "
-                    "still run without checks.\n"
+                    "Keyfit is not set up yet, so claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler "
+                    "and convex still run without checks.\n"
                     "  Set it up: keyfit setup --rc, then open a new terminal\n")
         self.assertEqual(self.init(stdin=io.StringIO("1\ny\n")), (0, expected, ""))
         self.assertEqual(self.init(argv=["--yes"]), (0, expected, ""))
@@ -378,7 +382,7 @@ class MessagesTests(Machine):
         self.assertEqual((code, err), (1, ""))
         self.assertIn("✘ github    octocta   no account [accounts.github.octocta]\n"
                       "    → map it again: keyfit add github …", out)
-        self.assertRegex(out, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, opencode, "
+        self.assertRegex(out, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, opencode, copilot, "
                               r"github, vercel, supabase, cloudflare, convex\)")
         self.assertIn("✘ aws       acme-dev → ?   the expected account must be a 12-digit AWS account ID", out)
         self.assertIn("  vercel won't start here until mapped: keyfit add vercel …\n", out)
@@ -481,7 +485,7 @@ class DoctorTests(Machine):
         self.assertEqual(code, 0, out)
         lines = out.splitlines()
         self.assertEqual([line.split()[1] for line in lines[:-1]],
-                         ["macOS", "python", "shims", "PATH", "claude", "codex", "opencode", "aws", "gh", "vercel",
+                         ["macOS", "python", "shims", "PATH", "claude", "codex", "opencode", "copilot", "aws", "gh", "vercel",
                           "supabase", "wrangler", "convex", "registry", "keychain", "project"])
         self.assertTrue(all(line.startswith("  ✔ ") for line in lines[:-1]), out)
         self.assertIn("first, before every real tool", out)
@@ -508,7 +512,7 @@ class DoctorTests(Machine):
         superset.mkdir(parents=True)
         code, out = self.doctor(self.bin, self.shims)
         self.assertEqual(code, 1)
-        self.assertIn(f"{self.bin} comes first: claude, codex, opencode, aws, gh, vercel, supabase, wrangler, convex would run without Keyfit", out)
+        self.assertIn(f"{self.bin} comes first: claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler, convex would run without Keyfit", out)
         self.assertIn("→ make Keyfit's line (`…  # keyfit: …`) the last line of your shell startup file, "
                       "then open a new terminal", out)
         code, out = self.doctor(self.shims, superset, self.bin)
