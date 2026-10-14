@@ -38,6 +38,9 @@ def build(project: Project, base_env: dict | None = None, kinds=None) -> dict:
     """Start from the given environment, then let the selected adapters scrub and set their variables."""
     env = dict(os.environ if base_env is None else base_env)
     env["KEYFIT_PROJECT"] = project.name
+    for kind, adapter in ADAPTERS.items():  # a session of another project may have left its credentials behind
+        if kind not in project.connections and (kinds is None or kind in kinds):
+            adapter.forget(env)
     labels = []
     for kind, conn in _selected(project, kinds):
         if unusable(kind, conn) is None:  # an unusable one fails its check; nothing is injected for it
