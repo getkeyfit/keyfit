@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Convex, the eighth tool.** `convex` and `npx convex` use the project's Convex account. The convex
+  CLI keeps one login per Mac (`~/.convex/config.json`) and has no account switch, so Keyfit hands each
+  session the project's token in `CONVEX_OVERRIDE_ACCESS_TOKEN`, which the CLI takes before its own
+  login and before deploy keys. An account is the CLI's own login (`keyfit add convex --cli`, read
+  whenever a session starts) or a token Keyfit keeps in the Keychain (`--copy` copies the CLI's current
+  login, or paste one; `--token env:VAR`), plus the team. Before a start, Convex must accept the token
+  and list the team (`GET api.convex.dev/api/teams`, what `npx convex login status` shows), and the
+  deployment the folder points at (`CONVEX_DEPLOYMENT` or a deploy key, from `.env.local` or `.env`)
+  must belong to that team. Inherited `CONVEX_DEPLOYMENT`, `CONVEX_DEPLOY_KEY` and
+  `CONVEX_DEPLOYMENT_TOKEN` that the folder's files disagree with are removed, and so is
+  `CONVEX_PROVISION_HOST`. Inside a project, `convex` refuses `--admin-key`, another `--team`, and
+  another team's deployment named with `--deployment`, `--deployment-name` or `--env-file`;
+  `convex login` and `logout` are refused where Keyfit keeps the project's token. When the account is
+  the CLI's own login and it expired, `Sign in now?` runs `npx convex login --force`. A project without
+  a Convex account runs `convex` as before. `keyfit init` offers the CLI's login; `setup` writes eight
+  shims and `doctor` checks eight tools (a convex used only through npx is fine).
 - **Cloudflare, the seventh tool.** `wrangler` uses the project's Cloudflare account. wrangler keeps
   named sign-ins bound to folders since 4.106 (`wrangler auth create NAME`, `wrangler auth activate
   NAME DIR`), so Keyfit keeps no Cloudflare token: an account is a wrangler profile plus the expected
@@ -41,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `keyfit init` offers the CLI's login; `setup` writes six shims and `doctor` checks six tools.
 - **`Sign in now? [Y/n]`.** When you start a tool yourself in a terminal and every failed check is fixed
   by a plain sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`,
-  `wrangler auth create NAME`),
+  `wrangler auth create NAME`, `npx convex login --force`),
   Keyfit offers to run it, checks again and starts the tool. Without a terminal (agents, scripts, CI)
   nothing is asked. gh's sign-in is never run for you, since it switches gh's active account.
 
