@@ -1,4 +1,4 @@
-"""The shim in front of `claude`, `codex`, `aws`, `gh`, `vercel` and `supabase` (ambient mode).
+"""The shim in front of `claude`, `codex`, `aws`, `gh`, `vercel`, `supabase` and `wrangler` (ambient mode).
 
 Three outcomes only:
   folder not registered      → run the real tool unchanged
@@ -6,8 +6,8 @@ Three outcomes only:
   a check fails              → do not run it; print what is wrong and the fix (in a terminal, when the fix
                                is only a sign-in, offer to run it and then start the tool)
 
-Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel` and `supabase` stay on
-that session's project even after `cd` elsewhere; `claude` and `codex` re-resolve
+Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel`, `supabase` and `wrangler`
+stay on that session's project even after `cd` elsewhere; `claude` and `codex` re-resolve
 from the folder, since starting a new agent elsewhere is deliberate.
 Bypass once: KEYFIT_DISABLE=1 <tool> …
 """
@@ -20,25 +20,26 @@ import sys
 from pathlib import Path
 
 from . import cache, environment, mcp, secrets
-from .adapters import ADAPTERS, supabase, vercel
+from .adapters import ADAPTERS, cloudflare, supabase, vercel
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
 from .resolve import resolve
 
-TOOLS = ("claude", "codex", "aws", "gh", "vercel", "supabase")
+TOOLS = ("claude", "codex", "aws", "gh", "vercel", "supabase", "wrangler")
 INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "npm install -g @openai/codex",
            "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel",
-           "supabase": "brew install supabase/tap/supabase"}
+           "supabase": "brew install supabase/tap/supabase",
+           "wrangler": "npm install -g wrangler   (projects that have it run their own: npx wrangler …)"}
 # How to map the one account `aws`, `gh` and `vercel` need inside a project before they start there.
 MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github --login <login>",
        "vercel": "keyfit add vercel"}
-RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",), "claude": None,
-            "codex": None}
+RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",),
+            "wrangler": ("cloudflare",), "claude": None, "codex": None}
 # Tools that run unchanged in a project without an account of their kind: Supabase is often used only locally
-# (supabase start), with no account at all.
-OPTIONAL = ("supabase",)
-PINNED = ("aws", "gh", "vercel", "supabase")
+# (supabase start), with no account at all, and so is wrangler (wrangler dev).
+OPTIONAL = ("supabase", "wrangler")
+PINNED = ("aws", "gh", "vercel", "supabase", "wrangler")
 MAX_DEPTH = 6
 CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs",
                       "mcp", "plugin", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update", "help"}
@@ -55,9 +56,11 @@ LOGIN_COMMANDS = {
     "gh": (("auth",),),
     "vercel": (("login",), ("logout",), ("switch",), ("whoami",), ("teams",)),
     "supabase": (("login",), ("logout",)),
+    "wrangler": (("login",), ("logout",), ("whoami",), ("auth", "create"), ("auth", "activate"), ("auth", "deactivate"),
+                 ("auth", "delete"), ("auth", "list"), ("auth", "keyring")),
 }
 LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",),
-               "supabase": ("supabase",)}
+               "supabase": ("supabase",), "wrangler": ("cloudflare",)}
 # Variables sign-in commands run without: gh must manage its own tokens. (`supabase login` runs only in a project
 # without a Supabase account, where Keyfit has removed the token it set for another project, and nothing else.)
 LOGIN_SCRUB = {"gh": ("GH_TOKEN", "GITHUB_TOKEN")}
@@ -69,6 +72,7 @@ SIGN_INS = {
     "claude": (("auth", "login"),),
     "codex": (("login",),),
     "vercel": (("login",), ("login", "--global-config", None)),
+    "wrangler": (("auth", "create", None), ("login",)),
 }
 SIGN_IN_VARS = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}
 VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query", "--color", "--ca-bundle",
@@ -101,7 +105,8 @@ def positionals(args: list[str]) -> list[str]:
 
 
 def is_login_command(tool: str, args: list[str]) -> bool:
-    words = supabase.words(args) if tool == "supabase" else positionals(args)
+    words = supabase.words(args) if tool == "supabase" else cloudflare.words(args) if tool == "wrangler" \
+        else positionals(args)
     return any(tuple(words[:len(prefix)]) == prefix for prefix in LOGIN_COMMANDS.get(tool, ()))
 
 
@@ -144,6 +149,8 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         return vercel_args(project, args, env, cwd)
     if tool == "supabase":
         return supabase_args(project, args, env, cwd)
+    if tool == "wrangler":
+        return wrangler_args(project, args, env, cwd)
     if tool == "claude":
         if subcommand(args, CLAUDE_SUBCOMMANDS):
             return args
@@ -272,6 +279,87 @@ def supabase_login_check(project: Project, args: list[str]) -> None:
                   f"--cli)\n  Bypass once: KEYFIT_DISABLE=1 supabase …")
 
 
+def wrangler_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
+    """Refuse what would leave the project's wrangler profile or Cloudflare account (like `aws --profile`): another
+    --profile, and a --cwd or --config whose folder is bound to another profile or whose config names another
+    account_id. The folder's own binding and config were checked already."""
+    conn = project.connections["cloudflare"]
+    title = conn.get("account_name") or conn["account_id"]
+    refuse = (f"keyfit: this folder belongs to {project.name} (wrangler profile {conn['profile']}, Cloudflare account "
+              f"{printable(title)}); refusing")
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 wrangler …"
+    given = cloudflare.options(args)
+    asked = moved = config = None
+    for name, value in given:
+        if value is None:
+            continue
+        if name == "--profile":
+            if value != conn["profile"]:
+                raise Refused(f"{refuse} --profile {printable(value)}: it signs in as another wrangler profile.{bypass}")
+            asked = value
+        elif name == "--cwd":
+            moved = value
+        else:
+            config = value
+    if moved is None and config is None:
+        return args
+    base = os.path.join(cwd, moved) if moved else str(cwd)  # wrangler moves to --cwd first, then reads --config
+    path = Path(os.path.abspath(os.path.join(base, config))) if config else None
+    problem = cloudflare.mismatch(conn, path.parent if path else base, env, asked=asked, config=path)
+    if problem:
+        shown = " ".join(f"{name} {value}" for name, value in given if name != "--profile" and value is not None)
+        raise Refused(f"{refuse} {printable(shown)}: {problem[0]}.\n  → {problem[1]}{bypass}")
+    return args
+
+
+def wrangler_login_check(project: Project, args: list[str], registry: Registry, env: dict) -> None:
+    """wrangler's sign-in and binding commands run without checks (they are how a failed check gets fixed), except
+    those that would move a registered folder off its project's profile: `login`/`logout` (wrangler's default login
+    only) in a project with a named profile, `auth activate`/`deactivate` of a folder whose project uses another
+    profile, `auth create` of another project's profile and `auth delete` of any project's (it unbinds its folders)."""
+    words = cloudflare.words(args)
+    conn = project.connections.get("cloudflare")
+    own = conn.get("profile") if isinstance(conn, dict) else None
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 wrangler …"
+    if words[:1] in (["login"], ["logout"]):
+        if own and own != cloudflare.DEFAULT:
+            raise Refused(f"keyfit: this folder belongs to {project.name}, which uses wrangler profile {own}; "
+                          f"`wrangler {words[0]}` would change only wrangler's default login, which {project.name} does "
+                          f"not use.\n  Sign in again as {own}: wrangler auth create {own}{bypass}")
+        return
+    if words[:1] != ["auth"] or len(words) < 2:
+        return
+    users: dict[str, list[str]] = {}  # profile → the projects that use it
+    for other in registry.projects().values():
+        theirs = other.connections.get("cloudflare")
+        if isinstance(theirs, dict) and isinstance(theirs.get("profile"), str):
+            users.setdefault(theirs["profile"], []).append(other.name)
+    action, rest = words[1], words[2:]
+    name = rest[0] if rest else None
+    if action == "create" and name and [p for p in users.get(name, []) if p != project.name]:
+        others = ", ".join(p for p in users[name] if p != project.name)
+        raise Refused(f"keyfit: this folder belongs to {project.name}; refusing `wrangler auth create {printable(name)}`: "
+                      f"that profile is the sign-in of {others}.{bypass}")
+    if action == "delete" and name and users.get(name):
+        raise Refused(f"keyfit: refusing `wrangler auth delete {printable(name)}`: {', '.join(users[name])} "
+                      f"uses that profile (deleting it also unbinds its folders).{bypass}")
+    if action not in ("activate", "deactivate"):
+        return
+    target = (rest[1] if len(rest) > 1 else None) if action == "activate" else name
+    moved = [value for option, value in cloudflare.options(args) if option == "--cwd" and value]
+    folder = os.path.abspath(os.path.join(os.getcwd(), *moved[-1:], target or "."))
+    owner = resolve(folder, registry).project
+    theirs = owner.connections.get("cloudflare") if owner else None
+    if not isinstance(theirs, dict) or not isinstance(theirs.get("profile"), str):
+        return
+    if action == "activate" and name and name != theirs["profile"]:
+        raise Refused(f"keyfit: refusing `wrangler auth activate {printable(name)}` for {tilde(folder)}: that folder "
+                      f"belongs to {owner.name}, which uses wrangler profile {theirs['profile']}.{bypass}")
+    if action == "deactivate" and cloudflare.bindings(env).get(folder) == theirs["profile"]:
+        raise Refused(f"keyfit: refusing `wrangler auth deactivate` for {tilde(folder)}: {owner.name} uses wrangler "
+                      f"profile {theirs['profile']} there.{bypass}")
+
+
 def login_environment(tool: str, project: Project, env: dict) -> dict:
     """The environment a sign-in command runs with: the project's (so it signs in to the project's account), without
     the variables that would make the tool skip its own login."""
@@ -334,7 +422,8 @@ def offer_sign_in(failed: list, project: Project, env: dict) -> bool | None:
 
     for assignments, words in {(tuple(a.items()), tuple(w)): None for a, w in commands}:
         name = words[0]
-        real = find_real(name, env, skip_wrappers=True)
+        real = cloudflare.wrangler_bin(env, os.getcwd()) if name == "wrangler" else \
+            find_real(name, env, skip_wrappers=True)
         if real is None:
             _say([f"keyfit: {name} is not installed. Install it: {INSTALL[name]}"])
             return False
@@ -386,6 +475,8 @@ def main(argv: list[str]) -> int:
             # target the project's profile / account) but without checks
             if tool == "supabase":
                 supabase_login_check(project, args)
+            if tool == "wrangler":
+                wrangler_login_check(project, args, registry, env)
             login_env = login_environment(tool, project, env)
             if tool == "vercel":  # `vercel login` signs in to the project's folder
                 args = vercel_login_args(project, args, login_env)
@@ -395,7 +486,7 @@ def main(argv: list[str]) -> int:
                 os.execve(real, [tool, *args], environment.build(project, env, kinds=relevant))
             raise Refused(f"keyfit: project {project.name} has no {relevant[0]} account mapped, so {tool} was not "
                           f"started.\n  Map one: {MAP[relevant[0]]}   (bypass once: KEYFIT_DISABLE=1 {tool} …)")
-        run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel/supabase: only their own account
+        run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel/supabase/wrangler: only their own
         checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
         failed = [c for c in checks if c.failed]
         if failed:

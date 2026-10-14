@@ -12,11 +12,12 @@ from pathlib import Path
 from . import __version__, environment, mcp, secrets
 from .adapters import ADAPTERS
 from .adapters import claude as claude_adapter
+from .adapters import cloudflare as cloudflare_adapter
 from .adapters import linear as linear_adapter
 from .adapters import supabase as supabase_adapter
 from .adapters import vercel as vercel_adapter
 from .adapters.aws import ACCOUNT_RE, parse_envrc, read_profile
-from .checks import Check, mask_account
+from .checks import Check, mask_account, printable
 from .registry import Project, Registry, RegistryError, canonical, config_dir, default_path, tilde  # noqa: F401
 from .resolve import git_main_checkout, resolve
 from .shim import INSTALL, MAP, RELEVANT
@@ -69,7 +70,8 @@ def _not_active() -> str:
 
     folder = canonical(shim_dir())
     if not (folder / MARKER).is_file():
-        return "Keyfit is not set up yet, so claude, codex, aws, gh, vercel and supabase still run without checks.\n" \
+        return "Keyfit is not set up yet, so claude, codex, aws, gh, vercel, supabase and wrangler still run without " \
+               "checks.\n" \
                "  Set it up: keyfit setup --rc, then open a new terminal"
     if folder not in [canonical(e) for e in os.environ.get("PATH", "").split(os.pathsep) if e]:
         return f"{tilde(folder)} is not on PATH in this terminal, so tools here still run without checks.\n" \
@@ -253,6 +255,30 @@ def _offer_supabase(name: str, base: dict) -> None:
         cmd_add_supabase(argparse.Namespace(**base, name=None, token=None, cli=True, org=None))
 
 
+def _offer_cloudflare(name: str, base: dict) -> None:
+    env = dict(os.environ)
+    root = str(canonical(Registry.load(base["registry"]).get(name).roots[0]))
+    names = cloudflare_adapter.profiles(env)
+    used, where = cloudflare_adapter.bound(root, cloudflare_adapter.bindings(env))
+    if where is not None and used in names:  # the profile wrangler already uses here
+        print(f"Cloudflare: {tilde(root)} uses wrangler profile {used} (bound at {tilde(where)})")
+        if _yes(f"Use this wrangler profile for {name}?"):
+            cmd_add_cloudflare(argparse.Namespace(**base, profile=used, account=None, name=None))
+        return
+    config = cloudflare_adapter.find_config(root)
+    if config is None:
+        print("Cloudflare: no wrangler profile bound here and no wrangler config — skipped")
+        return
+    if not names:
+        print(f"Cloudflare: {tilde(config)} found, but wrangler has no sign-ins yet — later: wrangler auth create "
+              f"{_account_name(name, 'cloudflare')}, then: keyfit add cloudflare")
+        return
+    print(f"Cloudflare: {tilde(config)} found; no wrangler profile is bound to this folder yet "
+          f"(wrangler has {', '.join(names)})")
+    if _yes(f"Pick a wrangler profile for {name}?"):
+        cmd_add_cloudflare(argparse.Namespace(**base, profile=None, account=None, name=None))
+
+
 def _offer_linear(name: str, base: dict) -> None:
     if not secrets.can_store():
         print("Linear: later, with a key in an environment variable: keyfit add linear --key env:<VARIABLE>")
@@ -265,7 +291,8 @@ def _offer_linear(name: str, base: dict) -> None:
 
 GUIDED = (("aws", "AWS", _offer_aws), ("github", "GitHub", _offer_github), ("claude", "Claude", _offer_claude),
           ("codex", "Codex", _offer_codex), ("vercel", "Vercel", _offer_vercel),
-          ("supabase", "Supabase", _offer_supabase), ("linear", "Linear", _offer_linear))
+          ("supabase", "Supabase", _offer_supabase), ("cloudflare", "Cloudflare", _offer_cloudflare),
+          ("linear", "Linear", _offer_linear))
 
 
 def _guided_init(args, name: str, root: Path) -> int:
@@ -328,7 +355,7 @@ def cmd_status(args) -> int:
     checks = []
     if not r.project.connections:
         print("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add aws|github|"
-              "claude|codex|vercel|supabase|linear …")
+              "claude|codex|vercel|supabase|cloudflare|linear …")
     else:
         env = environment.build(r.project)
         checks = environment.verify(r.project, env, remote=not args.offline)  # fresh; refreshes the cache
@@ -740,9 +767,9 @@ def _supabase_org(token: str, wanted: str | None, start: Path | None) -> tuple[t
     return None, f"this login belongs to {len(orgs)} organizations ({listing}): pick one with --org SLUG"
 
 
-def _account_name(text: str) -> str:
+def _account_name(text: str, fallback: str = "supabase") -> str:
     """A name Keyfit can store a Keychain item under: ASCII letters, digits and dashes."""
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "supabase"
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or fallback
 
 
 def cmd_add_supabase(args) -> int:
@@ -831,6 +858,129 @@ def cmd_add_supabase(args) -> int:
     return 0
 
 
+def _cloudflare_profile(project: str, names: list[str], folder: str, env: dict) -> tuple[str | None, str]:
+    """The wrangler profile a project uses, when not given: the one bound to its folder, else the only one, else one
+    picked at the terminal."""
+    table = cloudflare_adapter.bindings(env)
+    used, where = cloudflare_adapter.bound(folder, table)
+    if where is not None or names == [used]:
+        return used, ""
+    if len(names) == 1:
+        return names[0], ""
+    if sys.stdin.isatty():
+        print("wrangler profiles on this Mac:")
+        options = []
+        for name in names:
+            dirs = [tilde(d) for d, p in table.items() if p == name]
+            options.append(f"{name}  (bound at {', '.join(dirs)})" if dirs else name)
+        picked = _choose(f"wrangler profile for {project}", options)
+        if picked:
+            return names[options.index(picked)], ""
+    return None, f"pick a wrangler profile with --profile NAME (this Mac has {', '.join(names)})"
+
+
+def _cloudflare_account(accounts: dict, wanted: str | None, profile: str, folder: str) -> tuple[tuple | None, str]:
+    """(ID, name) of the account the project deploys to: --account (ID or name), else the folder's account_id when
+    the profile reaches it, else the profile's only account, else one picked at the terminal."""
+    listing = ", ".join(f"{title} ({ident})" for ident, title in accounts.items())
+    if wanted:
+        found = [(i, t) for i, t in accounts.items() if wanted == i or wanted.lower() == t.lower()]
+        return (found[0], "") if found else (None, f"wrangler profile {profile} has no account {wanted} "
+                                                   f"(it reaches {listing})")
+    config = cloudflare_adapter.find_config(folder)
+    for where, value in (cloudflare_adapter.account_ids(config) or []) if config else []:
+        if not where and value in accounts:
+            return (value, accounts[value]), ""
+    if len(accounts) == 1:
+        return next(iter(accounts.items())), ""
+    if sys.stdin.isatty():
+        print(f"wrangler profile {profile} reaches several Cloudflare accounts:")
+        options = [f"{title} ({ident})" for ident, title in accounts.items()]
+        picked = _choose("Account of this project", options)
+        if picked:
+            return list(accounts.items())[options.index(picked)], ""
+    return None, f"wrangler profile {profile} reaches {len(accounts)} accounts ({listing}): pick one with --account ID"
+
+
+def cmd_add_cloudflare(args) -> int:
+    """Record which wrangler profile (a sign-in wrangler keeps) and Cloudflare account a project uses. Keyfit keeps no
+    token: the folder's binding picks wrangler's sign-in, Keyfit checks it and pins the account."""
+    import shlex
+    import subprocess
+
+    reg = Registry.load(args.registry)
+    project = _project_from_args(reg, args)
+    if project is None:
+        return 1
+    if args.name and not secrets.NAME.fullmatch(args.name):
+        print("a name is letters, digits, '.', '_' and '-'", file=sys.stderr)
+        return 1
+    env = dict(os.environ)
+    here = resolve(".", reg).project
+    folder = os.getcwd() if here and here.name == project.name else str(canonical(project.roots[0]))
+    names = cloudflare_adapter.profiles(env)
+    if not names:
+        print(f"wrangler has no sign-ins on this Mac yet.\n  → sign in with a profile for {project.name}: wrangler auth "
+              f"create {_account_name(project.name, 'cloudflare')}, then: keyfit add cloudflare", file=sys.stderr)
+        return 1
+    profile, reason = (args.profile, "") if args.profile else _cloudflare_profile(project.name, names, folder, env)
+    if profile is None:
+        print(reason, file=sys.stderr)
+        return 1
+    if profile not in names:
+        print(f"wrangler has no profile {printable(profile)} on this Mac (it has {', '.join(names)})\n"
+              f"  → sign in: {cloudflare_adapter.sign_in(profile)}", file=sys.stderr)
+        return 1
+    binary = cloudflare_adapter.wrangler_bin(env, folder)
+    if binary is None:
+        print(f"wrangler is not installed here or on PATH.\n  → {INSTALL['wrangler']}", file=sys.stderr)
+        return 1
+    accounts, reason = ADAPTERS["cloudflare"].accounts_of(binary, profile, env)
+    if not accounts:
+        fix = ("check the network and retry" if "answer" in reason else
+               f"{cloudflare_adapter.sign_in(profile)}   (as a member of the project's Cloudflare account)")
+        print(f"could not read the accounts of wrangler profile {profile}: {reason or 'it reaches none'}\n  → {fix}",
+              file=sys.stderr)
+        return 1
+    account, reason = _cloudflare_account(accounts, args.account, profile, folder)
+    if account is None:
+        print(reason, file=sys.stderr)
+        return 1
+    ident, title = account
+    taken = reg.data["accounts"].get("cloudflare", {})
+    name = args.name
+    if not name:  # the profile's name; never another profile's or account's record
+        base = name = profile if profile != cloudflare_adapter.DEFAULT else _account_name(title, "cloudflare")
+        n = 1
+        while isinstance(taken.get(name), dict) and (taken[name].get("profile"), taken[name].get("account_id")) \
+                != (profile, ident):
+            n += 1
+            name = f"{base}-{n}"
+    before = taken.get(name) if isinstance(taken.get(name), dict) else None
+    record = {"profile": profile, "account_id": ident, "account_name": title}
+    reg.set_account("cloudflare", name, record)
+    reg.set_connection(project.name, "cloudflare", name)
+    reg.save()
+    print(f"{project.name}: cloudflare account '{name}' → wrangler profile {profile}, account {title} ({ident})")
+    others = sorted(p for p, body in reg.data["projects"].items() if p != project.name and body.get("cloudflare") == name)
+    if before and others and (before.get("profile"), before.get("account_id")) != (profile, ident):
+        print(f"  account '{name}' was profile {before.get('profile')}, account {before.get('account_name')}; it "
+              f"changed for {', '.join(others)} too")
+    problem = cloudflare_adapter.mismatch({**record, "name": name}, folder, env)
+    if problem is None:
+        return 0
+    detail, fix = problem
+    print(f"  next: {detail}\n  → {fix}")
+    words = shlex.split(fix)
+    if words[:3] == ["wrangler", "auth", "activate"] and len(words) == 5 and sys.stdin.isatty() and _yes("Run it now?"):
+        command = [binary, *words[1:4], os.path.expanduser(words[4])]
+        done = subprocess.run(command, env=cloudflare_adapter.wrangler_env(env), stdin=subprocess.DEVNULL, check=False)
+        if done.returncode != 0:
+            print(f"wrangler auth activate did not finish; run it yourself: {fix}", file=sys.stderr)
+            return 1
+    return 0
+
+
 def cmd_run(args) -> int:
     """Run a command with the project's environment (its accounts, checked first)."""
     reg = Registry.load(args.registry)
@@ -868,7 +1018,7 @@ NOT_MACOS = "Keyfit supports macOS for now (it stores keys in the Keychain); Lin
 # is Superset wrapper → Keyfit shim → real tool (Superset finds "the next claude"). Both move to the very front:
 # a login profile that prepends another folder after Superset set PATH (e.g. `brew shellenv` in ~/.zprofile)
 # must not put real tools ahead of the shims.
-SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase shims on PATH (written by `keyfit setup`).
+SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase/wrangler shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 () {
   local kf="@SHIMS@" ss="$HOME/.superset/bin"
@@ -878,7 +1028,7 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase shims on PA
 
 # The same rule in POSIX sh, for bash (macOS ships 3.2): no arrays or `local`, so _kf_ variables unset at the
 # end; PATH is walked with parameter expansion (never word-split or globbed). Like zsh, it drops empty entries.
-SHELL_SH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase shims on PATH (written by `keyfit setup`).
+SHELL_SH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase/wrangler shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 _kf="@SHIMS@"; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
 while [ -n "$_kf_rest" ]; do
@@ -1109,7 +1259,8 @@ def _remove_setup(args) -> int:
             folder.rmdir()  # only when nothing else is left in it
         except OSError:
             pass
-    print("Open a new terminal (or run: hash -r): claude, codex, aws, gh, vercel and supabase run directly again.")
+    print("Open a new terminal (or run: hash -r): claude, codex, aws, gh, vercel, supabase and wrangler run directly "
+          "again.")
     return 0
 
 
@@ -1210,6 +1361,12 @@ def cmd_doctor(args) -> int:
         r = resolve(".", reg)
         if r.registered:
             checks.append(Check("project", "ok", r.project.name, r.how))
+            conn = r.project.connections.get("cloudflare")
+            if isinstance(conn, dict):  # which wrangler profile this folder resolves to, from files only
+                check = ADAPTERS["cloudflare"].local(conn, environment.build(r.project, env, kinds=("cloudflare",)))
+                if not check.failed:
+                    check = Check("cloudflare", "ok", check.label, f"{check.detail} · account {conn['account_id']}")
+                checks.append(check)
         else:  # outside a repository, `keyfit init` would register the whole folder (the home folder, say)
             fix = "keyfit init" if git_main_checkout(r.path) else "cd into a project's repository, then: keyfit init"
             checks.append(Check("project", "warn", "this folder", f"not registered ({r.how}): tools run here unchanged",
@@ -1223,7 +1380,8 @@ def cmd_doctor(args) -> int:
 
 
 START = """start here:
-  keyfit setup --rc     put Keyfit in front of claude, codex, aws, gh, vercel and supabase, then open a new terminal
+  keyfit setup --rc     put Keyfit in front of claude, codex, aws, gh, vercel, supabase and wrangler, then open a
+                        new terminal
   keyfit init           inside a project's repository: register it and pick its accounts
   claude                starts with that project's accounts, checked
 something off? keyfit doctor
@@ -1240,7 +1398,8 @@ def build_parser() -> argparse.ArgumentParser:
     def command(parent, name: str, text: str):  # the one-line help is also the command's own --help description
         return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
 
-    p = command(sub, "setup", "write the claude/codex/aws/gh/vercel/supabase shims; with --rc also put them on PATH")
+    p = command(sub, "setup", "write the claude/codex/aws/gh/vercel/supabase/wrangler shims; with --rc also put them "
+                              "on PATH")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
     p.add_argument("--rc", nargs="?", const="", metavar="FILE",
@@ -1258,8 +1417,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_setup)
 
     p = command(sub, "init", "register the current repository as a project, then offer the AWS, GitHub, Claude, "
-                             "Codex, Vercel, Supabase and Linear accounts found on this Mac (imports `use aws` / "
-                             "LINEAR_API_KEY lines from its .envrc, if any)")
+                             "Codex, Vercel, Supabase, Cloudflare and Linear accounts found on this Mac (imports "
+                             "`use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
     p.add_argument("-y", "--yes", action="store_true",
@@ -1324,6 +1483,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--org", help="organization slug or name (default: the linked project's, else the login's only one)")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_supabase)
+    p = command(kinds, "cloudflare", "wrangler profile (sign-in) and Cloudflare account for this project")
+    p.add_argument("--profile", help="a wrangler auth profile (wrangler auth create NAME; default: the one bound to "
+                                     "this folder, else the only one, else pick one)")
+    p.add_argument("--account", help="account ID or name the project deploys to (default: account_id in its wrangler "
+                                     "config, else the profile's only account)")
+    p.add_argument("--name", help="short account name, reusable across projects (default: the profile's name)")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_cloudflare)
     p = command(kinds, "linear", "Linear workspace and where its API key lives")
     p.add_argument("--key", help="env:VAR, keychain:service/account, or a bare variable name "
                                  "(default: paste the key; it is verified, then stored in the Keychain)")
