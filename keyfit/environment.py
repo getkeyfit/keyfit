@@ -42,7 +42,8 @@ def build(project: Project, base_env: dict | None = None, kinds=None) -> dict:
         if kind not in project.connections and (kinds is None or kind in kinds):
             adapter.forget(env)
     labels = []
-    for kind, conn in _selected(project, kinds):
+    # Copilot CLI's account last: when it is the project's GitHub login, it reuses the token the GitHub account read
+    for kind, conn in sorted(_selected(project, kinds), key=lambda item: item[0] == "copilot"):
         if unusable(kind, conn) is None:  # an unusable one fails its check; nothing is injected for it
             ADAPTERS[kind].inject(conn, env)
             labels.append(f"{kind} {label(kind, conn)}")

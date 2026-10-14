@@ -172,7 +172,12 @@ class AdapterTests(unittest.TestCase):
             # a token this project's check never confirmed is never taken
             other = environment.build(project, self.env(COPILOT_GITHUB_TOKEN="gho_hubot", GH_TOKEN="gho_hubot",
                                                         KEYFIT_GITHUB_LOGIN="octocat"))
-            self.assertEqual(other["COPILOT_GITHUB_TOKEN"], "gho_octocat")
+            self.assertEqual((len(self.gh_calls()), other["COPILOT_GITHUB_TOKEN"]), (4, "gho_octocat"))
+            # mapped before the GitHub account (`keyfit add copilot --login` first): still one question to gh
+            reordered = Project("demo", project.roots, dict(reversed(project.connections.items())))
+            self.assertEqual(list(reordered.connections), ["copilot", "github"])
+            environment.build(reordered, self.env())
+            self.assertEqual(len(self.gh_calls()), 5)
 
     def test_other_agents_sessions_get_the_projects_copilot_token(self):
         # npx @github/copilot inside a Claude session does not go through the shim: the session has the account
