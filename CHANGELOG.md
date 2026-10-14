@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cloudflare, the seventh tool.** `wrangler` uses the project's Cloudflare account. wrangler keeps
+  named sign-ins bound to folders since 4.106 (`wrangler auth create NAME`, `wrangler auth activate
+  NAME DIR`), so Keyfit keeps no Cloudflare token: an account is a wrangler profile plus the expected
+  account ID (`keyfit add cloudflare` offers the profiles and the accounts the chosen one reaches).
+  Before a start, the folder must resolve to the profile (bound there or above, not shadowed by a
+  subfolder bound to another profile), the wrangler config wrangler would read must name no other
+  `account_id` (`env.*` too), the wrangler `npx` would run must be 4.106 or newer, and `wrangler
+  whoami` in the folder must list the account. `wrangler`, `claude` and `codex` start with
+  `CLOUDFLARE_ACCOUNT_ID` set to the account and without inherited `CLOUDFLARE_API_TOKEN`,
+  `CLOUDFLARE_API_KEY` and `CLOUDFLARE_EMAIL` (they beat every profile), so `npx wrangler` and
+  `npm run deploy` inside a session work on the project's account or fail. Inside a project, another
+  `--profile`, a `--cwd` or `--config` pointing elsewhere, `wrangler login`/`logout` (they change only
+  the default sign-in) and `wrangler auth activate`/`deactivate`/`create`/`delete` that would move a
+  registered folder off its project's profile are refused. A project without a Cloudflare account runs
+  `wrangler` as before. `Sign in now?` runs `wrangler auth create NAME`; `keyfit init` offers the
+  profile bound to the folder; `doctor` shows the profile, its binding and the account; `setup` writes
+  seven shims.
 - **Supabase, the sixth tool.** `supabase` uses the project's Supabase account: a personal access token
   Keyfit keeps in the Keychain (`keyfit add supabase` checks it with Supabase and records its
   organization; `--cli` copies the token of the supabase CLI's current login; `--token env:VAR` names
@@ -23,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A project without a Supabase account runs `supabase` as before (it is often used only locally).
   `keyfit init` offers the CLI's login; `setup` writes six shims and `doctor` checks six tools.
 - **`Sign in now? [Y/n]`.** When you start a tool yourself in a terminal and every failed check is fixed
-  by a plain sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`),
+  by a plain sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`,
+  `wrangler auth create NAME`),
   Keyfit offers to run it, checks again and starts the tool. Without a terminal (agents, scripts, CI)
   nothing is asked. gh's sign-in is never run for you, since it switches gh's active account.
 
