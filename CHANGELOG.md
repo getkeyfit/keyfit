@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OpenCode, the third agent (ninth tool).** `opencode` starts with the project's accounts, checked,
+  like `claude` and `codex`. OpenCode 2 keeps every sign-in in its SQLite database, which
+  `OPENCODE_DB` moves, so an OpenCode account is a database: `keyfit add opencode` records OpenCode's
+  own one (`~/.local/share/opencode/opencode.db`) and the providers signed in there; `--new --name
+  NAME` makes another under `~/.config/keyfit/opencode`. Before a start, the database must hold a
+  sign-in for each recorded provider (read-only, never a credential) and `opencode auth list` must
+  see them, with no shell key next to them; no provider is asked (there is no cheap call that
+  confirms a sign-in), and the check starts OpenCode with no configuration, so no MCP server starts.
+  Sessions (`opencode`, `run`, `mini`), sign-ins (`auth …`), `models`, `stats` and `session …` get
+  `--standalone`: OpenCode's background server serves every folder and keeps the environment of the
+  start that launched it, so Keyfit never starts it with a project's environment and runs its own
+  commands (`mcp`, `serve`, `service`, …) unchanged. In a project with an OpenCode account, the
+  sessions of all three agents lose inherited `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_API_KEY`, `GITHUB_TOKEN`
+  and `OPENCODE_API_KEY`, and other projects' MCP servers are switched off in
+  `OPENCODE_CONFIG_CONTENT` (your own content is kept). `--server` and `opencode DIR` with a folder
+  of another project are refused. `Sign in now?` runs `opencode auth login PROVIDER --standalone`;
+  `keyfit init` offers OpenCode's sign-ins; `doctor` shows the project's database; `setup` writes
+  nine shims. Verified with OpenCode 2.0.25.
 - **Convex, the eighth tool.** `convex` and `npx convex` use the project's Convex account. The convex
   CLI keeps one login per Mac (`~/.convex/config.json`) and has no account switch, so Keyfit hands each
   session the project's token in `CONVEX_OVERRIDE_ACCESS_TOKEN`, which the CLI takes before its own
