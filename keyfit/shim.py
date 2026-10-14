@@ -1,4 +1,4 @@
-"""The shim in front of `claude`, `codex`, `aws`, `gh` and `vercel` (ambient mode).
+"""The shim in front of `claude`, `codex`, `aws`, `gh`, `vercel` and `supabase` (ambient mode).
 
 Three outcomes only:
   folder not registered      → run the real tool unchanged
@@ -6,7 +6,7 @@ Three outcomes only:
   a check fails              → do not run it; print what is wrong and the fix (in a terminal, when the fix
                                is only a sign-in, offer to run it and then start the tool)
 
-Inside a project session (KEYFIT_PROJECT set), `aws`, `gh` and `vercel` stay on
+Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel` and `supabase` stay on
 that session's project even after `cd` elsewhere; `claude` and `codex` re-resolve
 from the folder, since starting a new agent elsewhere is deliberate.
 Bypass once: KEYFIT_DISABLE=1 <tool> …
@@ -19,21 +19,26 @@ import os
 import sys
 from pathlib import Path
 
-from . import environment, mcp
-from .adapters import vercel
+from . import cache, environment, mcp, secrets
+from .adapters import ADAPTERS, supabase, vercel
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
 from .resolve import resolve
 
-TOOLS = ("claude", "codex", "aws", "gh", "vercel")
+TOOLS = ("claude", "codex", "aws", "gh", "vercel", "supabase")
 INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "npm install -g @openai/codex",
-           "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel"}
+           "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel",
+           "supabase": "brew install supabase/tap/supabase"}
 # How to map the one account `aws`, `gh` and `vercel` need inside a project before they start there.
 MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github --login <login>",
        "vercel": "keyfit add vercel"}
-RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "claude": None, "codex": None}
-PINNED = ("aws", "gh", "vercel")
+RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",), "claude": None,
+            "codex": None}
+# Tools that run unchanged in a project without an account of their kind: Supabase is often used only locally
+# (supabase start), with no account at all.
+OPTIONAL = ("supabase",)
+PINNED = ("aws", "gh", "vercel", "supabase")
 MAX_DEPTH = 6
 CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs",
                       "mcp", "plugin", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update", "help"}
@@ -49,8 +54,12 @@ LOGIN_COMMANDS = {
     "codex": (("login",), ("logout",)),
     "gh": (("auth",),),
     "vercel": (("login",), ("logout",), ("switch",), ("whoami",), ("teams",)),
+    "supabase": (("login",), ("logout",)),
 }
-LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",)}
+LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",),
+               "supabase": ("supabase",)}
+# Variables sign-in commands run without: gh must manage its own tokens, and `supabase login` its own login.
+LOGIN_SCRUB = {"gh": ("GH_TOKEN", "GITHUB_TOKEN"), "supabase": ("SUPABASE_ACCESS_TOKEN", "SUPABASE_PROFILE")}
 # Fixes that are nothing but a sign-in, which Keyfit offers to run when you start a tool yourself in a terminal
 # (None: one value such as a profile name). Every other fix, including gh's (it switches gh's active account), is
 # only printed. A variable a fix may set in front: Claude's and Codex's config folder of the account.
@@ -64,7 +73,8 @@ SIGN_IN_VARS = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}
 VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query", "--color", "--ca-bundle",
                  "--cli-read-timeout", "--cli-connect-timeout", "--sso-session", "-u", "--user", "-h", "--hostname",
                  "-c", "--config", "-m", "--model", "-Q", "--global-config", "-S", "--scope", "-T", "--team",
-                 "-t", "--token", "-A", "--local-config", "--cwd", "--api"}
+                 "-t", "--token", "-A", "--local-config", "--cwd", "--api", "--workdir", "--project-ref",
+                 "--project-id", "--org-id", "--network-id", "--dns-resolver", "-o"}
 
 
 class Refused(Exception):
@@ -131,6 +141,8 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         return args
     if tool == "vercel":
         return vercel_args(project, args, env, cwd)
+    if tool == "supabase":
+        return supabase_args(project, args, env, cwd)
     if tool == "claude":
         if subcommand(args, CLAUDE_SUBCOMMANDS):
             return args
@@ -181,6 +193,91 @@ def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
     if team and not names & {"--scope", "--team"}:
         extra += ["--scope", team]
     return extra + args
+
+
+def supabase_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
+    """Refuse what would leave the project's Supabase login or organization (like `aws --profile`): another profile
+    or --org-id, and a project the token reaches in another organization (or cannot reach) named by --project-ref,
+    `gen … --project-id`, `link <ref>`, `projects delete <ref>` or the link of a --workdir. The folder's own link
+    was checked already."""
+    conn = project.connections["supabase"]
+    org = conn.get("org_name") or conn["org"]
+    refuse = f"keyfit: this folder belongs to {project.name} (Supabase organization {printable(org)}); refusing"
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 supabase …"
+    given = supabase.options(args)
+    named = {name for name, _ in given}
+    words = positionals(args)
+    asked = []  # (what the command line said, the project ref it means)
+    for name, value in given:
+        if value is None:
+            continue
+        if name == "--profile" and value.lower() != supabase.PROFILE:
+            raise Refused(f"{refuse} --profile {printable(value)}: a profile picks another login and API host.{bypass}")
+        if name == "--org-id" and value != conn["org"]:
+            raise Refused(f"{refuse} --org-id {printable(value)}.{bypass}")
+        if name == "--project-ref" or (name == "--project-id" and words[:1] == ["gen"]):  # `stop --project-id`: local
+            asked.append((f"{name} {value}", value))
+        if name == "--workdir" and not named & {"--project-ref", "--project-id"}:
+            ref, source = supabase.linked_ref(cwd, {**env, "SUPABASE_WORKDIR": value})
+            if ref:
+                asked.append((f"--workdir {value} (linked to {ref} in {source})", ref))
+    if words[:1] == ["link"] and len(words) > 1:
+        asked.append((f"link {words[1]}", words[1]))
+    if words[:2] == ["projects", "delete"] and len(words) > 2:
+        asked.append((f"projects delete {words[2]}", words[2]))
+    checked, _ = supabase.linked_ref(cwd, env)
+    for shown, ref in asked:
+        if ref == checked or not supabase.REF.fullmatch(ref):  # checked already; or a branch name, which the CLI
+            continue  # looks up among the linked project's branches, or a ref it refuses itself
+        reason = project_outside(project, conn, ref, env)
+        if reason:
+            raise Refused(f"{refuse} {printable(shown)}: {reason}.{bypass}")
+    return args
+
+
+def project_outside(project: Project, conn: dict, ref: str, env: dict) -> str:
+    """Why the project's token must not work on project *ref* ("" when it may): *ref* belongs to another
+    organization, or the token cannot reach it. A ref Supabase does not find (a preview branch, or a project this
+    token cannot see, where the CLI fails by itself) may go ahead. A confirmation is cached like a check."""
+    import hashlib
+
+    token = env.get("SUPABASE_ACCESS_TOKEN", "")
+    k = cache.key(project.name, "supabase-project", {"ref": ref, "org": conn["org"]},
+                  hashlib.sha256(token.encode()).hexdigest()[:16])
+    if cache.get(k) is not None:
+        return ""
+    found, reason, transient = ADAPTERS["supabase"].project(token, ref)
+    if found is None and reason == "not found":
+        return ""
+    if found is None:
+        return f"{reason} (check the network and retry)" if transient else reason
+    if found["org"] != conn["org"]:
+        return f"it belongs to another organization ({printable(found['org'])})"
+    cache.put(k, "ok", "")
+    return ""
+
+
+def supabase_login_check(project: Project, args: list[str]) -> None:
+    """`supabase login`/`logout` change only the CLI's own login, which a project with a Supabase account does not use
+    (Keyfit keeps its token): refuse there rather than seem to work, and name what changes the project's token."""
+    conn = project.connections.get("supabase")
+    if not isinstance(conn, dict):
+        return  # no Supabase account: the CLI's own login is what supabase uses here
+    word = positionals(args)[0]
+    raise Refused(f"keyfit: this folder belongs to {project.name}, whose Supabase token Keyfit keeps "
+                  f"({secrets.describe(conn.get('token', ''))}); `supabase {word}` would change only the supabase CLI's "
+                  f"own login, which {project.name} does not use.\n  Another token for {project.name}: "
+                  f"{supabase.add_command(conn)}   (paste it; or sign the CLI in outside {project.name}, then add "
+                  f"--cli)\n  Bypass once: KEYFIT_DISABLE=1 supabase …")
+
+
+def login_environment(tool: str, project: Project, env: dict) -> dict:
+    """The environment a sign-in command runs with: the project's (so it signs in to the project's account), without
+    the variables that would make the tool skip its own login."""
+    login_env = environment.build(project, env, kinds=LOGIN_KINDS[tool])
+    for var in LOGIN_SCRUB.get(tool, ()):
+        login_env.pop(var, None)
+    return login_env
 
 
 def vercel_login_args(project: Project, args: list[str], env: dict) -> list[str]:
@@ -240,7 +337,7 @@ def offer_sign_in(failed: list, project: Project, env: dict) -> bool | None:
         if real is None:
             _say([f"keyfit: {name} is not installed. Install it: {INSTALL[name]}"])
             return False
-        login_env = environment.build(project, env, kinds=LOGIN_KINDS[name])  # as when you type the sign-in
+        login_env = login_environment(name, project, env)  # as when you type the sign-in
         login_env.update(assignments)
         if subprocess.run(list(words), executable=real, env=login_env).returncode != 0:
             _say([f"keyfit: {name} sign-in did not finish"])
@@ -285,18 +382,19 @@ def main(argv: list[str]) -> int:
         relevant = RELEVANT.get(tool)
         if is_login_command(tool, args):
             # run sign-in/setup with the project's environment (so `aws sso login` / `claude auth login`
-            # target the project's profile / account) but without checks; gh must manage its own tokens.
-            login_env = environment.build(project, env, kinds=LOGIN_KINDS[tool])
-            if tool == "gh":
-                for var in ("GH_TOKEN", "GITHUB_TOKEN"):
-                    login_env.pop(var, None)
+            # target the project's profile / account) but without checks
+            if tool == "supabase":
+                supabase_login_check(project, args)
+            login_env = login_environment(tool, project, env)
             if tool == "vercel":  # `vercel login` signs in to the project's folder
                 args = vercel_login_args(project, args, login_env)
             os.execve(real, [tool, *args], login_env)
         if relevant and not any(kind in project.connections for kind in relevant):
+            if tool in OPTIONAL:  # no account of its kind: it runs as before Keyfit, minus other projects' tokens
+                os.execve(real, [tool, *args], environment.build(project, env, kinds=relevant))
             raise Refused(f"keyfit: project {project.name} has no {relevant[0]} account mapped, so {tool} was not "
                           f"started.\n  Map one: {MAP[relevant[0]]}   (bypass once: KEYFIT_DISABLE=1 {tool} …)")
-        run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel need only their own connection
+        run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel/supabase: only their own connection
         checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
         failed = [c for c in checks if c.failed]
         if failed:

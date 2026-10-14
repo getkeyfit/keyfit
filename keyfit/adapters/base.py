@@ -1,6 +1,7 @@
 """What every connection type implements.
 
 inject  — change the environment the tool will run with (never print values)
+forget  — in a project without this kind of account: remove what inject put there for another project
 local   — fast checks without network; may leave the verdict pending
 remote  — the definitive check against the provider (cached later, KEY-10)
 """
@@ -18,6 +19,9 @@ class Adapter:
 
     def inject(self, conn, env: dict) -> None:
         raise NotImplementedError
+
+    def forget(self, env: dict) -> None:
+        pass
 
     def local(self, conn, env: dict) -> Check:
         raise NotImplementedError
