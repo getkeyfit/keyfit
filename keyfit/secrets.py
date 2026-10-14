@@ -22,7 +22,7 @@ _STORABLE = re.compile(r"[\x20-\x7e]+")  # printable ASCII: `find-generic-passwo
 _MAX_LINE = 4000  # `security -i` reads 4095 bytes per line and runs the rest as a separate command
 # Keys of the kinds Keyfit handles, typed where a name or reference belongs (`--key lin_api_…`): never echoed back
 _KEY_LIKE = re.compile(r"lin_(?:api|oauth)_[A-Za-z0-9]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|sk-[\w-]{20,}"
-                       r"|sbp_(?:oauth_|v0_)?[a-f0-9]{20,}")
+                       r"|sbp_(?:oauth_|v0_)?[a-f0-9]{20,}|eyJ2MiI6[\w+/=-]{16,}|(?:dev|prod|preview|project):[\w:.-]*\|\S{16,}")
 
 
 def looks_like_key(text: str) -> bool:
