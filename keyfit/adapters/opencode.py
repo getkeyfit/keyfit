@@ -13,8 +13,9 @@ not down to the person. Sessions normally run in OpenCode's background server, w
 the environment of the start that launched it, so the shim starts them with --standalone (a private server with the
 session's environment), as it starts Codex without its daemon.
 
-inject  — remove provider keys OpenCode would take from the shell next to the database's sign-ins (Anthropic, OpenAI,
-          Google, GitHub Copilot, OpenCode Zen) and point OPENCODE_DB at the account's database.
+inject  — point OPENCODE_DB at the account's database. The provider keys OpenCode would take from the shell next to
+          the database's sign-ins (Anthropic, OpenAI, Google, GitHub Copilot, OpenCode Zen) are removed only where
+          OpenCode starts (scrub: the shim and the remote check), so other agents' sessions keep them.
 forget  — in a project without an OpenCode account, the OPENCODE_DB Keyfit set for another project goes.
 local   — the database holds a sign-in, and one for each provider recorded with the account (read with SQLite,
           read-only: provider and label, never a credential).
@@ -41,9 +42,15 @@ from .base import Adapter
 
 MARK = "KEYFIT_OPENCODE"  # set next to the OPENCODE_DB Keyfit injected: the account's name
 # Shell variables OpenCode 2.0.25 takes as sign-ins of Anthropic, OpenAI, Google, GitHub Copilot and OpenCode Zen/Go
-# (`opencode auth list` shows them as "environment"), and the database variable Keyfit sets itself.
-SCRUB = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY",
-         "GITHUB_TOKEN", "OPENCODE_API_KEY", "OPENCODE_DB")
+# (`opencode auth list` shows them as "environment").
+PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
+                 "GOOGLE_API_KEY", "GITHUB_TOKEN", "OPENCODE_API_KEY")
+
+
+def scrub(env: dict) -> None:
+    """Remove the provider keys an OpenCode of a project with an OpenCode account must not take from the shell."""
+    for var in PROVIDER_KEYS:
+        env.pop(var, None)
 
 
 def default_db(env: dict) -> Path:
@@ -100,6 +107,7 @@ def auth_list(env: dict, timeout: float = 30) -> tuple[list | None, str]:
         return None, "opencode not found on PATH"
     with tempfile.TemporaryDirectory(prefix="keyfit-opencode-") as empty:
         quiet = {k: v for k, v in env.items() if k not in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT")}
+        scrub(quiet)  # as the shim starts OpenCode
         quiet.update(OPENCODE_CONFIG_DIR=empty, OPENCODE_DISABLE_PROJECT_CONFIG="1", OPENCODE_DISABLE_MODELS_FETCH="1",
                      OPENCODE_DISABLE_AUTOUPDATE="1")
         try:
@@ -129,10 +137,7 @@ class OpenCodeAdapter(Adapter):
         return conn.get("name", "?")
 
     def inject(self, conn, env: dict) -> None:
-        db = database(conn, env)  # before the removal: the default database follows XDG_DATA_HOME
-        for var in SCRUB:
-            env.pop(var, None)
-        env["OPENCODE_DB"] = str(db)
+        env["OPENCODE_DB"] = str(database(conn, env))
         env[MARK] = conn.get("name", "")
 
     def forget(self, env: dict) -> None:
@@ -170,7 +175,8 @@ class OpenCodeAdapter(Adapter):
         db, wanted = database(conn, env), self._wanted(conn)
         listing, reason = auth_list(env, self.timeout)
         if listing is None:
-            fix = "brew install opencode" if "not found" in reason else sign_in(db, env)
+            fix = "brew install opencode" if "not found" in reason else \
+                "see why inside the project: opencode auth list   (Keyfit adds --standalone)"
             return Check(self.kind, "fail", label, reason, fix, transient="did not answer" in reason)
         stored: dict[str, str] = {}
         shell: list[tuple[str, str]] = []

@@ -20,12 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Sessions (`opencode`, `run`, `mini`), sign-ins (`auth …`), `models`, `stats` and `session …` get
   `--standalone`: OpenCode's background server serves every folder and keeps the environment of the
   start that launched it, so Keyfit never starts it with a project's environment and runs its own
-  commands (`mcp`, `serve`, `service`, …) unchanged. In a project with an OpenCode account, the
-  sessions of all three agents lose inherited `ANTHROPIC_API_KEY`,
-  `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_API_KEY`, `GITHUB_TOKEN`
-  and `OPENCODE_API_KEY`, and other projects' MCP servers are switched off in
-  `OPENCODE_CONFIG_CONTENT` (your own content is kept). `--server` and `opencode DIR` with a folder
-  of another project are refused. `Sign in now?` runs `opencode auth login PROVIDER --standalone`;
+  commands (`mcp`, `serve`, `service`, …) unchanged from your terminal; inside a session, where the
+  environment holds a project's accounts, they get `--standalone` or are refused. In a project with an
+  OpenCode account, `opencode` starts without inherited `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+  `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_API_KEY`, `GITHUB_TOKEN` and
+  `OPENCODE_API_KEY` (Claude and Codex sessions keep them), and other projects' MCP servers are
+  switched off in `OPENCODE_CONFIG_CONTENT` for the folder OpenCode opens (your own content is kept). `--server`, `acp --login` and `opencode DIR` with a
+  folder of another project are refused. `Sign in now?` runs `opencode auth login PROVIDER --standalone`;
   `keyfit init` offers OpenCode's sign-ins; `doctor` shows the project's database; `setup` writes
   nine shims. Verified with OpenCode 2.0.25.
 - **Convex, the eighth tool.** `convex` and `npx convex` use the project's Convex account. The convex
