@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 from . import cache, environment, mcp, secrets
-from .adapters import ADAPTERS, cloudflare, convex, supabase, vercel
+from .adapters import ADAPTERS, cloudflare, convex, opencode, supabase, vercel
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
@@ -58,12 +58,13 @@ CODEX_SUBCOMMANDS = {"agents", "exec", "e", "review", "login", "logout", "mcp", 
 CODEX_SESSIONS = {None, "exec", "e", "review", "resume", "fork"}
 OPENCODE_SUBCOMMANDS = {"upgrade", "update", "uninstall", "acp", "api", "debug", "auth", "mcp", "plugin", "models",
                         "stats", "mini", "run", "session", "service", "reload", "pair", "serve"}
-# OpenCode itself, and commands of its background server, which serves every folder: they run as outside a project
-# (a project's environment would stay in a background server it starts, for every folder after it).
-OPENCODE_UNCHANGED = {"upgrade", "update", "uninstall", "api", "debug", "mcp", "plugin", "service", "reload", "pair",
-                      "serve"}
+# OpenCode's background server serves every folder and keeps the environment of the start that launched it. Its own
+# commands, and OpenCode's updates, run with your environment as outside a project (see opencode_private).
+OPENCODE_SHARED = {"upgrade", "update", "uninstall", "api", "debug", "mcp", "plugin", "service", "reload", "pair",
+                   "serve"}
+OPENCODE_NO_SERVER = {"upgrade", "update", "uninstall"}
 # Commands that take --standalone: a private server, with the session's environment and the project's sign-ins.
-OPENCODE_STANDALONE = {None, "run", "mini", "models", "stats", "session", "auth"}
+OPENCODE_STANDALONE = {None, "run", "mini", "models", "stats", "session", "auth", "api", "reload"}
 OPENCODE_VALUED = {"--server", "--session", "-s", "--prompt", "--log-level", "--completions"}
 # Sign-in and setup commands always run — they are how a failed check gets fixed.
 LOGIN_COMMANDS = {
@@ -202,11 +203,51 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
 
 
 def opencode_standalone(args: list[str]) -> list[str]:
-    """Add --standalone (OpenCode's private server, with this environment) unless a server is named already."""
+    """Add --standalone (OpenCode's private server, with this environment) where the command takes it, unless a
+    server is named already. `opencode auth` and `opencode session` alone print their commands and take none."""
     end = args.index("--") if "--" in args else len(args)
+    sub = subcommand(args, OPENCODE_SUBCOMMANDS)
+    if sub not in OPENCODE_STANDALONE:
+        return args
+    if sub in ("auth", "session") and not any(not a.startswith("-") for a in args[args.index(sub) + 1:end]):
+        return args
     if any(a == "--standalone" or a == "--server" or a.startswith("--server=") for a in args[:end]):
         return args
     return args[:end] + ["--standalone"] + args[end:]
+
+
+def opencode_server_option(project: Project, args: list[str]) -> None:
+    """Refuse another --server (its sign-ins and environment are not the project's), and `acp --login`, whose sign-in
+    goes through the background server."""
+    end = args.index("--") if "--" in args else len(args)
+    if any(a == "--server" or a.startswith("--server=") for a in args[:end]):
+        raise Refused(f"keyfit: this folder belongs to {project.name}; refusing --server: OpenCode would run with "
+                      f"that server's sign-ins and environment, not {project.name}'s.\n"
+                      f"  Bypass once: KEYFIT_DISABLE=1 opencode …")
+    if subcommand(args, OPENCODE_SUBCOMMANDS) == "acp" and "--login" in args[:end]:
+        raise Refused(f"keyfit: this folder belongs to {project.name}; refusing `opencode acp --login`: it signs in "
+                      f"through OpenCode's background server, not {project.name}'s database.\n"
+                      f"  Sign in with: opencode auth login   (Keyfit sends it to {project.name}'s database)")
+
+
+def opencode_private(args: list[str], env: dict) -> list[str]:
+    """OpenCode where Keyfit does not start it with a project's environment: in a folder outside every project, and
+    for the background server's own commands. In your terminal it runs unchanged. Inside a session Keyfit started
+    (KEYFIT_PROJECT set), the environment holds that project's accounts, which a background server started now would
+    keep for every folder: commands that take --standalone get it, and the others are refused."""
+    end = args.index("--") if "--" in args else len(args)
+    if not env.get("KEYFIT_PROJECT") or any(a == "--server" or a.startswith("--server=") for a in args[:end]):
+        return args  # your own environment, or a server you named: none is started
+    sub = subcommand(args, OPENCODE_SUBCOMMANDS)
+    if sub in OPENCODE_NO_SERVER or (sub == "acp" and "--login" not in args[:end]):  # acp: always a private server
+        return args
+    standalone = opencode_standalone(args)
+    if standalone != args or "--standalone" in args or sub in ("auth", "session"):
+        return standalone
+    raise Refused(f"keyfit: opencode not started: inside a session of {printable(env['KEYFIT_PROJECT'])}, "
+                  f"`opencode {sub or ' '.join(args)}` could start OpenCode's background server with that project's "
+                  f"accounts, and every folder would share them.\n  Run it in a terminal outside the session "
+                  f"(bypass once: KEYFIT_DISABLE=1 opencode …)")
 
 
 def opencode_mcp(project: Project, env: dict, cwd: Path, owners: dict | None) -> None:
@@ -221,19 +262,13 @@ def opencode_mcp(project: Project, env: dict, cwd: Path, owners: dict | None) ->
 def opencode_args(project: Project, args: list[str], env: dict, cwd: Path, owners: dict | None = None) -> list[str]:
     """Sessions, and the commands that read the project's sign-ins and sessions, run on a private server
     (--standalone): the background server serves every folder and keeps the environment of the start that launched
-    it. Another --server is refused (its sign-ins and environment are not the project's). Every MCP server the
-    project must not see is switched off."""
-    end = args.index("--") if "--" in args else len(args)
-    if any(a == "--server" or a.startswith("--server=") for a in args[:end]):
-        raise Refused(f"keyfit: this folder belongs to {project.name}; refusing --server: OpenCode would run with "
-                      f"that server's sign-ins and environment, not {project.name}'s.\n"
-                      f"  Bypass once: KEYFIT_DISABLE=1 opencode …")
-    opencode_mcp(project, env, cwd, owners)
-    sub = subcommand(args, OPENCODE_SUBCOMMANDS)
-    if sub not in OPENCODE_STANDALONE:
-        return args
-    if sub in ("auth", "session") and not any(not a.startswith("-") for a in args[args.index(sub) + 1:end]):
-        return args  # `opencode session` alone prints its commands, and takes no --standalone
+    it. Every MCP server the project must not see is switched off, for the folder OpenCode opens; with an OpenCode
+    account, provider keys from the shell go."""
+    opencode_server_option(project, args)
+    if "opencode" in project.connections:
+        opencode.scrub(env)
+    folder = opencode_folder(args)
+    opencode_mcp(project, env, Path(folder).resolve() if folder else cwd, owners)
     return opencode_standalone(args)
 
 
@@ -538,6 +573,8 @@ def login_environment(tool: str, project: Project, env: dict) -> dict:
     for var in LOGIN_SCRUB.get(tool, ()):
         login_env.pop(var, None)
     if tool == "opencode":  # its sign-in starts a private server, and that the MCP servers of its configuration
+        if "opencode" in project.connections:
+            opencode.scrub(login_env)
         opencode_mcp(project, login_env, Path.cwd(), Registry.load().mcp_owners())
     return login_env
 
@@ -626,10 +663,10 @@ def main(argv: list[str]) -> int:
     # counted on every path, not only where checks run: a wrapper later on PATH that calls the tool by name
     # comes back through here also in folders that are not registered
     env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
-    if tool == "opencode" and subcommand(args, OPENCODE_SUBCOMMANDS) in OPENCODE_UNCHANGED:
-        os.execve(real, [tool, *args], env)
 
     try:
+        if tool == "opencode" and subcommand(args, OPENCODE_SUBCOMMANDS) in OPENCODE_SHARED:
+            os.execve(real, [tool, *opencode_private(args, env)], env)
         registry = Registry.load()
         shared = tool == "aws" and requested_profiles(args)
         if shared and set(shared) <= registry.shared_aws_profiles():
@@ -643,8 +680,8 @@ def main(argv: list[str]) -> int:
                           f"once: KEYFIT_DISABLE=1 {tool} …")
         if tool == "opencode":
             opencode_folder_check(args, registry, project)
-        if project is None:
-            os.execve(real, [tool, *args], env)  # not a registered project: exactly as before Keyfit
+        if project is None:  # not a registered project: exactly as before Keyfit
+            os.execve(real, [tool, *(opencode_private(args, env) if tool == "opencode" else args)], env)
 
         relevant = RELEVANT.get(tool)
         if is_login_command(tool, args):
@@ -659,8 +696,9 @@ def main(argv: list[str]) -> int:
             login_env = login_environment(tool, project, env)
             if tool == "vercel":  # `vercel login` signs in to the project's folder
                 args = vercel_login_args(project, args, login_env)
-            if tool == "opencode" and len(positionals(args)) > 1:  # to the project's database, not a background
-                args = opencode_standalone(args)  # server's
+            if tool == "opencode":  # to the project's database, not a background server's
+                opencode_server_option(project, args)
+                args = opencode_standalone(args)
             os.execve(real, [tool, *args], login_env)
         if relevant and not any(kind in project.connections for kind in relevant):
             if tool in OPTIONAL:  # no account of its kind: it runs as before Keyfit, minus other projects' tokens

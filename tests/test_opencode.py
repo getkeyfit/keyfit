@@ -17,7 +17,8 @@ from unittest import mock
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
 from keyfit import mcp  # noqa: E402
-from keyfit.adapters.opencode import OpenCodeAdapter, default_db, signed_in  # noqa: E402
+from keyfit import environment  # noqa: E402
+from keyfit.adapters.opencode import OpenCodeAdapter, default_db, scrub, signed_in  # noqa: E402
 from keyfit.cli import main  # noqa: E402
 from keyfit.registry import Project, Registry  # noqa: E402
 from keyfit.shim import Refused, adjust_args, sign_in_command  # noqa: E402
@@ -114,17 +115,22 @@ class AdapterTests(unittest.TestCase):
         log = self.home / "opencode-calls.log"
         return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
-    def test_inject_points_at_the_database_and_scrubs_provider_keys(self):
-        env = self.env(ANTHROPIC_API_KEY="sk-a", OPENAI_API_KEY="sk-o", GEMINI_API_KEY="g", GOOGLE_API_KEY="g",
-                       GOOGLE_GENERATIVE_AI_API_KEY="g", GITHUB_TOKEN="gh", OPENCODE_API_KEY="oc",
-                       OPENCODE_DB="/elsewhere/opencode.db", OPENROUTER_API_KEY="kept")
+    def test_inject_points_at_the_database_and_scrub_removes_provider_keys(self):
+        keys = {"ANTHROPIC_API_KEY": "sk-a", "OPENAI_API_KEY": "sk-o", "GEMINI_API_KEY": "g", "GOOGLE_API_KEY": "g",
+                "GOOGLE_GENERATIVE_AI_API_KEY": "g", "GITHUB_TOKEN": "gh", "OPENCODE_API_KEY": "oc"}
+        env = self.env(OPENCODE_DB="/elsewhere/opencode.db", OPENROUTER_API_KEY="kept", **keys)
         self.adapter.inject(self.conn, env)
         self.assertEqual(env["OPENCODE_DB"], str(self.db))
         self.assertEqual(env["KEYFIT_OPENCODE"], "work")
-        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-                    "GOOGLE_GENERATIVE_AI_API_KEY", "GITHUB_TOKEN", "OPENCODE_API_KEY"):
-            self.assertNotIn(var, env)
+        self.assertLessEqual(keys.items(), env.items())  # Claude and Codex sessions of the project keep them
+        scrub(env)  # where OpenCode starts
+        self.assertFalse(set(keys) & set(env))
         self.assertEqual(env["OPENROUTER_API_KEY"], "kept")  # not one of the providers Keyfit scrubs
+
+    def test_other_agents_sessions_keep_provider_keys(self):
+        project = Project("demo", [str(self.tmp)], {"opencode": self.conn})
+        env = environment.build(project, self.env(OPENAI_API_KEY="sk-o", GEMINI_API_KEY="g"))
+        self.assertEqual((env["OPENAI_API_KEY"], env["GEMINI_API_KEY"]), ("sk-o", "g"))
 
     def test_default_database_follows_xdg_data_home(self):
         env = self.env()
@@ -204,6 +210,13 @@ class AdapterTests(unittest.TestCase):
         check = self.adapter.remote(self.conn, env)
         self.assertTrue(check.failed)
         self.assertIn("OpenCode does not see the anthropic sign-in", check.detail)
+
+    def test_an_opencode_error_is_not_offered_as_a_sign_in(self):
+        database(self.db, ("anthropic", "Anthropic"))
+        executable(self.bin / "opencode", "#!/bin/sh\necho 'Error: database is locked' >&2\nexit 1\n")
+        _, check = self.verify()
+        self.assertEqual(check.detail, "Error: database is locked")
+        self.assertIsNone(sign_in_command(check.fix))
 
     def test_missing_opencode_fails_with_the_install_command(self):
         database(self.db, ("anthropic", "Anthropic"))
@@ -446,6 +459,25 @@ class ShimTests(unittest.TestCase):
         self.assertEqual(seen["argv"], ["mcp", "list"])
         self.assertEqual((seen["env"]["OPENCODE_DB"], seen["env"]["ANTHROPIC_API_KEY"]), (None, "sk-kept"))
 
+    def test_inside_a_session_the_background_server_never_gets_the_projects_environment(self):
+        # a session's environment holds its project's accounts; a background server started from it would keep them
+        # for every folder
+        session = {"KEYFIT_PROJECT": "demo", "OPENCODE_DB": str(self.db), "KEYFIT_OPENCODE": "work"}
+        for args in (["mcp", "list"], ["debug", "config"], ["service", "start"]):
+            out = self.run_tool(*args, **session)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), args)
+            self.assertIn("could start OpenCode's background server with that project's accounts", out.stderr)
+        self.assertEqual(self.started(self.run_tool("api", "GET", "/api/config", **session))["argv"],
+                         ["api", "GET", "/api/config", "--standalone"])
+        self.assertEqual(self.started(self.run_tool("upgrade", **session))["argv"], ["upgrade"])
+        # a folder outside every project, inside the session: a private server too
+        self.assertEqual(self.started(self.run_tool("run", "hi", cwd=self.outside, **session))["argv"],
+                         ["run", "hi", "--standalone"])
+        self.assertEqual(self.started(self.run_tool("--server", "http://x", cwd=self.outside, **session))["argv"],
+                         ["--server", "http://x"])  # connects to the server named; starts none
+        out = self.run_tool("acp", "--login", cwd=self.outside, **session)
+        self.assertEqual((out.returncode, out.stdout), (1, ""))
+
     def test_unregistered_folder_runs_unchanged(self):
         seen = self.started(self.run_tool(cwd=self.outside, ANTHROPIC_API_KEY="sk-kept"))
         self.assertEqual(seen["argv"], [])
@@ -453,9 +485,26 @@ class ShimTests(unittest.TestCase):
 
     def test_another_server_is_refused(self):
         database(self.db, ("anthropic", "Anthropic"))
-        out = self.run_tool("--server", "http://127.0.0.1:4096")
+        for args in (["--server", "http://127.0.0.1:4096"], ["auth", "login", "--server=http://127.0.0.1:4096"]):
+            out = self.run_tool(*args)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), args)
+            self.assertIn("refusing --server", out.stderr)
+
+    def test_acp_login_is_refused_in_a_project(self):
+        database(self.db, ("anthropic", "Anthropic"))
+        out = self.run_tool("acp", "--login")
         self.assertEqual((out.returncode, out.stdout), (1, ""))
-        self.assertIn("refusing --server", out.stderr)
+        self.assertIn("Sign in with: opencode auth login", out.stderr)
+        self.assertEqual(self.started(self.run_tool("acp"))["argv"], ["acp"])
+
+    def test_servers_are_hidden_for_the_folder_opencode_opens(self):
+        database(self.db, ("anthropic", "Anthropic"))
+        sub = self.repo / "web"
+        sub.mkdir()
+        (sub / "opencode.json").write_text(json.dumps({"mcp": {"globex_cloud_web": {"type": "local", "command": ["x"]}}}))
+        seen = self.started(self.run_tool("web"))
+        self.assertEqual(sorted(json.loads(seen["env"]["OPENCODE_CONFIG_CONTENT"])["mcp"]),
+                         ["globex_cloud_eu", "globex_cloud_web"])
 
     def test_a_directory_of_another_project_is_refused(self):
         database(self.db, ("anthropic", "Anthropic"))
