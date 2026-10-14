@@ -464,6 +464,15 @@ class ShimTests(ConvexCase):
             code, argv, _ = self.run_shim(*args)
             self.assertEqual(argv, ["convex", *args], self.stderr)
 
+    def test_unusual_deployment_names_are_looked_up_and_project_keys_left_alone(self):
+        code, argv, _ = self.run_shim("deploy", "--deployment-name", "old_style")
+        self.assertEqual(code, 1)
+        self.assertIn("refusing --deployment-name old_style: this login cannot reach it", self.stderr)
+        self.env_local(self.repos["client"], f"CONVEX_DEPLOY_KEY=project:acme:web|{SECRET}\n")
+        code, argv, env = self.run_shim("deploy", "--deployment-name", "brave-otter-456")
+        self.assertEqual(argv, ["convex", "deploy", "--deployment-name", "brave-otter-456"], self.stderr)
+        self.assertNotIn("CONVEX_OVERRIDE_ACCESS_TOKEN", env)  # the project key stays the CLI's login
+
     def test_confirmed_deployments_are_cached(self):
         self.run_shim("deploy", "--deployment-name", "happy-animal-123")
         self.fetched.clear()

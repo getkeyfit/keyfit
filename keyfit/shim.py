@@ -390,8 +390,8 @@ def convex_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
             raise Refused(f"{refuse} --team {printable(value)}.{bypass}")
         if name == "--deployment" and value.count(":") == 2 and value.split(":")[0] != team:
             raise Refused(f"{refuse} --deployment {printable(value)}: another team.{bypass}")
-        if name in ("--deployment", "--deployment-name") and convex.DEPLOYMENT_NAME.fullmatch(value):
-            asked.append((f"{name} {value}", value))
+        if name == "--deployment-name" or (name == "--deployment" and convex.DEPLOYMENT_NAME.fullmatch(value)):
+            asked.append((f"{name} {value}", value))  # any other --deployment is a ref inside the folder's project
         if name == "--env-file":
             aim = convex.target(cwd, env, files=convex.read_env_file(cwd / value))
             if aim and aim["kind"] == "preview" and aim["team"] != team:
@@ -400,6 +400,8 @@ def convex_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
             if aim and aim["kind"] == "deployment":
                 asked.append((f"--env-file {value} (deployment {aim['name']})", aim["name"]))
     checked = convex.target(cwd, env) or {}
+    if convex.OVERRIDE not in env:  # the folder's project deploy key is the CLI's login: it reaches only its project
+        return args
     for shown, name in asked:
         if name == checked.get("name"):  # checked already
             continue
