@@ -1,14 +1,14 @@
 # Keyfit
 
-`claude`, `codex`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` use the accounts of the project you are in. Keyfit checks those accounts before the tool starts, and if a check fails, the tool does not start.
+`claude`, `codex`, `opencode`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` use the accounts of the project you are in. Keyfit checks those accounts before the tool starts, and if a check fails, the tool does not start.
 
-After a one-time `keyfit setup`, you keep typing `claude`, `codex`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` as usual. Keyfit works out which project the current folder belongs to. It then checks that project's accounts with the services themselves: the AWS account behind the profile, the Linear workspace behind the key, the GitHub login, the Vercel login and team, the Supabase organization, the Cloudflare account behind wrangler's sign-in, the Convex team, the Claude organization and the Codex login. If everything matches, the tool starts with only that project's credentials. If a check fails, the tool does not start and you see the command that fixes it. Folders you have not registered work exactly as before.
+After a one-time `keyfit setup`, you keep typing `claude`, `codex`, `opencode`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` as usual. Keyfit works out which project the current folder belongs to. It then checks that project's accounts with the services themselves: the AWS account behind the profile, the Linear workspace behind the key, the GitHub login, the Vercel login and team, the Supabase organization, the Cloudflare account behind wrangler's sign-in, the Convex team, the Claude organization, the Codex login and OpenCode's sign-ins. If everything matches, the tool starts with only that project's credentials. If a check fails, the tool does not start and you see the command that fixes it. Folders you have not registered work exactly as before.
 
 Most tools that switch credentials per folder assume the switch worked. Keyfit asks each service who you are signed in as, and stops the tool if the answer is wrong.
 
 ## Who it's for
 
-You use Claude Code or Codex for several clients or companies, and each one has its own AWS account, Linear workspace, GitHub login, Vercel team, Supabase organization, Cloudflare account, Convex team or Claude organization. You want an agent working in one client's repository never to act with another client's credentials, and you don't want to remember to switch anything.
+You use Claude Code, Codex or OpenCode for several clients or companies, and each one has its own AWS account, Linear workspace, GitHub login, Vercel team, Supabase organization, Cloudflare account, Convex team, Claude organization or OpenCode sign-ins. You want an agent working in one client's repository never to act with another client's credentials, and you don't want to remember to switch anything.
 
 If you work with a single set of accounts, you don't need Keyfit.
 
@@ -33,7 +33,7 @@ The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkou
 ## Quickstart (5 minutes)
 
 ```bash
-keyfit setup --rc     # shims for claude, codex, aws, gh, vercel, supabase, wrangler and convex, plus one line in your shell startup file
+keyfit setup --rc     # shims for claude, codex, opencode, aws, gh, vercel, supabase, wrangler and convex, plus one line in your shell startup file
 ```
 
 Open a new terminal, then go to a repository of one of your clients (a repository, not your home folder: everything under the folder you register belongs to that project):
@@ -49,6 +49,7 @@ claude                # starts with this project's accounts, checked
 - **AWS:** a profile from `~/.aws/config`. Keyfit records the account that profile belongs to.
 - **GitHub:** one of the accounts `gh` is signed in to.
 - **Claude and Codex:** whether to use the login currently in `~/.claude` or `~/.codex`.
+- **OpenCode:** whether to use the sign-ins in OpenCode's own database (`~/.local/share/opencode/opencode.db`).
 - **Vercel:** whether to use the login the `vercel` CLI has now, with the team selected in it.
 - **Supabase:** whether to use the login the `supabase` CLI has now. Keyfit keeps a copy of its token in the macOS Keychain (macOS may ask once to allow that).
 - **Cloudflare:** the wrangler sign-in (auth profile) bound to the repository's folder, and the Cloudflare account it deploys to. Keyfit keeps no Cloudflare token: wrangler keeps the sign-in, Keyfit checks it.
@@ -70,6 +71,7 @@ acme-api
   ✔ convex    Acme   login, team and deployment happy-animal-123 (acme-web) confirmed
   ✔ claude    Acme   Acme (team) confirmed
   ✔ codex     ChatGPT pro   subscription login, no API key
+  ✔ opencode  default   anthropic, openai signed in · confirmed by OpenCode
 ```
 
 When a check fails, the tool does not start:
@@ -98,25 +100,25 @@ Already using direnv? `keyfit init` also imports `use aws PROFILE ACCOUNT_ID` an
 ## How it works
 
 1. **Resolve.** The shim asks git for the folder's common git directory. That way the main checkout and every worktree of a registered repository resolve to the same project, wherever the worktrees live (Superset's included). Outside a registered repository, the nearest registered parent folder counts. If nothing matches, the real tool runs unchanged.
-2. **Verify.** Keyfit builds the project's environment and checks each account you mapped. Fast local checks run on every launch: does the profile exist, has the sign-in expired, is the key well-formed. Then come the online checks: who do AWS, Linear, GitHub, Vercel, Supabase, Cloudflare, Convex and Claude say you are? A successful online check is reused for 30 minutes. If any check fails, the tool does not start.
+2. **Verify.** Keyfit builds the project's environment and checks each account you mapped. Fast local checks run on every launch: does the profile exist, has the sign-in expired, is the key well-formed. Then come the online checks: who do AWS, Linear, GitHub, Vercel, Supabase, Cloudflare, Convex and Claude say you are, and which sign-ins does OpenCode see? A successful online check is reused for 30 minutes. If any check fails, the tool does not start.
 3. **Inject.** The real tool starts with that environment: the project's credentials are set, and conflicting ones inherited from your shell are removed. MCP servers that belong to other projects are hidden for that session. Nothing is written into your repository or into the tools' config files.
 
 Some details:
 
-- **Which accounts each tool gets:** `claude` and `codex` get, and check, all of the project's accounts. `aws` gets only the AWS account, `gh` only the GitHub account, `vercel` only the Vercel login, `supabase` only the Supabase token, `wrangler` only the Cloudflare account and `convex` only the Convex login.
+- **Which accounts each tool gets:** `claude`, `codex` and `opencode` get, and check, all of the project's accounts. `aws` gets only the AWS account, `gh` only the GitHub account, `vercel` only the Vercel login, `supabase` only the Supabase token, `wrangler` only the Cloudflare account and `convex` only the Convex login.
 - **Expired sign-ins are one keypress.** When you start a tool in a terminal and the only problem is an expired or missing sign-in, Keyfit asks `Sign in now? [Y/n]`, runs the sign-in, checks again and starts the tool. Agents and scripts are never asked; they get the message and the fix.
-- **Sign-in commands always run**, with the project's environment, so they fix the right account. These are `aws sso login`, `aws login`, `aws configure`, `claude auth …`, `codex login`, `gh auth …` and `vercel login`, `logout`, `switch`, `whoami` and `teams`. `supabase login` and `logout` run too, except in a project with a Supabase account: there they would change only the CLI's own login, which that project doesn't use, so Keyfit stops them and names `keyfit add supabase` instead. `wrangler auth create`, `activate`, `deactivate`, `list` and `whoami` run as well, unless they would move a registered folder to another project's profile; `wrangler login` and `logout` only change wrangler's default sign-in, so in a project with its own profile Keyfit stops them and names `wrangler auth create NAME`. `convex login` and `logout` run where the project's Convex account is the CLI's own login, and are stopped where Keyfit keeps the project's token.
-- **Inside a Claude or Codex session,** the `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` commands it runs stay on that session's project, even after a `cd` elsewhere. The session also has the project's `SUPABASE_ACCESS_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `CONVEX_OVERRIDE_ACCESS_TOKEN`, so `npx supabase`, `npx wrangler` and `npx convex` (and `npm run deploy`) use the project's accounts too.
+- **Sign-in commands always run**, with the project's environment, so they fix the right account. These are `aws sso login`, `aws login`, `aws configure`, `claude auth …`, `codex login`, `opencode auth …` (with `--standalone`, so the sign-in lands in the project's OpenCode database), `gh auth …` and `vercel login`, `logout`, `switch`, `whoami` and `teams`. `supabase login` and `logout` run too, except in a project with a Supabase account: there they would change only the CLI's own login, which that project doesn't use, so Keyfit stops them and names `keyfit add supabase` instead. `wrangler auth create`, `activate`, `deactivate`, `list` and `whoami` run as well, unless they would move a registered folder to another project's profile; `wrangler login` and `logout` only change wrangler's default sign-in, so in a project with its own profile Keyfit stops them and names `wrangler auth create NAME`. `convex login` and `logout` run where the project's Convex account is the CLI's own login, and are stopped where Keyfit keeps the project's token.
+- **Inside a Claude, Codex or OpenCode session,** the `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` commands it runs stay on that session's project, even after a `cd` elsewhere. The session also has the project's `SUPABASE_ACCESS_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `CONVEX_OVERRIDE_ACCESS_TOKEN`, so `npx supabase`, `npx wrangler` and `npx convex` (and `npm run deploy`) use the project's accounts too.
 - **Claude Code's status line** shows the project and its accounts, unless you configured a status line of your own.
-- **Superset:** when Superset's agent wrapper (`~/.superset/bin`) is on PATH, it goes first and the shims right behind it, ahead of everything else. The chain is Superset wrapper → Keyfit → real tool, and Superset's hooks keep working. Without Superset, the shims go first.
+- **Superset:** when Superset's agent wrapper (`~/.superset/bin`) is on PATH, it goes first and the shims right behind it, ahead of everything else. The chain is Superset wrapper → Keyfit → real tool, and Superset's hooks keep working (for OpenCode too: Keyfit leaves the `OPENCODE_CONFIG_DIR` the wrapper sets). Without Superset, the shims go first.
 
 ## Speed
 
 Measured on a MacBook Pro with an Apple M4 (16 GB, macOS 26.6, Python 3.13.3), with other apps running, a shim adds:
 
 - **About 0.1 s** in a folder you haven't registered, and for `aws`, `vercel`, `supabase`, `wrangler` and `convex` in a registered project when its checks are cached.
-- **About 0.2 s** for `gh`, `claude` and `codex` in a project with a GitHub account. Half of that is `gh auth token`, which Keyfit runs to get the account's token. Inside a Claude or Codex session that Keyfit started, `gh` keeps the token its check already confirmed, and costs about 0.1 s.
-- **0.5–2 s** when the checks have to go online, at most once every 30 minutes per project (and right after a new sign-in). GitHub, Linear, Vercel, Supabase, Cloudflare, Convex and Claude are checked in parallel. Cloudflare's check starts wrangler (`wrangler whoami`), which takes 1–2 s. AWS takes about 1 s with a console sign-in (`aws login`), because its check starts the AWS CLI; longer when your credential tool has to renew a login.
+- **About 0.2 s** for `gh`, `claude`, `codex` and `opencode` in a project with a GitHub account. Half of that is `gh auth token`, which Keyfit runs to get the account's token. Inside a Claude, Codex or OpenCode session that Keyfit started, `gh` keeps the token its check already confirmed, and costs about 0.1 s.
+- **0.5–2 s** when the checks have to go online, at most once every 30 minutes per project (and right after a new sign-in). GitHub, Linear, Vercel, Supabase, Cloudflare, Convex and Claude are checked in parallel. Cloudflare's check starts wrangler (`wrangler whoami`), which takes 1–2 s, and OpenCode's starts OpenCode (`opencode auth list`), about 2 s. AWS takes about 1 s with a console sign-in (`aws login`), because its check starts the AWS CLI; longer when your credential tool has to renew a login.
 
 `--version` is checked like any other command, so `time gh --version` inside a project shows the full cost. To measure Keyfit alone on your Mac, with stub tools and no accounts or network: `python3 scripts/bench_shim.py`.
 
@@ -133,7 +135,8 @@ Measured on a MacBook Pro with an Apple M4 (16 GB, macOS 26.6, Python 3.13.3), w
 | Convex | `keyfit add convex --cli` | `CONVEX_OVERRIDE_ACCESS_TOKEN`, the account's token (the convex CLI takes it before its own login and before deploy keys). `CONVEX_PROVISION_HOST` is removed, so the token only goes to `api.convex.dev`, and so are inherited `CONVEX_DEPLOYMENT`, `CONVEX_DEPLOY_KEY` and `CONVEX_DEPLOYMENT_TOKEN` that the folder's own `.env.local` or `.env` disagree with | A token is present and isn't a deploy key. Then `api.convex.dev` must accept it and list the expected team. The deployment the folder points at (`CONVEX_DEPLOYMENT` or a deploy key, from the environment, `.env.local` or `.env`) must belong to that team. Local and self-hosted deployments need no account |
 | Claude Code | `keyfit add claude` | The account's config folder: `CLAUDE_CONFIG_DIR`, left unset for the default `~/.claude`. API keys, OAuth tokens, gateway URLs and cloud-provider switches are removed | `claude auth status` must report a claude.ai subscription login (not an API key), in the expected config folder and organization. With `--pin-email`, it must also be the exact login |
 | Codex | `keyfit add codex` | `CODEX_HOME`. `CODEX_API_KEY` is removed, and interactive Codex runs without its shared daemon | `auth.json` must hold a ChatGPT login and no API key. With `--pin-account`, it must also be the exact ChatGPT account. This check is local; there is no online check |
-| MCP ownership | `keyfit add mcp 'globex_cloud_*'` | Claude gets `--settings` with the servers to hide. Codex gets `-c mcp_servers.NAME.enabled=false` | A Linear server (`mcp.linear.app`) in your user config stays visible only if it reads `LINEAR_API_KEY` or the project's own key variable, both of which hold the project's checked key; Linear servers in the folder's `.mcp.json` are hidden. Servers another project claimed are hidden unless this project claims them too. All other servers stay visible |
+| OpenCode | `keyfit add opencode` | `OPENCODE_DB`, the account's database of sign-ins. `opencode` starts without `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_API_KEY`, `GITHUB_TOKEN` and `OPENCODE_API_KEY` (OpenCode takes them as sign-ins of their providers; Claude and Codex sessions keep them). Sessions run on a private server (`--standalone`) instead of OpenCode's shared background server | The database must hold a sign-in for each provider recorded with the account (read-only, never a credential). Then `opencode auth list` in that environment must list them as stored, and no variable from your shell next to them. No provider is asked |
+| MCP ownership | `keyfit add mcp 'globex_cloud_*'` | Claude gets `--settings` with the servers to hide. Codex gets `-c mcp_servers.NAME.enabled=false`. OpenCode gets them switched off in `OPENCODE_CONFIG_CONTENT` | A Linear server (`mcp.linear.app`) in your user config stays visible only if it reads `LINEAR_API_KEY` or the project's own key variable, both of which hold the project's checked key; Linear servers in the folder's `.mcp.json` (or `opencode.json`) are hidden. Servers another project claimed are hidden unless this project claims them too. All other servers stay visible |
 
 Only the accounts you map are touched. For example, a project without a Linear mapping leaves your Linear variables as they are and checks nothing for Linear.
 
@@ -179,7 +182,7 @@ keyfit add cloudflare                              # records the folder's profil
 
 `keyfit add cloudflare` offers the profiles wrangler has (and the folders each is bound to), then the accounts the chosen one reaches. The account comes from `--account`, else the `account_id` in the folder's wrangler config, else the profile's only account. If the folder isn't bound yet, it names the `wrangler auth activate` command (and offers to run it in a terminal). Worktrees outside the repository's folder need a binding of their own; with Superset, bind the folder that holds them once: `wrangler auth activate acme ~/.superset/worktrees/acme-api`.
 
-**Convex** keeps one login per Mac (`~/.convex/config.json`) and has no account switch. Keyfit hands each session its project's token in `CONVEX_OVERRIDE_ACCESS_TOKEN`, which the convex CLI takes before its own login, so `npx convex` inside a Claude or Codex session acts as the project's account. An account is either the CLI's own login (`--cli`, read whenever a session starts) or a token Keyfit keeps in the Keychain (`--copy` copies the CLI's current login; without an option you paste one). The team comes from `--team`, else the team of the deployment in the folder's `.env.local`, else the login's only team:
+**Convex** keeps one login per Mac (`~/.convex/config.json`) and has no account switch. Keyfit hands each session its project's token in `CONVEX_OVERRIDE_ACCESS_TOKEN`, which the convex CLI takes before its own login, so `npx convex` inside a Claude, Codex or OpenCode session acts as the project's account. An account is either the CLI's own login (`--cli`, read whenever a session starts) or a token Keyfit keeps in the Keychain (`--copy` copies the CLI's current login; without an option you paste one). The team comes from `--team`, else the team of the deployment in the folder's `.env.local`, else the login's only team:
 
 ```bash
 npx convex login                          # sign the convex CLI in, if it isn't yet
@@ -188,7 +191,17 @@ keyfit add convex --copy --name acme      # or keep a copy of that login, then s
 keyfit add convex --cli --team globex     # a login that sees several teams
 ```
 
-When the CLI's own login expires or is signed out, starting `claude`, `codex` or `convex` in a terminal offers `Sign in now?` and runs `npx convex login --force`. Convex's MCP server (`npx convex mcp start`) runs the same CLI, so inside a session it uses the project's account too.
+When the CLI's own login expires or is signed out, starting `claude`, `codex`, `opencode` or `convex` in a terminal offers `Sign in now?` and runs `npx convex login --force`. Convex's MCP server (`npx convex mcp start`) runs the same CLI, so inside a session it uses the project's account too.
+
+**OpenCode** keeps every sign-in (`opencode auth login`, API keys too) in its database, `~/.local/share/opencode/opencode.db`, next to its sessions. `OPENCODE_DB` moves that database, so an account is a database: `keyfit add opencode` records OpenCode's own one and the providers signed in there. For a second set of sign-ins:
+
+```bash
+keyfit add opencode --new --name globex   # creates ~/.config/keyfit/opencode/globex for this project
+opencode auth login                       # inside the project: Keyfit sends the sign-in to that database
+keyfit add opencode --name globex --db ~/.config/keyfit/opencode/globex/opencode.db   # records the providers
+```
+
+OpenCode normally runs sessions in a background server that serves every folder and keeps the environment of whichever start launched it. Inside a project, Keyfit adds `--standalone` instead (a private server with the project's environment) to sessions (`opencode`, `run`, `mini`), sign-ins (`auth …`) and `models`, `stats` and `session …`, and refuses `--server`. `opencode DIR` with a folder of another project is refused too: start it there. Commands of the background server itself (`mcp`, `serve`, `service`, `api`, `plugin`, `debug`, `reload`, `pair`) and `upgrade` run unchanged, as outside a project. Inside a Claude, Codex or OpenCode session, though, the environment holds the project's accounts, and a background server started from there would keep them for every folder: there `api`, `reload` and an `opencode` in a folder outside every project get `--standalone`, and the other server commands (and `acp --login`) are refused; run them in a terminal of your own. Your configuration (`~/.config/opencode`, or the `OPENCODE_CONFIG_DIR` Superset's wrapper sets) stays shared; MCP servers other projects own are switched off for the session.
 
 Vercel's MCP server (`https://mcp.vercel.com`) signs in on its own, so Keyfit doesn't check it. If it is signed in to one project's account, claim it for that project with `keyfit add mcp <its name>`; every other project stops seeing it.
 
@@ -206,6 +219,7 @@ keyfit add linear --key env:LINEAR_ACME_API_KEY   # or a key you keep elsewhere 
 keyfit add github --login octocat  # one of the accounts `gh auth status` lists
 keyfit add claude                  # the Claude login in ~/.claude; for a second login: --new --name globex
 keyfit add codex                   # the Codex login in ~/.codex; another one: --codex-home PATH
+keyfit add opencode                # the providers signed in in OpenCode's database; another set: --new --name NAME
 keyfit add vercel                  # the login the vercel CLI has now, and its team; another login: --new --name NAME
 keyfit add supabase                # paste a Supabase token (hidden): checked, stored in the Keychain; or --cli
 keyfit add cloudflare              # the wrangler profile bound to this folder and its Cloudflare account
@@ -222,19 +236,20 @@ keyfit secret list                 # names of the keys Keyfit stored (never the 
 
 - **macOS only, for now.** Keys live in the macOS Keychain, and `keyfit setup` stops on other systems.
 - **zsh and bash.** In another shell, put `~/.config/keyfit/bin` first on PATH yourself (after `~/.superset/bin` if you use Superset).
-- **Eight tools.** Only `claude`, `codex`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` go through Keyfit, when they are found through PATH (typed in a terminal, or run by an agent Keyfit started). These don't go through Keyfit:
-  - other commands (terraform, npm, git over SSH), including `vc`, the Vercel CLI's short name, `npx supabase`, `npx wrangler` and `npx convex` (inside a Claude or Codex session they get the project's token or account, but no checks of their own; outside one, `npx wrangler` follows only wrangler's own folder binding and `npx convex` uses the CLI's own login)
+- **Nine tools.** Only `claude`, `codex`, `opencode`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` go through Keyfit, when they are found through PATH (typed in a terminal, or run by an agent Keyfit started). These don't go through Keyfit:
+  - other commands (terraform, npm, git over SSH), including `vc`, the Vercel CLI's short name, `npx supabase`, `npx wrangler` and `npx convex` (inside a Claude, Codex or OpenCode session they get the project's token or account, but no checks of their own; outside one, `npx wrangler` follows only wrangler's own folder binding and `npx convex` uses the CLI's own login)
   - tools called by their full path
   - apps that don't start from your shell, such as IDE extensions and desktop apps
 
   To run any other command with the project's accounts: `keyfit run -- <command>`.
-- **Online checks are cached for 30 minutes.** If a key is revoked within that window, Keyfit notices when the cached result expires, or at once with `keyfit status`. A new AWS SSO or console sign-in, a different Linear key, GitHub token, Vercel login or Supabase token or link, a new wrangler sign-in, a Convex login or deployment, or a different Claude organization is checked again right away. When a service cannot be reached, a success from the last 24 hours is accepted with a warning; a wrong account never is.
-- **One account of each kind per project:** one AWS profile, one Linear workspace, one GitHub login, one Vercel login and team, one Supabase token and organization, one wrangler profile and Cloudflare account, one Convex login and team, one Claude login, one Codex login.
+- **Online checks are cached for 30 minutes.** If a key is revoked within that window, Keyfit notices when the cached result expires, or at once with `keyfit status`. A new AWS SSO or console sign-in, a different Linear key, GitHub token, Vercel login or Supabase token or link, a new wrangler sign-in, a Convex login or deployment, a different Claude organization or a new OpenCode sign-in is checked again right away. When a service cannot be reached, a success from the last 24 hours is accepted with a warning; a wrong account never is.
+- **One account of each kind per project:** one AWS profile, one Linear workspace, one GitHub login, one Vercel login and team, one Supabase token and organization, one wrangler profile and Cloudflare account, one Convex login and team, one Claude login, one Codex login, one OpenCode database.
 - **Vercel is checked by login and team.** `keyfit add vercel` records the team selected in the login, if there is one. A project mapped without a team gets whichever team is selected at the time (`vercel switch` changes it), and a repository linked to another team isn't noticed.
 - **Supabase is checked by organization.** A token belongs to a person, who may be in several organizations; Keyfit records the project's and checks the token can see it and the folder's linked project belongs to it. A folder linked to a preview branch shows a warning: Supabase's API doesn't say which organization a branch belongs to. `--db-url` and other direct database connections don't use the account, so Keyfit doesn't check them.
 - **Cloudflare is checked by account.** wrangler 4.106 or newer is needed (older ones ignore profiles). A `CLOUDFLARE_API_TOKEN` in the folder's `.env` still beats the profile, as wrangler loads it itself; the account stays pinned, and the online check runs with what wrangler uses there. wrangler matches bound folders by their path as written, so a folder reached through a symlink or moved elsewhere needs its binding again.
 - **Convex is checked by team.** A login belongs to a person, who may be in several teams; Keyfit records the project's team and checks that the login sees it and that the folder's deployment belongs to it. The Convex project inside that team is shown, not enforced. Where a project deploy key (`project:…`) is in the folder, the convex CLI accepts no other login, so Keyfit leaves that key in charge and doesn't check it (a warning says so); local and self-hosted deployments aren't checked either. `CONVEX_OVERRIDE_ACCESS_TOKEN` is the CLI's own variable but not documented by Convex; it was verified on convex 1.46.
 - **GitHub means github.com.** GitHub Enterprise hosts are not supported.
+- **OpenCode is checked by provider.** OpenCode labels a sign-in with the provider's name, not the person, so Keyfit checks that the project's database holds a sign-in for each provider it recorded and that OpenCode itself sees them there, not whose they are. No provider is asked: OpenCode has no cheap call that confirms a sign-in without using it. A key in your shell for another provider (`OPENROUTER_API_KEY`, say) stays, and stops the start only when the database also holds a sign-in for that provider. Verified with OpenCode 2.0.25.
 - **Claude is checked by organization, Codex by login type.** Codex only has to be a ChatGPT login without an API key. Neither is checked down to the person unless you pin it with `--pin-email` or `--pin-account`. That way, login pools that rotate between accounts keep working.
 - **Linear MCP servers are matched by the key variable they read.** Keyfit puts each project's checked key into `LINEAR_API_KEY`, so one Linear server that reads `${LINEAR_API_KEY}` works in every project, always with that project's workspace. Servers that read another variable are hidden unless it is the project's own `env:` variable. To add such a server once:
 
@@ -248,8 +263,8 @@ keyfit secret list                 # names of the keys Keyfit stored (never the 
 - **Skip Keyfit once:** `KEYFIT_DISABLE=1 claude` runs that one command without checks, in your unchanged environment. Everything it starts inherits the variable, so an agent started this way runs its own `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` without Keyfit too.
 - **See what would run:** `KEYFIT_DRY_RUN=1 claude` runs the checks in a registered project, then prints the command and the names of the environment variables that would change, and starts nothing. In a folder that isn't registered, and for sign-in commands, the tool runs as usual.
 - **Turn it off:** `keyfit setup --remove` deletes the shims and PATH files and takes Keyfit's line out of your shell startup files. Open a new terminal afterwards. Your registry stays, so `keyfit setup --rc` turns everything back on.
-- **Delete its data too:** `keyfit setup --remove --purge` also deletes `~/.config/keyfit`: the registry, the check cache, and the Claude and Vercel login folders Keyfit made (with the logins in them). It asks first (`--yes` skips the question). Keys Keyfit stored in the Keychain are kept; it lists their names so you can delete them in Keychain Access.
-- **Uninstall:** run `keyfit setup --remove` first, then `pipx uninstall keyfit` or `brew uninstall keyfit`. Done the other way round, the eight tools stop with a note that names the line to remove.
+- **Delete its data too:** `keyfit setup --remove --purge` also deletes `~/.config/keyfit`: the registry, the check cache, and the Claude, Vercel and OpenCode login folders Keyfit made (with the logins in them). It asks first (`--yes` skips the question). Keys Keyfit stored in the Keychain are kept; it lists their names so you can delete them in Keychain Access.
+- **Uninstall:** run `keyfit setup --remove` first, then `pipx uninstall keyfit` or `brew uninstall keyfit`. Done the other way round, the nine tools stop with a note that names the line to remove.
 
 ## More
 
