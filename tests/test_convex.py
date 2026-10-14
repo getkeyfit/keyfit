@@ -655,7 +655,7 @@ class AddConvexTests(ConvexCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             main(["doctor"])
-        self.assertIn("✔ convex    not installed globally   npx convex gets its account from claude and codex sessions",
+        self.assertIn("✔ convex    not installed globally   npx convex gets its account from claude, codex and opencode sessions",
                       out.getvalue())
 
 

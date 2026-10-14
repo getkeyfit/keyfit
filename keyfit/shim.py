@@ -1,5 +1,5 @@
-"""The shim in front of `claude`, `codex`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` (ambient
-mode).
+"""The shim in front of `claude`, `codex`, `opencode`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex`
+(ambient mode).
 
 Three outcomes only:
   folder not registered      → run the real tool unchanged
@@ -8,8 +8,8 @@ Three outcomes only:
                                is only a sign-in, offer to run it and then start the tool)
 
 Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel`, `supabase`, `wrangler` and
-`convex` stay on that session's project even after `cd` elsewhere; `claude` and `codex` re-resolve
-from the folder, since starting a new agent elsewhere is deliberate.
+`convex` stay on that session's project even after `cd` elsewhere; `claude`, `codex` and `opencode`
+re-resolve from the folder, since starting a new agent elsewhere is deliberate.
 Bypass once: KEYFIT_DISABLE=1 <tool> …
 """
 
@@ -21,14 +21,15 @@ import sys
 from pathlib import Path
 
 from . import cache, environment, mcp, secrets
-from .adapters import ADAPTERS, cloudflare, convex, supabase, vercel
+from .adapters import ADAPTERS, cloudflare, convex, opencode, supabase, vercel
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
 from .resolve import resolve
 
-TOOLS = ("claude", "codex", "aws", "gh", "vercel", "supabase", "wrangler", "convex")
+TOOLS = ("claude", "codex", "opencode", "aws", "gh", "vercel", "supabase", "wrangler", "convex")
 INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "npm install -g @openai/codex",
+           "opencode": "brew install opencode",
            "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel",
            "supabase": "brew install supabase/tap/supabase",
            "wrangler": "npm install -g wrangler   (projects that have it run their own: npx wrangler …)",
@@ -38,7 +39,10 @@ INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": 
 MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github --login <login>",
        "vercel": "keyfit add vercel"}
 RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",),
-            "wrangler": ("cloudflare",), "convex": ("convex",), "claude": None, "codex": None}
+            "wrangler": ("cloudflare",), "convex": ("convex",), "claude": None, "codex": None,
+            "opencode": None}
+# The agents: they start with all of the project's accounts, checked.
+AGENTS = ("claude", "codex", "opencode")
 # Tools that run unchanged in a project without an account of their kind: Supabase is often used only locally
 # (supabase start), with no account at all, and so are wrangler (wrangler dev) and convex (an anonymous local
 # deployment).
@@ -52,6 +56,16 @@ CODEX_SUBCOMMANDS = {"agents", "exec", "e", "review", "login", "logout", "mcp", 
                      "resume", "queue", "archive", "delete", "migrate-rollouts", "unarchive", "fork", "cloud",
                      "exec-server", "features", "help"}
 CODEX_SESSIONS = {None, "exec", "e", "review", "resume", "fork"}
+OPENCODE_SUBCOMMANDS = {"upgrade", "update", "uninstall", "acp", "api", "debug", "auth", "mcp", "plugin", "models",
+                        "stats", "mini", "run", "session", "service", "reload", "pair", "serve"}
+# OpenCode's background server serves every folder and keeps the environment of the start that launched it. Its own
+# commands, and OpenCode's updates, run with your environment as outside a project (see opencode_private).
+OPENCODE_SHARED = {"upgrade", "update", "uninstall", "api", "debug", "mcp", "plugin", "service", "reload", "pair",
+                   "serve"}
+OPENCODE_NO_SERVER = {"upgrade", "update", "uninstall"}
+# Commands that take --standalone: a private server, with the session's environment and the project's sign-ins.
+OPENCODE_STANDALONE = {None, "run", "mini", "models", "stats", "session", "auth", "api", "reload"}
+OPENCODE_VALUED = {"--server", "--session", "-s", "--prompt", "--log-level", "--completions"}
 # Sign-in and setup commands always run — they are how a failed check gets fixed.
 LOGIN_COMMANDS = {
     "aws": (("sso", "login"), ("sso", "logout"), ("login",), ("logout",), ("configure",)),
@@ -63,9 +77,11 @@ LOGIN_COMMANDS = {
     "wrangler": (("login",), ("logout",), ("whoami",), ("auth", "create"), ("auth", "activate"), ("auth", "deactivate"),
                  ("auth", "delete"), ("auth", "list"), ("auth", "keyring")),
     "convex": (("login",), ("logout",)),  # not `login status`: it only reads the login
+    "opencode": (("auth",),),
 }
 LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",),
-               "supabase": ("supabase",), "wrangler": ("cloudflare",), "convex": ("convex",), "npx": ("convex",)}
+               "supabase": ("supabase",), "wrangler": ("cloudflare",), "convex": ("convex",), "npx": ("convex",),
+               "opencode": ("opencode",)}
 # Variables sign-in commands run without: gh must manage its own tokens, and convex its own login (with the override
 # set, `convex login` would only say the injected token is valid). (`supabase login` runs only in a project without a
 # Supabase account, where Keyfit has removed the token it set for another project, and nothing else.)
@@ -80,8 +96,9 @@ SIGN_INS = {
     "vercel": (("login",), ("login", "--global-config", None)),
     "wrangler": (("auth", "create", None), ("login",)),
     "npx": (("convex", "login", "--force"),),  # a Convex account that is the convex CLI's own login
+    "opencode": (("auth", "login", "--standalone"), ("auth", "login", None, "--standalone")),
 }
-SIGN_IN_VARS = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}
+SIGN_IN_VARS = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "opencode": "OPENCODE_DB"}
 VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query", "--color", "--ca-bundle",
                  "--cli-read-timeout", "--cli-connect-timeout", "--sso-session", "-u", "--user", "-h", "--hostname",
                  "-c", "--config", "-m", "--model", "-Q", "--global-config", "-S", "--scope", "-T", "--team",
@@ -180,7 +197,112 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         if sub is None:
             extra.append("--no-daemon")  # the shared daemon keeps the first launcher's environment
         return extra + args
+    if tool == "opencode":
+        return opencode_args(project, args, env, cwd, owners)
     return args
+
+
+def opencode_standalone(args: list[str]) -> list[str]:
+    """Add --standalone (OpenCode's private server, with this environment) where the command takes it, unless a
+    server is named already. `opencode auth` and `opencode session` alone print their commands and take none."""
+    end = args.index("--") if "--" in args else len(args)
+    sub = subcommand(args, OPENCODE_SUBCOMMANDS)
+    if sub not in OPENCODE_STANDALONE:
+        return args
+    if sub in ("auth", "session") and not any(not a.startswith("-") for a in args[args.index(sub) + 1:end]):
+        return args
+    if any(a == "--standalone" or a == "--server" or a.startswith("--server=") for a in args[:end]):
+        return args
+    return args[:end] + ["--standalone"] + args[end:]
+
+
+def opencode_server_option(project: Project, args: list[str]) -> None:
+    """Refuse another --server (its sign-ins and environment are not the project's), and `acp --login`, whose sign-in
+    goes through the background server."""
+    end = args.index("--") if "--" in args else len(args)
+    if any(a == "--server" or a.startswith("--server=") for a in args[:end]):
+        raise Refused(f"keyfit: this folder belongs to {project.name}; refusing --server: OpenCode would run with "
+                      f"that server's sign-ins and environment, not {project.name}'s.\n"
+                      f"  Bypass once: KEYFIT_DISABLE=1 opencode …")
+    if subcommand(args, OPENCODE_SUBCOMMANDS) == "acp" and "--login" in args[:end]:
+        raise Refused(f"keyfit: this folder belongs to {project.name}; refusing `opencode acp --login`: it signs in "
+                      f"through OpenCode's background server, not {project.name}'s database.\n"
+                      f"  Sign in with: opencode auth login   (Keyfit sends it to {project.name}'s database)")
+
+
+def opencode_private(args: list[str], env: dict) -> list[str]:
+    """OpenCode where Keyfit does not start it with a project's environment: in a folder outside every project, and
+    for the background server's own commands. In your terminal it runs unchanged. Inside a session Keyfit started
+    (KEYFIT_PROJECT set), the environment holds that project's accounts, which a background server started now would
+    keep for every folder: commands that take --standalone get it, and the others are refused."""
+    end = args.index("--") if "--" in args else len(args)
+    if not env.get("KEYFIT_PROJECT") or any(a == "--server" or a.startswith("--server=") for a in args[:end]):
+        return args  # your own environment, or a server you named: none is started
+    sub = subcommand(args, OPENCODE_SUBCOMMANDS)
+    if sub in OPENCODE_NO_SERVER or (sub == "acp" and "--login" not in args[:end]):  # acp: always a private server
+        return args
+    standalone = opencode_standalone(args)
+    if standalone != args or "--standalone" in args or sub in ("auth", "session"):
+        return standalone
+    raise Refused(f"keyfit: opencode not started: inside a session of {printable(env['KEYFIT_PROJECT'])}, "
+                  f"`opencode {sub or ' '.join(args)}` could start OpenCode's background server with that project's "
+                  f"accounts, and every folder would share them.\n  Run it in a terminal outside the session "
+                  f"(bypass once: KEYFIT_DISABLE=1 opencode …)")
+
+
+def opencode_mcp(project: Project, env: dict, cwd: Path, owners: dict | None) -> None:
+    try:
+        mcp.opencode_environment(project, env, cwd, owners)
+    except mcp.Unreadable:
+        raise Refused(f"keyfit: opencode not started: OPENCODE_CONFIG_CONTENT in your environment is not a JSON "
+                      f"object, so Keyfit cannot switch off the MCP servers {project.name} must not see.\n"
+                      f"  Fix or unset it (bypass once: KEYFIT_DISABLE=1 opencode …)") from None
+
+
+def opencode_args(project: Project, args: list[str], env: dict, cwd: Path, owners: dict | None = None) -> list[str]:
+    """Sessions, and the commands that read the project's sign-ins and sessions, run on a private server
+    (--standalone): the background server serves every folder and keeps the environment of the start that launched
+    it. Every MCP server the project must not see is switched off, for the folder OpenCode opens; with an OpenCode
+    account, provider keys from the shell go."""
+    opencode_server_option(project, args)
+    if "opencode" in project.connections:
+        opencode.scrub(env)
+    folder = opencode_folder(args)
+    opencode_mcp(project, env, Path(folder).resolve() if folder else cwd, owners)
+    return opencode_standalone(args)
+
+
+def opencode_folder(args: list[str]) -> str | None:
+    """The folder `opencode DIRECTORY` starts in, when one is named."""
+    skip = False
+    for arg in args:
+        if arg == "--":
+            return None
+        if skip:
+            skip = False
+        elif arg.startswith("-"):
+            skip = arg in OPENCODE_VALUED
+        else:
+            return arg if subcommand([arg], OPENCODE_SUBCOMMANDS) is None and os.path.isdir(arg) else None
+    return None
+
+
+def opencode_folder_check(args: list[str], registry: Registry, project: Project | None) -> None:
+    """`opencode DIRECTORY` works in that folder with this folder's accounts: refuse when the two folders belong to
+    different projects (or only one is registered)."""
+    folder = opencode_folder(args)
+    if folder is None:
+        return
+    there = resolve(folder, registry).project
+    if (there.name if there else None) == (project.name if project else None):
+        return
+    import shlex
+
+    raise Refused(f"keyfit: opencode not started: {printable(folder)} belongs to "
+                  f"{there.name if there else 'no registered project'}, this folder to "
+                  f"{project.name if project else 'no registered project'}, and the session would get this folder's "
+                  f"accounts.\n  Start it there: cd {shlex.quote(folder)} && opencode   "
+                  f"(bypass once: KEYFIT_DISABLE=1 opencode …)")
 
 
 def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
@@ -450,6 +572,10 @@ def login_environment(tool: str, project: Project, env: dict) -> dict:
     login_env = environment.build(project, env, kinds=LOGIN_KINDS[tool])
     for var in LOGIN_SCRUB.get(tool, ()):
         login_env.pop(var, None)
+    if tool == "opencode":  # its sign-in starts a private server, and that the MCP servers of its configuration
+        if "opencode" in project.connections:
+            opencode.scrub(login_env)
+        opencode_mcp(project, login_env, Path.cwd(), Registry.load().mcp_owners())
     return login_env
 
 
@@ -539,6 +665,8 @@ def main(argv: list[str]) -> int:
     env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
 
     try:
+        if tool == "opencode" and subcommand(args, OPENCODE_SUBCOMMANDS) in OPENCODE_SHARED:
+            os.execve(real, [tool, *opencode_private(args, env)], env)
         registry = Registry.load()
         shared = tool == "aws" and requested_profiles(args)
         if shared and set(shared) <= registry.shared_aws_profiles():
@@ -550,8 +678,10 @@ def main(argv: list[str]) -> int:
             raise Refused(f"keyfit: this session belongs to project {printable(pinned)}, which is not in the registry "
                           f"(renamed or removed?), so {tool} was not started.\n  Start the session again, or bypass "
                           f"once: KEYFIT_DISABLE=1 {tool} …")
-        if project is None:
-            os.execve(real, [tool, *args], env)  # not a registered project: exactly as before Keyfit
+        if tool == "opencode":
+            opencode_folder_check(args, registry, project)
+        if project is None:  # not a registered project: exactly as before Keyfit
+            os.execve(real, [tool, *(opencode_private(args, env) if tool == "opencode" else args)], env)
 
         relevant = RELEVANT.get(tool)
         if is_login_command(tool, args):
@@ -566,6 +696,9 @@ def main(argv: list[str]) -> int:
             login_env = login_environment(tool, project, env)
             if tool == "vercel":  # `vercel login` signs in to the project's folder
                 args = vercel_login_args(project, args, login_env)
+            if tool == "opencode":  # to the project's database, not a background server's
+                opencode_server_option(project, args)
+                args = opencode_standalone(args)
             os.execve(real, [tool, *args], login_env)
         if relevant and not any(kind in project.connections for kind in relevant):
             if tool in OPTIONAL:  # no account of its kind: it runs as before Keyfit, minus other projects' tokens
@@ -592,7 +725,7 @@ def main(argv: list[str]) -> int:
             if failed:
                 _say([f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"])
                 return 1
-        if tool in ("claude", "codex"):
+        if tool in AGENTS:
             for check in (c for c in checks if c.status == "warn"):
                 _say([f"keyfit: {check.lines()[0].strip()}"])
         args = adjust_args(tool, project, args, run_env, Path.cwd(), registry.mcp_owners())

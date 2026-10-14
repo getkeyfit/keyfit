@@ -15,6 +15,7 @@ from .adapters import claude as claude_adapter
 from .adapters import cloudflare as cloudflare_adapter
 from .adapters import convex as convex_adapter
 from .adapters import linear as linear_adapter
+from .adapters import opencode as opencode_adapter
 from .adapters import supabase as supabase_adapter
 from .adapters import vercel as vercel_adapter
 from .adapters.aws import ACCOUNT_RE, parse_envrc, read_profile
@@ -71,8 +72,8 @@ def _not_active() -> str:
 
     folder = canonical(shim_dir())
     if not (folder / MARKER).is_file():
-        return "Keyfit is not set up yet, so claude, codex, aws, gh, vercel, supabase, wrangler and convex still run " \
-               "without checks.\n" \
+        return "Keyfit is not set up yet, so claude, codex, opencode, aws, gh, vercel, supabase, wrangler and convex " \
+               "still run without checks.\n" \
                "  Set it up: keyfit setup --rc, then open a new terminal"
     if folder not in [canonical(e) for e in os.environ.get("PATH", "").split(os.pathsep) if e]:
         return f"{tilde(folder)} is not on PATH in this terminal, so tools here still run without checks.\n" \
@@ -220,6 +221,24 @@ def _offer_codex(name: str, base: dict) -> None:
         cmd_add_codex(argparse.Namespace(**base, name=None, codex_home=None, pin_account=False))
 
 
+def _offer_opencode(name: str, base: dict) -> None:
+    from .realbin import find_real
+
+    env = dict(os.environ)
+    if find_real("opencode", env, skip_wrappers=True) is None:
+        print("OpenCode: opencode not found on PATH — skipped")
+        return
+    db = opencode_adapter.default_db(env)
+    found, _ = opencode_adapter.signed_in(db)
+    if not found:
+        print(f"OpenCode: no sign-ins in {tilde(db)} — sign in ({opencode_adapter.sign_in(db, env)}), "
+              "then: keyfit add opencode")
+        return
+    print(f"OpenCode: signed in to {', '.join(sorted(found))} in {tilde(db)}")
+    if _yes(f"Use these OpenCode sign-ins for {name}?"):
+        cmd_add_opencode(argparse.Namespace(**base, name=None, db=None, new=False))
+
+
 def _offer_vercel(name: str, base: dict) -> None:
     from .realbin import find_real
 
@@ -302,7 +321,8 @@ def _offer_linear(name: str, base: dict) -> None:
 
 
 GUIDED = (("aws", "AWS", _offer_aws), ("github", "GitHub", _offer_github), ("claude", "Claude", _offer_claude),
-          ("codex", "Codex", _offer_codex), ("vercel", "Vercel", _offer_vercel),
+          ("codex", "Codex", _offer_codex), ("opencode", "OpenCode", _offer_opencode),
+          ("vercel", "Vercel", _offer_vercel),
           ("supabase", "Supabase", _offer_supabase), ("cloudflare", "Cloudflare", _offer_cloudflare),
           ("convex", "Convex", _offer_convex), ("linear", "Linear", _offer_linear))
 
@@ -367,7 +387,7 @@ def cmd_status(args) -> int:
     checks = []
     if not r.project.connections:
         print("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add aws|github|"
-              "claude|codex|vercel|supabase|cloudflare|convex|linear …")
+              "claude|codex|opencode|vercel|supabase|cloudflare|convex|linear …")
     else:
         env = environment.build(r.project)
         checks = environment.verify(r.project, env, remote=not args.offline)  # fresh; refreshes the cache
@@ -558,7 +578,8 @@ def cmd_add_mcp(args) -> int:
     owned = reg.add_mcp_servers(project.name, args.servers)
     reg.save()
     found = {**{n: "claude" for n in mcp.claude_user_servers(dict(os.environ))},
-             **{n: "codex" for n in mcp.codex_servers(dict(os.environ))}}
+             **{n: "codex" for n in mcp.codex_servers(dict(os.environ))},
+             **{n: "opencode" for n, _, _ in mcp.opencode_servers(dict(os.environ), Path.cwd())}}
     print(f"{project.name}: owns MCP servers {', '.join(owned)} — hidden in every other project")
     for pattern in args.servers:
         hits = sorted(n for n in found if fnmatch.fnmatchcase(n, pattern))
@@ -688,6 +709,41 @@ def cmd_add_codex(args) -> int:
     reg.save()
     print(f"{project.name}: codex account '{name}' → ChatGPT {login['plan']} in {tilde(folder)}"
           + (" (pinned to this account)" if args.pin_account else ""))
+    return 0
+
+
+def cmd_add_opencode(args) -> int:
+    """Record which OpenCode sign-ins (its login database) a project uses. Default: OpenCode's own database."""
+    reg = Registry.load(args.registry)
+    project = _project_from_args(reg, args)
+    if project is None:
+        return 1
+    env = dict(os.environ)
+    if args.new:
+        if not args.name:
+            print("--new needs --name (the account's short name)", file=sys.stderr)
+            return 1
+        folder = config_dir() / "opencode" / args.name
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)  # OpenCode keeps the sign-ins and sessions here
+        db = folder / "opencode.db"
+        reg.set_account("opencode", args.name, {"db": tilde(db)})
+        reg.set_connection(project.name, "opencode", args.name)
+        reg.save()
+        print(f"Created {tilde(folder)}. Sign in once (OpenCode keeps the sign-ins in that folder), then record "
+              f"them:\n  {opencode_adapter.sign_in(db, env)}\n"
+              f"  keyfit add opencode --name {args.name} --db {tilde(db)}")
+        return 0
+    db = canonical(args.db) if args.db else opencode_adapter.default_db(env)
+    found, reason = opencode_adapter.signed_in(db)
+    if not found:
+        print(f"no OpenCode sign-ins in {tilde(db)}" + (f" ({reason})" if reason else "") +
+              f"\n  sign in with: {opencode_adapter.sign_in(db, env)}", file=sys.stderr)
+        return 1
+    name = args.name or ("default" if db == opencode_adapter.default_db(env) else db.parent.name)
+    reg.set_account("opencode", name, {"db": tilde(db), "logins": sorted(found)})
+    reg.set_connection(project.name, "opencode", name)
+    reg.save()
+    print(f"{project.name}: opencode account '{name}' → {', '.join(sorted(found))} in {tilde(db)}")
     return 0
 
 
@@ -1153,7 +1209,8 @@ NOT_MACOS = "Keyfit supports macOS for now (it stores keys in the Keychain); Lin
 # is Superset wrapper → Keyfit shim → real tool (Superset finds "the next claude"). Both move to the very front:
 # a login profile that prepends another folder after Superset set PATH (e.g. `brew shellenv` in ~/.zprofile)
 # must not put real tools ahead of the shims.
-SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase/wrangler/convex shims on PATH (written by `keyfit setup`).
+SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/aws/gh/vercel/supabase/wrangler/convex shims on PATH (written by
+# `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 () {
   local kf="@SHIMS@" ss="$HOME/.superset/bin"
@@ -1163,7 +1220,8 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase/wrangler/co
 
 # The same rule in POSIX sh, for bash (macOS ships 3.2): no arrays or `local`, so _kf_ variables unset at the
 # end; PATH is walked with parameter expansion (never word-split or globbed). Like zsh, it drops empty entries.
-SHELL_SH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase/wrangler/convex shims on PATH (written by `keyfit setup`).
+SHELL_SH = """# Keyfit: put the claude/codex/opencode/aws/gh/vercel/supabase/wrangler/convex shims on PATH (written by
+# `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 _kf="@SHIMS@"; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
 while [ -n "$_kf_rest" ]; do
@@ -1301,7 +1359,7 @@ def cmd_setup(args) -> int:
 
 # What Keyfit itself keeps in its config dir; --purge deletes the folder only when it holds nothing else.
 KEYFIT_FILES = {"registry.toml", "registry.toml.tmp", "cache", "bin", "shell.zsh", "shell.sh", "claude", "vercel",
-                ".DS_Store"}
+                "opencode", ".DS_Store"}
 
 
 def _drop_lines(rc: Path, lines: set[str]) -> bool:
@@ -1335,7 +1393,7 @@ def _purge_confirmed(folder: Path, args) -> bool:
         print(f"--purge deletes {tilde(folder)}; confirm with --yes — nothing changed", file=sys.stderr)
         return False
     accounts = [(title, sorted(p.name for p in (folder / kind).glob("*") if p.is_dir()))
-                for kind, title in (("claude", "Claude"), ("vercel", "Vercel"))]
+                for kind, title in (("claude", "Claude"), ("vercel", "Vercel"), ("opencode", "OpenCode"))]
     extra = "".join(f" and the {title} account folders {', '.join(names)}" for title, names in accounts if names)
     if _yes(f"Delete {tilde(folder)}: the registry of your projects{extra}?"):
         return True
@@ -1394,8 +1452,8 @@ def _remove_setup(args) -> int:
             folder.rmdir()  # only when nothing else is left in it
         except OSError:
             pass
-    print("Open a new terminal (or run: hash -r): claude, codex, aws, gh, vercel, supabase, wrangler and convex run "
-          "directly again.")
+    print("Open a new terminal (or run: hash -r): claude, codex, opencode, aws, gh, vercel, supabase, wrangler and "
+          "convex run directly again.")
     return 0
 
 
@@ -1479,9 +1537,9 @@ def cmd_doctor(args) -> int:
         real = find_real(tool, env, skip_wrappers=True)
         if real:
             checks.append(Check(tool, "ok", _short(real)))
-        elif tool == "convex":  # projects run it through npx, which gets the account in claude and codex sessions
-            checks.append(Check(tool, "ok", "not installed globally", "npx convex gets its account from claude "
-                                "and codex sessions"))
+        elif tool == "convex":  # projects run it through npx, which gets the account in agent sessions
+            checks.append(Check(tool, "ok", "not installed globally", "npx convex gets its account from claude, "
+                                "codex and opencode sessions"))
         else:
             checks.append(Check(tool, "warn", "not found on PATH", "needed only if you use it", INSTALL[tool]))
     path = Path(args.registry) if args.registry else default_path()
@@ -1507,6 +1565,13 @@ def cmd_doctor(args) -> int:
                 if not check.failed:
                     check = Check("cloudflare", "ok", check.label, f"{check.detail} · account {conn['account_id']}")
                 checks.append(check)
+            conn = r.project.connections.get("opencode")
+            if isinstance(conn, dict):  # which database this project's OpenCode sessions use, from the file only
+                check = ADAPTERS["opencode"].local(conn, environment.build(r.project, env, kinds=("opencode",)))
+                if not check.failed:
+                    db = opencode_adapter.database(conn, env)
+                    check = Check("opencode", "ok", check.label, f"{check.detail} · {tilde(db)}")
+                checks.append(check)
         else:  # outside a repository, `keyfit init` would register the whole folder (the home folder, say)
             fix = "keyfit init" if git_main_checkout(r.path) else "cd into a project's repository, then: keyfit init"
             checks.append(Check("project", "warn", "this folder", f"not registered ({r.how}): tools run here unchanged",
@@ -1520,8 +1585,8 @@ def cmd_doctor(args) -> int:
 
 
 START = """start here:
-  keyfit setup --rc     put Keyfit in front of claude, codex, aws, gh, vercel, supabase, wrangler and convex, then
-                        open a new terminal
+  keyfit setup --rc     put Keyfit in front of claude, codex, opencode, aws, gh, vercel, supabase, wrangler and
+                        convex, then open a new terminal
   keyfit init           inside a project's repository: register it and pick its accounts
   claude                starts with that project's accounts, checked
 something off? keyfit doctor
@@ -1538,8 +1603,8 @@ def build_parser() -> argparse.ArgumentParser:
     def command(parent, name: str, text: str):  # the one-line help is also the command's own --help description
         return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
 
-    p = command(sub, "setup", "write the claude/codex/aws/gh/vercel/supabase/wrangler/convex shims; with --rc also put them "
-                              "on PATH")
+    p = command(sub, "setup", "write the claude/codex/opencode/aws/gh/vercel/supabase/wrangler/convex shims; with --rc "
+                              "also put them on PATH")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
     p.add_argument("--rc", nargs="?", const="", metavar="FILE",
@@ -1551,14 +1616,14 @@ def build_parser() -> argparse.ArgumentParser:
                         "~/.bash_profile, ~/.bash_login, ~/.profile and ~/.bashrc (or only --rc FILE); "
                         "the registry stays")
     p.add_argument("--purge", action="store_true",
-                   help="with --remove: also delete ~/.config/keyfit (registry, cache, Claude and Vercel account "
-                        "folders it made), after asking; Keychain items stay")
+                   help="with --remove: also delete ~/.config/keyfit (registry, cache, Claude, Vercel and OpenCode "
+                        "account folders it made), after asking; Keychain items stay")
     p.add_argument("-y", "--yes", action="store_true", help="with --purge: do not ask")
     p.set_defaults(func=cmd_setup)
 
     p = command(sub, "init", "register the current repository as a project, then offer the AWS, GitHub, Claude, "
-                             "Codex, Vercel, Supabase, Cloudflare, Convex and Linear accounts found on this Mac (imports "
-                             "`use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
+                             "Codex, OpenCode, Vercel, Supabase, Cloudflare, Convex and Linear accounts found on this "
+                             "Mac (imports `use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
     p.add_argument("-y", "--yes", action="store_true",
@@ -1602,6 +1667,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="require this exact ChatGPT account (default: any ChatGPT login, e.g. codex-multi-auth pools)")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_codex)
+    p = command(kinds, "opencode", "OpenCode sign-ins (its login database) for this project")
+    p.add_argument("--name", help="short account name, reusable across projects (default: default, for OpenCode's "
+                                  "own database)")
+    where = p.add_mutually_exclusive_group()
+    where.add_argument("--db", help="the account's database (default: ~/.local/share/opencode/opencode.db, the one "
+                                    "OpenCode uses)")
+    where.add_argument("--new", action="store_true",
+                       help="create a folder for other sign-ins (~/.config/keyfit/opencode/NAME); sign in afterwards")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_opencode)
     p = command(kinds, "vercel", "Vercel login (global config folder) and team for this project")
     p.add_argument("--name", help="short account name, reusable across projects (default: the team slug, "
                                   "else the username)")

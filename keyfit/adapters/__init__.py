@@ -5,6 +5,7 @@ from .codex import CodexAdapter
 from .convex import ConvexAdapter
 from .github import GithubAdapter
 from .linear import LinearAdapter
+from .opencode import OpenCodeAdapter
 from .supabase import SupabaseAdapter
 from .vercel import VercelAdapter
 
@@ -13,6 +14,7 @@ ADAPTERS = {
     "linear": LinearAdapter(),
     "claude": ClaudeAdapter(),
     "codex": CodexAdapter(),
+    "opencode": OpenCodeAdapter(),
     "github": GithubAdapter(),
     "vercel": VercelAdapter(),
     "supabase": SupabaseAdapter(),
