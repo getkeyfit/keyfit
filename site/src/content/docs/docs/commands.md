@@ -20,6 +20,7 @@ keyfit add github --login octocat  # one of the accounts `gh auth status` lists
 keyfit add claude                  # the Claude login in ~/.claude; for a second login: --new --name globex
 keyfit add codex                   # the Codex login in ~/.codex; another one: --codex-home PATH
 keyfit add vercel                  # the login the vercel CLI has now, and its team; another login: --new --name NAME
+keyfit add supabase                # paste a Supabase token (hidden): checked, stored in the Keychain; or --cli
 keyfit add mcp 'globex_cloud_*'    # these MCP servers belong to this project; every other project stops seeing them
 keyfit run -- terraform plan       # run any other command with the project's accounts (checked first)
 keyfit secret set NAME             # store a key from a hidden prompt; prints keychain:keyfit/NAME to use

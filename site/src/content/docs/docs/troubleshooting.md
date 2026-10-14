@@ -105,10 +105,16 @@ When you started the tool yourself in a terminal and the fix is only a sign-in (
 | **Vercel** `this login has no access to Vercel team T` | sign in as a member of T, or map a team of this login: `keyfit add vercel --team <slug>` |
 | **Vercel** `… links this repository to another Vercel team (team_…)` | the repository was linked with another login or team. Remove the `.vercel` folder it names, then run `vercel link` inside the project; it links with the project's login and team |
 | `this folder belongs to acme-api (Vercel team acme); refusing --scope globex` (also `--team`, `--global-config`, `--token`) | inside a project, `vercel` works only with the project's login and team. Keyfit already adds them, so leave the option out |
+| **Supabase** `token not found (Keychain item keyfit/supabase-…)`, `… does not hold a Supabase access token`, `Supabase rejected the token (deleted or expired?)` | give the account a new token: create one at supabase.com/dashboard/account/tokens, then `keyfit add supabase --name …` and paste it. Or sign the CLI in (`supabase login`, outside the project) and copy its login: `keyfit add supabase --name … --cli` |
+| **Supabase** `this token has no access to organization …` | the token belongs to someone who isn't a member of the project's organization. Add a token of a member: `keyfit add supabase --name …` |
+| **Supabase** `… links this folder to project REF of another organization`, `… this token cannot reach that project` | the folder was linked (`supabase/.temp/project-ref`, or `SUPABASE_PROJECT_ID`) to a project of another account or organization. Run `supabase link` inside the project and pick one of its organization's projects |
+| **Supabase** `! supabase … names REF, which this token does not find as a project (a preview branch?)` | a warning, not a failure: Supabase's API doesn't say which organization a preview branch belongs to, so that link isn't checked |
+| `this folder belongs to acme-api, whose Supabase token Keyfit keeps …; supabase login would change only the supabase CLI's own login` (also `logout`) | inside a project with a Supabase account, the CLI's own login isn't used. To change the project's token: `keyfit add supabase --name …`. To change the CLI's own login, run `supabase login` outside the project |
+| `this folder belongs to acme-api (Supabase organization Acme); refusing --project-ref REF: it belongs to another organization` (also `link REF`, `projects delete REF`, `gen types --project-id`, `--workdir`, `--org-id`, `--profile`) | inside a project, `supabase` works only with projects of the project's organization. Leave the option out to use the folder's linked project |
 | **Codex** `not signed in` | `codex login` (another home: `CODEX_HOME=… codex login`) |
 | **Codex** `Codex is signed in with an API key`, `auth.json holds an API key next to the ChatGPT login` | `codex logout && codex login`, with your ChatGPT account |
 | `… did not answer (…)`, `→ check the network and retry` | the service could not be reached, even after one retry, and there is no success from the last 24 hours to fall back on. Check the network |
-| `project acme-api has no aws account mapped, so aws was not started` (same for `gh` and `github`, `vercel` and `vercel`) | inside a project, these three start only with the project's account for them. Map one: `keyfit add aws --profile …`, `keyfit add github --login …` or `keyfit add vercel`. To skip Keyfit once: `KEYFIT_DISABLE=1 aws …` |
+| `project acme-api has no aws account mapped, so aws was not started` (same for `gh` and `github`, `vercel` and `vercel`) | inside a project, these three start only with the project's account for them. Map one: `keyfit add aws --profile …`, `keyfit add github --login …` or `keyfit add vercel`. To skip Keyfit once: `KEYFIT_DISABLE=1 aws …`. `supabase` is different: without a Supabase account it runs as before |
 | `✘ github  octocta  no account [accounts.github.octocta]`, `✘ asw … unknown connection (a typo? …)` | a hand edit of `~/.config/keyfit/registry.toml` names an account that isn't there, or a connection Keyfit doesn't know. Fix the name, or map it again with `keyfit add …`. Only this project is affected |
 | `this folder belongs to acme-api (AWS profile acme-dev); refusing --profile other` | another project's profile was asked for inside this project. If the profile belongs to a machine-wide tool, list it under `[settings] shared_aws_profiles` in `~/.config/keyfit/registry.toml` |
 
@@ -119,7 +125,7 @@ When a service doesn't answer but a check succeeded within the last 24 hours, th
 Successful online checks are reused for 30 minutes (see [the verification cache](/docs/security/#the-verification-cache)). Keyfit checks again right away when the identity behind a connection changes:
 
 - a new AWS SSO or console sign-in
-- a different Linear key, GitHub token or Vercel login, and any `gh auth login`, `logout` or `switch`
+- a different Linear key, GitHub token, Vercel login or Supabase token, a different linked Supabase project, and any `gh auth login`, `logout` or `switch`
 - a different Claude organization
 - a connection changed with `keyfit add`
 
@@ -191,7 +197,7 @@ pipx uninstall keyfit            # last, or: brew uninstall keyfit
 - **What stays.** Without `--purge`, the registry stays, and `keyfit setup --rc` turns everything back on.
 - **What `--purge` deletes:** the registry, the check cache, the Claude config folders made by `keyfit add claude --new` and the Vercel login folders made by `keyfit add vercel --new` (with the logins in them). It refuses if `~/.config/keyfit` holds files Keyfit didn't write; delete those yourself if you are sure. Without a terminal it needs `--yes`.
 - **Keychain items** Keyfit stored (service `keyfit`) are never deleted; `--purge` prints their names. Delete them in Keychain Access, or with `security delete-generic-password -s keyfit -a NAME`.
-- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `aws`, `gh` and `vercel` then run directly again.
+- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `aws`, `gh`, `vercel` and `supabase` then run directly again.
 
 If `keyfit` itself no longer runs, do it by hand:
 
