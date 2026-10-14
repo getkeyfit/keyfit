@@ -1,5 +1,6 @@
 from .aws import AwsAdapter
 from .claude import ClaudeAdapter
+from .cloudflare import CloudflareAdapter
 from .codex import CodexAdapter
 from .github import GithubAdapter
 from .linear import LinearAdapter
@@ -14,4 +15,5 @@ ADAPTERS = {
     "github": GithubAdapter(),
     "vercel": VercelAdapter(),
     "supabase": SupabaseAdapter(),
+    "cloudflare": CloudflareAdapter(),
 }
