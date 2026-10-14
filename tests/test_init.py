@@ -111,7 +111,7 @@ class Machine(unittest.TestCase):
         self.bin.mkdir()
         for name, text in (("gh", FAKE_GH), ("claude", FAKE_CLAUDE), ("aws", FAKE_AWS), ("codex", "#!/bin/sh\n"),
                            ("vercel", "#!/bin/sh\nexit 97\n"), ("supabase", "#!/bin/sh\nexit 97\n"),
-                           ("wrangler", "#!/bin/sh\nexit 97\n")):
+                           ("wrangler", "#!/bin/sh\nexit 97\n"), ("convex", "#!/bin/sh\nexit 97\n")):
             executable(self.bin / name, text)
         self.stub = self.tmp / "stub"
         self.stub.mkdir()
@@ -237,7 +237,7 @@ class GuidedInitTests(Machine):
         self.assertEqual(code, 0, out + err)
         self.assertEqual(list(self.registry()["projects"]["acme"]), ["roots"])
         self.assertIn("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add "
-                      "aws|github|claude|codex|vercel|supabase|cloudflare|linear …\n"
+                      "aws|github|claude|codex|vercel|supabase|cloudflare|convex|linear …\n"
                       "  aws, gh and vercel won't start here until mapped: keyfit add aws|github|vercel …\n", out)
         self.assertEqual(self.hidden, [])
         self.assertEqual(self.sts.read_text(), "")
@@ -255,7 +255,8 @@ class GuidedInitTests(Machine):
     def test_without_a_terminal_or_with_yes_nothing_is_asked(self):
         expected = (f"Registered project 'acme' → {self.repo}\n"
                     "Worktrees of this repository resolve to it automatically. Check it with: keyfit status\n"
-                    "Keyfit is not set up yet, so claude, codex, aws, gh, vercel, supabase and wrangler still run without checks.\n"
+                    "Keyfit is not set up yet, so claude, codex, aws, gh, vercel, supabase, wrangler and convex still run "
+                    "without checks.\n"
                     "  Set it up: keyfit setup --rc, then open a new terminal\n")
         self.assertEqual(self.init(stdin=io.StringIO("1\ny\n")), (0, expected, ""))
         self.assertEqual(self.init(argv=["--yes"]), (0, expected, ""))
@@ -377,7 +378,7 @@ class MessagesTests(Machine):
         self.assertIn("✘ github    octocta   no account [accounts.github.octocta]\n"
                       "    → map it again: keyfit add github …", out)
         self.assertRegex(out, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, "
-                              r"github, vercel, supabase, cloudflare\)")
+                              r"github, vercel, supabase, cloudflare, convex\)")
         self.assertIn("✘ aws       acme-dev → ?   the expected account must be a 12-digit AWS account ID", out)
         self.assertIn("  vercel won't start here until mapped: keyfit add vercel …\n", out)
         code, out, _ = self.run_main("which", "-v")
@@ -480,7 +481,7 @@ class DoctorTests(Machine):
         lines = out.splitlines()
         self.assertEqual([line.split()[1] for line in lines[:-1]],
                          ["macOS", "python", "shims", "PATH", "claude", "codex", "aws", "gh", "vercel", "supabase",
-                          "wrangler", "registry", "keychain", "project"])
+                          "wrangler", "convex", "registry", "keychain", "project"])
         self.assertTrue(all(line.startswith("  ✔ ") for line in lines[:-1]), out)
         self.assertIn("first, before every real tool", out)
         self.assertIn(f"✔ gh        {self.bin / 'gh'}\n", out)
@@ -506,7 +507,7 @@ class DoctorTests(Machine):
         superset.mkdir(parents=True)
         code, out = self.doctor(self.bin, self.shims)
         self.assertEqual(code, 1)
-        self.assertIn(f"{self.bin} comes first: claude, codex, aws, gh, vercel, supabase, wrangler would run without Keyfit", out)
+        self.assertIn(f"{self.bin} comes first: claude, codex, aws, gh, vercel, supabase, wrangler, convex would run without Keyfit", out)
         self.assertIn("→ make Keyfit's line (`…  # keyfit: …`) the last line of your shell startup file, "
                       "then open a new terminal", out)
         code, out = self.doctor(self.shims, superset, self.bin)
