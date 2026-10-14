@@ -1,4 +1,5 @@
-"""The shim in front of `claude`, `codex`, `aws`, `gh`, `vercel`, `supabase` and `wrangler` (ambient mode).
+"""The shim in front of `claude`, `codex`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` (ambient
+mode).
 
 Three outcomes only:
   folder not registered      → run the real tool unchanged
@@ -6,8 +7,8 @@ Three outcomes only:
   a check fails              → do not run it; print what is wrong and the fix (in a terminal, when the fix
                                is only a sign-in, offer to run it and then start the tool)
 
-Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel`, `supabase` and `wrangler`
-stay on that session's project even after `cd` elsewhere; `claude` and `codex` re-resolve
+Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel`, `supabase`, `wrangler` and
+`convex` stay on that session's project even after `cd` elsewhere; `claude` and `codex` re-resolve
 from the folder, since starting a new agent elsewhere is deliberate.
 Bypass once: KEYFIT_DISABLE=1 <tool> …
 """
@@ -20,26 +21,29 @@ import sys
 from pathlib import Path
 
 from . import cache, environment, mcp, secrets
-from .adapters import ADAPTERS, cloudflare, supabase, vercel
+from .adapters import ADAPTERS, cloudflare, convex, supabase, vercel
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
 from .resolve import resolve
 
-TOOLS = ("claude", "codex", "aws", "gh", "vercel", "supabase", "wrangler")
+TOOLS = ("claude", "codex", "aws", "gh", "vercel", "supabase", "wrangler", "convex")
 INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "npm install -g @openai/codex",
            "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel",
            "supabase": "brew install supabase/tap/supabase",
-           "wrangler": "npm install -g wrangler   (projects that have it run their own: npx wrangler …)"}
+           "wrangler": "npm install -g wrangler   (projects that have it run their own: npx wrangler …)",
+           "convex": "npm install -g convex   (projects that have it run their own: npx convex …)",
+           "npx": "brew install node"}
 # How to map the one account `aws`, `gh` and `vercel` need inside a project before they start there.
 MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github --login <login>",
        "vercel": "keyfit add vercel"}
 RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",),
-            "wrangler": ("cloudflare",), "claude": None, "codex": None}
+            "wrangler": ("cloudflare",), "convex": ("convex",), "claude": None, "codex": None}
 # Tools that run unchanged in a project without an account of their kind: Supabase is often used only locally
-# (supabase start), with no account at all, and so is wrangler (wrangler dev).
-OPTIONAL = ("supabase", "wrangler")
-PINNED = ("aws", "gh", "vercel", "supabase", "wrangler")
+# (supabase start), with no account at all, and so are wrangler (wrangler dev) and convex (an anonymous local
+# deployment).
+OPTIONAL = ("supabase", "wrangler", "convex")
+PINNED = ("aws", "gh", "vercel", "supabase", "wrangler", "convex")
 MAX_DEPTH = 6
 CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs",
                       "mcp", "plugin", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update", "help"}
@@ -58,12 +62,14 @@ LOGIN_COMMANDS = {
     "supabase": (("login",), ("logout",)),
     "wrangler": (("login",), ("logout",), ("whoami",), ("auth", "create"), ("auth", "activate"), ("auth", "deactivate"),
                  ("auth", "delete"), ("auth", "list"), ("auth", "keyring")),
+    "convex": (("login",), ("logout",)),  # not `login status`: it only reads the login
 }
 LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",),
-               "supabase": ("supabase",), "wrangler": ("cloudflare",)}
-# Variables sign-in commands run without: gh must manage its own tokens. (`supabase login` runs only in a project
-# without a Supabase account, where Keyfit has removed the token it set for another project, and nothing else.)
-LOGIN_SCRUB = {"gh": ("GH_TOKEN", "GITHUB_TOKEN")}
+               "supabase": ("supabase",), "wrangler": ("cloudflare",), "convex": ("convex",), "npx": ("convex",)}
+# Variables sign-in commands run without: gh must manage its own tokens, and convex its own login (with the override
+# set, `convex login` would only say the injected token is valid). (`supabase login` runs only in a project without a
+# Supabase account, where Keyfit has removed the token it set for another project, and nothing else.)
+LOGIN_SCRUB = {"gh": ("GH_TOKEN", "GITHUB_TOKEN"), "convex": (convex.OVERRIDE,), "npx": (convex.OVERRIDE,)}
 # Fixes that are nothing but a sign-in, which Keyfit offers to run when you start a tool yourself in a terminal
 # (None: one value such as a profile name). Every other fix, including gh's (it switches gh's active account), is
 # only printed. A variable a fix may set in front: Claude's and Codex's config folder of the account.
@@ -73,6 +79,7 @@ SIGN_INS = {
     "codex": (("login",),),
     "vercel": (("login",), ("login", "--global-config", None)),
     "wrangler": (("auth", "create", None), ("login",)),
+    "npx": (("convex", "login", "--force"),),  # a Convex account that is the convex CLI's own login
 }
 SIGN_IN_VARS = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}
 VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query", "--color", "--ca-bundle",
@@ -105,8 +112,10 @@ def positionals(args: list[str]) -> list[str]:
 
 
 def is_login_command(tool: str, args: list[str]) -> bool:
-    words = supabase.words(args) if tool == "supabase" else cloudflare.words(args) if tool == "wrangler" \
-        else positionals(args)
+    readers = {"supabase": supabase.words, "wrangler": cloudflare.words, "convex": convex.words}
+    words = readers.get(tool, positionals)(args)
+    if tool == "convex" and words[:2] == ["login", "status"]:
+        return False
     return any(tuple(words[:len(prefix)]) == prefix for prefix in LOGIN_COMMANDS.get(tool, ()))
 
 
@@ -151,6 +160,8 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         return supabase_args(project, args, env, cwd)
     if tool == "wrangler":
         return wrangler_args(project, args, env, cwd)
+    if tool == "convex":
+        return convex_args(project, args, env, cwd)
     if tool == "claude":
         if subcommand(args, CLAUDE_SUBCOMMANDS):
             return args
@@ -360,6 +371,77 @@ def wrangler_login_check(project: Project, args: list[str], registry: Registry, 
                       f"profile {theirs['profile']} there.{bypass}")
 
 
+def convex_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
+    """Refuse what would leave the project's Convex login or team (like `aws --profile`): an admin key (it skips the
+    login and its check), another team (--team, --deployment TEAM:PROJECT:REF), and a deployment of another team
+    named by --deployment-name, --deployment NAME or an --env-file. The folder's own deployment was checked already."""
+    conn = project.connections["convex"]
+    team = conn["team"]
+    refuse = (f"keyfit: this folder belongs to {project.name} (Convex team {printable(conn.get('team_name') or team)}); "
+              f"refusing")
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 convex …"
+    asked = []  # (what the command line said, the deployment name it means)
+    for name, value in convex.options(args):
+        if value is None:
+            continue
+        if name == "--admin-key":
+            raise Refused(f"{refuse} --admin-key: it would skip {project.name}'s Convex login and its check.{bypass}")
+        if name == "--team" and value != team:
+            raise Refused(f"{refuse} --team {printable(value)}.{bypass}")
+        if name == "--deployment" and value.count(":") == 2 and value.split(":")[0] != team:
+            raise Refused(f"{refuse} --deployment {printable(value)}: another team.{bypass}")
+        if name in ("--deployment", "--deployment-name") and convex.DEPLOYMENT_NAME.fullmatch(value):
+            asked.append((f"{name} {value}", value))
+        if name == "--env-file":
+            aim = convex.target(cwd, env, files=convex.read_env_file(cwd / value))
+            if aim and aim["kind"] == "preview" and aim["team"] != team:
+                raise Refused(f"{refuse} --env-file {printable(value)}: a preview deploy key of another team "
+                              f"({printable(aim['team'])}).{bypass}")
+            if aim and aim["kind"] == "deployment":
+                asked.append((f"--env-file {value} (deployment {aim['name']})", aim["name"]))
+    checked = convex.target(cwd, env) or {}
+    for shown, name in asked:
+        if name == checked.get("name") or not convex.DEPLOYMENT_NAME.fullmatch(name):  # checked already, or a name
+            continue  # the CLI refuses itself
+        reason = deployment_outside(project, conn, name, env)
+        if reason:
+            raise Refused(f"{refuse} {printable(shown)}: {reason}.{bypass}")
+    return args
+
+
+def deployment_outside(project: Project, conn: dict, name: str, env: dict) -> str:
+    """Why the project's login must not work on deployment *name* ("" when it may): it belongs to another team, or
+    the login cannot reach it. A confirmation is cached like a check."""
+    import hashlib
+
+    token = env.get(convex.OVERRIDE, "")
+    k = cache.key(project.name, "convex-deployment", {"name": name, "team": conn["team"]},
+                  hashlib.sha256(token.encode()).hexdigest()[:16])
+    if cache.get(k) is not None:
+        return ""
+    found, reason, transient = ADAPTERS["convex"].deployment(token, name)
+    if found is None:
+        return f"{reason} (check the network and retry)" if transient else reason
+    if found["team"] != conn["team"]:
+        return f"it belongs to another team ({printable(found['team'])})"
+    cache.put(k, "ok", "")
+    return ""
+
+
+def convex_login_check(project: Project, args: list[str]) -> None:
+    """`convex login`/`logout` change only the CLI's own login: fine when that login is the project's account, refused
+    when Keyfit keeps the project's token (they would seem to work and change nothing for the project)."""
+    conn = project.connections.get("convex")
+    if not isinstance(conn, dict) or conn.get("token") == convex.CLI:
+        return
+    word = convex.words(args)[0]
+    raise Refused(f"keyfit: this folder belongs to {project.name}, whose Convex token Keyfit keeps "
+                  f"({convex.where(conn)}); `convex {word}` would change only the convex CLI's own login, which "
+                  f"{project.name} does not use.\n  Another token for {project.name}: {convex.add_command(conn)}   "
+                  f"(paste it; or sign the CLI in outside {project.name}, then add --copy)\n"
+                  f"  Bypass once: KEYFIT_DISABLE=1 convex …")
+
+
 def login_environment(tool: str, project: Project, env: dict) -> dict:
     """The environment a sign-in command runs with: the project's (so it signs in to the project's account), without
     the variables that would make the tool skip its own login."""
@@ -477,6 +559,8 @@ def main(argv: list[str]) -> int:
                 supabase_login_check(project, args)
             if tool == "wrangler":
                 wrangler_login_check(project, args, registry, env)
+            if tool == "convex":
+                convex_login_check(project, args)
             login_env = login_environment(tool, project, env)
             if tool == "vercel":  # `vercel login` signs in to the project's folder
                 args = vercel_login_args(project, args, login_env)
@@ -486,7 +570,7 @@ def main(argv: list[str]) -> int:
                 os.execve(real, [tool, *args], environment.build(project, env, kinds=relevant))
             raise Refused(f"keyfit: project {project.name} has no {relevant[0]} account mapped, so {tool} was not "
                           f"started.\n  Map one: {MAP[relevant[0]]}   (bypass once: KEYFIT_DISABLE=1 {tool} …)")
-        run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel/supabase/wrangler: only their own
+        run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel/…/convex: only their own account
         checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
         failed = [c for c in checks if c.failed]
         if failed:
