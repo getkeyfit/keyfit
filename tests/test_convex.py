@@ -319,10 +319,18 @@ class AdapterTests(ConvexCase):
         self.env_local(self.repos["client"], "CONVEX_SELF_HOSTED_URL=http://127.0.0.1:3210\n"
                                              "CONVEX_SELF_HOSTED_ADMIN_KEY=secret\n")
         self.assertIn("names a self-hosted deployment (no Convex team to check)", self.check(self.conn()).detail)
+
+    def test_a_project_deploy_key_stays_the_clis_login(self):
+        # with a project key, `convex dev` refuses any other login: Keyfit leaves it alone and says so
         self.env_local(self.repos["client"], f"CONVEX_DEPLOY_KEY=project:acme:web|{SECRET}\n")
-        check = self.check(self.conn())
-        self.assertEqual(check.status, "warn")
-        self.assertIn("holds a project deploy key: not checked", check.detail)
+        env = dict(self.env)
+        self.convex.inject(self.conn(), env)
+        self.assertNotIn("CONVEX_OVERRIDE_ACCESS_TOKEN", env)
+        check = self.convex.verify(self.conn(), env)
+        self.assertEqual((check.status, check.detail),
+                         ("warn", "CONVEX_DEPLOY_KEY in .env.local holds a project deploy key, which the convex CLI uses "
+                                  "instead of any login: the account is not used here, and the key is not checked"))
+        self.assertEqual(self.fetched, [])
 
     def test_network_error_is_transient_and_a_recent_success_carries_it(self):
         project = Project("client", [str(self.repos["client"])], {"convex": self.conn()})
@@ -356,10 +364,11 @@ class AdapterTests(ConvexCase):
 
     def test_env_files_are_read_like_dotenv(self):
         self.env_local(self.repos["client"], "# comment\nexport CONVEX_DEPLOYMENT = dev:happy-animal-123  # team: acme\n"
-                                             "CONVEX_DEPLOY_KEY=\"prod:a#b|c\"\nNEXT_PUBLIC_CONVEX_URL=https://x\n")
+                                             "CONVEX_DEPLOY_KEY=\"prod:a#b|c\"\nCONVEX_URL=https://x#y\nEMPTY=\n")
         values = convex.read_env_file(self.repos["client"] / ".env.local")
         self.assertEqual(values["CONVEX_DEPLOYMENT"], "dev:happy-animal-123")
         self.assertEqual(values["CONVEX_DEPLOY_KEY"], "prod:a#b|c")
+        self.assertEqual((values["CONVEX_URL"], values["EMPTY"]), ("https://x", ""))
 
     def test_words_and_options_are_read_like_the_cli(self):
         self.assertEqual(convex.words(["login", "--force"]), ["login"])

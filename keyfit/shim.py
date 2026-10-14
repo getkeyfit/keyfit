@@ -401,8 +401,8 @@ def convex_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
                 asked.append((f"--env-file {value} (deployment {aim['name']})", aim["name"]))
     checked = convex.target(cwd, env) or {}
     for shown, name in asked:
-        if name == checked.get("name") or not convex.DEPLOYMENT_NAME.fullmatch(name):  # checked already, or a name
-            continue  # the CLI refuses itself
+        if name == checked.get("name"):  # checked already
+            continue
         reason = deployment_outside(project, conn, name, env)
         if reason:
             raise Refused(f"{refuse} {printable(shown)}: {reason}.{bypass}")

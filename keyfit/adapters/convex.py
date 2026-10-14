@@ -20,6 +20,7 @@ inject  — CONVEX_OVERRIDE_ACCESS_TOKEN is the account's token, so every convex
           only goes to api.convex.dev; inherited CONVEX_DEPLOY_KEY, CONVEX_DEPLOYMENT_TOKEN and CONVEX_DEPLOYMENT that
           disagree with the folder's .env.local/.env are removed: they belong to another project.
 forget  — in a project without a Convex account, a token Keyfit gave another project's session is removed.
+          Not where a project deploy key is in effect: the CLI then refuses any login but that key.
 local   — the token is there and is not a deploy key; a preview deploy key names the account's team.
 remote  — GET api.convex.dev/api/teams must accept the token and list the team (what `npx convex login status`
           shows); the folder's cloud deployment must belong to that team
@@ -114,7 +115,7 @@ def shape_problem(token: str) -> str:
 
 
 def read_env_file(path: Path) -> dict:
-    """KEY=VALUE lines like dotenv reads them: `export` allowed, quotes kept apart, ` # comment` after a value."""
+    """KEY=VALUE lines like dotenv reads them: `export` allowed, a quoted value as it is, else up to a `#`."""
     try:
         text = path.read_text()
     except (OSError, UnicodeDecodeError):
@@ -126,7 +127,7 @@ def read_env_file(path: Path) -> dict:
             continue
         name, value = m.groups()
         quoted = re.match(r"""(['"`])(.*?)\1""", value)
-        out[name] = quoted.group(2) if quoted else re.split(r"\s+#", value, maxsplit=1)[0].strip()
+        out[name] = quoted.group(2) if quoted else value.split("#", 1)[0].strip()
     return out
 
 
@@ -263,10 +264,10 @@ class ConvexAdapter(Adapter):
         ref = conn.get("token", "")
         token = read_cli_login(env)[0] if ref == CLI else secrets.resolve(ref, env)  # before the removal below
         env.pop(OVERRIDE, None)
-        if token:
-            env[OVERRIDE] = token
         env.pop("CONVEX_PROVISION_HOST", None)  # would send the token to another API host
         scrub(env, os.getcwd())
+        if token and (target(os.getcwd(), env) or {}).get("kind") != "project_key":  # `convex dev` crashes when its
+            env[OVERRIDE] = token  # login is not the folder's project key
         env[MARK] = conn.get("name", "")
 
     def forget(self, env: dict) -> None:
@@ -287,6 +288,10 @@ class ConvexAdapter(Adapter):
             return Check(self.kind, "fail", label, "no token recorded", "keyfit add convex")
         if not conn.get("team"):
             return Check(self.kind, "fail", label, "no expected team recorded", add_command(conn))
+        aim = target(os.getcwd(), env)
+        if aim and aim["kind"] == "project_key":
+            return Check(self.kind, "warn", label, f"{aim['source']} holds a project deploy key, which the convex CLI "
+                         "uses instead of any login: the account is not used here, and the key is not checked")
         token, fix = env.get(OVERRIDE), fix_for(conn)
         if not token:
             reason = read_cli_login(env)[1] if ref == CLI else f"token not found ({where(conn)})"
@@ -294,7 +299,6 @@ class ConvexAdapter(Adapter):
         problem = shape_problem(token)
         if problem:
             return Check(self.kind, "fail", label, f"{where(conn)} {problem}", fix)
-        aim = target(os.getcwd(), env)
         if aim and aim["kind"] == "preview" and aim["team"] != conn["team"]:
             return Check(self.kind, "fail", label, f"{aim['source']} is a preview deploy key of another team "
                          f"({aim['team']}), project expects {label}", f"a preview deploy key of {label}")
@@ -302,6 +306,9 @@ class ConvexAdapter(Adapter):
 
     def remote(self, conn, env: dict) -> Check:
         label = self.label(conn)
+        aim = target(os.getcwd(), env)
+        if aim and aim["kind"] == "project_key":
+            return Check(self.kind, "ok", label, "")  # said by the local check: nothing to ask Convex
         token, fix = env[OVERRIDE], fix_for(conn)
         teams, reason, transient = self.teams(token)
         if teams is None:
@@ -314,7 +321,6 @@ class ConvexAdapter(Adapter):
                          f"{seen})", fix if conn.get("token") == CLI else f"{add_command(conn)}   (a token of a member "
                          f"of {label})")
         confirmed = "login and team confirmed"
-        aim = target(os.getcwd(), env)
         if aim is None:
             return Check(self.kind, "ok", label, confirmed)
         if aim["kind"] == "local":
@@ -325,10 +331,9 @@ class ConvexAdapter(Adapter):
         if aim["kind"] == "preview":
             return Check(self.kind, "ok", label, f"{confirmed} · {aim['source']} is a preview deploy key of "
                          f"{aim['team']}/{aim['project']}")
-        if aim["kind"] in ("project_key", "unusable"):
-            return Check(self.kind, "warn", label, f"{confirmed} · {aim['source']} holds a "
-                         f"{'project deploy key' if aim['kind'] == 'project_key' else 'deploy key Convex refuses'}: "
-                         f"not checked")
+        if aim["kind"] == "unusable":
+            return Check(self.kind, "warn", label, f"{confirmed} · {aim['source']} holds a deploy key the convex CLI "
+                         "refuses (no '|')")
         name, relink = aim["name"], f"npx convex dev --configure existing --team {expected}"
         found, reason, transient = self.deployment(token, name)
         if found is None:
