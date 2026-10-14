@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Supabase, the sixth tool.** `supabase` uses the project's Supabase account: a personal access token
+  Keyfit keeps in the Keychain (`keyfit add supabase` checks it with Supabase and records its
+  organization; `--cli` copies the token of the supabase CLI's current login; `--token env:VAR` names
+  one you keep elsewhere). It reaches the CLI as `SUPABASE_ACCESS_TOKEN`, with
+  `SUPABASE_PROFILE=supabase`, so `npx supabase` and a Supabase MCP server reading
+  `${SUPABASE_ACCESS_TOKEN}` in a Claude or Codex session use it too. Before a start, Supabase must accept
+  the token and list the organization, and a linked folder (`supabase/.temp/project-ref`,
+  `SUPABASE_PROJECT_ID`) must point at a project of it. Inside a project, `--project-ref`, `link REF`,
+  `projects delete REF`, `gen types --project-id` and `--workdir` pointing at another organization's
+  project are refused, and so are `--org-id` of another organization and another `--profile`.
+  `supabase login` and `logout` are refused there too, since they change only the CLI's own login.
+  A project without a Supabase account runs `supabase` as before (it is often used only locally).
+  `keyfit init` offers the CLI's login; `setup` writes six shims and `doctor` checks six tools.
 - **`Sign in now? [Y/n]`.** When you start a tool yourself in a terminal and every failed check is fixed
   by a plain sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`),
   Keyfit offers to run it, checks again and starts the tool. Without a terminal (agents, scripts, CI)

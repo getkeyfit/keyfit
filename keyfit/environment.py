@@ -38,6 +38,9 @@ def build(project: Project, base_env: dict | None = None, kinds=None) -> dict:
     """Start from the given environment, then let the selected adapters scrub and set their variables."""
     env = dict(os.environ if base_env is None else base_env)
     env["KEYFIT_PROJECT"] = project.name
+    for kind, adapter in ADAPTERS.items():  # a session of another project may have left its credentials behind
+        if kind not in project.connections and (kinds is None or kind in kinds):
+            adapter.forget(env)
     labels = []
     for kind, conn in _selected(project, kinds):
         if unusable(kind, conn) is None:  # an unusable one fails its check; nothing is injected for it
@@ -80,7 +83,7 @@ def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cac
         return local.merge(result)
 
     items = _selected(project, kinds)
-    if len(items) < 2:  # aws, gh and vercel check one connection: no thread pool (or its ~5 ms import) needed
+    if len(items) < 2:  # aws, gh, vercel and supabase check one connection: no thread pool (or its ~5 ms import) needed
         return [one(item) for item in items]
     from concurrent.futures import ThreadPoolExecutor
 

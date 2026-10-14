@@ -467,14 +467,14 @@ class ShimTests(VercelCase):
 
 
 class ThroughTheShimFileTests(VercelCase):
-    """`keyfit setup` writes five shims; the vercel one runs as a real process (remote checks served from the cache)."""
+    """`keyfit setup` writes the shims; the vercel one runs as a real process (remote checks served from the cache)."""
 
     def test_setup_writes_a_vercel_shim_that_injects_the_login(self):
         with mock.patch.object(sys, "platform", "darwin"), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["setup"]), 0)
         shims = self.config / "bin"
         self.assertEqual(sorted(p.name for p in shims.iterdir()),
-                         [".keyfit-shims", "aws", "claude", "codex", "gh", "vercel"])
+                         [".keyfit-shims", "aws", "claude", "codex", "gh", "supabase", "vercel"])
         reg = self.register()
         self.login(self.own, HUBOT)
         conn = reg.get("mine").connections["vercel"]
