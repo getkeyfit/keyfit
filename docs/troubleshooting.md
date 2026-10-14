@@ -73,7 +73,7 @@ keyfit: claude not started, acme-api needs attention
   (bypass once: KEYFIT_DISABLE=1 claude …)
 ```
 
-When you started the tool yourself in a terminal and the fix is only a sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`, `wrangler auth create NAME`, `wrangler login`), Keyfit asks `Sign in now? [Y/n]`: press Enter, sign in, and the tool starts once the checks pass. Agents and scripts are never asked. Otherwise, run the command after `→`. Sign-in commands always go through, even while checks fail, and they run with the project's environment. That way they sign in the account the project needs. Then start the tool again; failed checks are never cached.
+When you started the tool yourself in a terminal and the fix is only a sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`, `wrangler auth create NAME`, `wrangler login`, `npx convex login --force`), Keyfit asks `Sign in now? [Y/n]`: press Enter, sign in, and the tool starts once the checks pass. Agents and scripts are never asked. Otherwise, run the command after `→`. Sign-in commands always go through, even while checks fail, and they run with the project's environment. That way they sign in the account the project needs. Then start the tool again; failed checks are never cached.
 
 | Message | What to do |
 |---|---|
@@ -115,10 +115,19 @@ When you started the tool yourself in a terminal and the fix is only a sign-in (
 | `this folder belongs to acme-api, which uses wrangler profile acme; wrangler login would change only wrangler's default login` (also `logout`) | `wrangler login` and `logout` act on wrangler's default sign-in, which the project doesn't use. To sign the project's profile in again: `wrangler auth create acme`. To change the default sign-in, run `wrangler login` outside the project |
 | `refusing wrangler auth activate OTHER for FOLDER: that folder belongs to acme-api` (also `auth deactivate`, `auth create` and `auth delete` of a project's profile) | that command would move a registered folder off its project's sign-in. Change the project's profile with `keyfit add cloudflare --profile …` first, or bypass once: `KEYFIT_DISABLE=1 wrangler auth …` |
 | **Cloudflare**, wrangler still uses another account although the checks pass | a `CLOUDFLARE_API_TOKEN` (or `CLOUDFLARE_API_KEY`) beats every wrangler profile. Keyfit removes it from the environment, but wrangler also reads it from the folder's `.env` and `.env.local`: remove it there. While it is there, the account stays pinned (`CLOUDFLARE_ACCOUNT_ID`) and Keyfit's online check runs with that token. With such a token set, wrangler also refuses `wrangler auth create` and `activate` |
+| **Convex** `the convex CLI is not signed in`, `Convex rejected the token (signed out or revoked?)` for an account that is the CLI's own login | `npx convex login --force`. Starting `claude`, `codex` or `convex` in a terminal offers to run it (`Sign in now?`) |
+| **Convex** `token not found (Keychain item keyfit/convex-…)`, `Convex rejected the token`, `… holds a deploy key (…\|…), not an access token` for a token Keyfit keeps | give the account a working token: sign the CLI in as that account (`npx convex login --force`), then `keyfit add convex --name … --copy`. A deploy key (`prod:…\|…`) is not a login; it belongs in the project's `.env.local` or CI settings |
+| **Convex** `this login has no access to team …` | the login belongs to someone who isn't a member of the project's team. Sign in as a member (`npx convex login --force`), or for a token Keyfit keeps, add a member's: `keyfit add convex --name … --copy` |
+| **Convex** `CONVEX_DEPLOYMENT in .env.local points this folder at deployment NAME of another team`, `… this login cannot reach it` | the folder was configured with another account or team. Run `npx convex dev --configure existing --team <the project's team>` inside the project and pick one of the team's projects; it rewrites `.env.local` |
+| **Convex** `! convex … holds a project deploy key: not checked` | a warning, not a failure: Keyfit can't tell a project deploy key's team without sending the key, so it doesn't check it |
+| `this folder belongs to acme-api, whose Convex token Keyfit keeps …; convex login would change only the convex CLI's own login` (also `logout`) | inside a project whose Convex token Keyfit keeps, the CLI's own login isn't used. To change the project's token: `keyfit add convex --name …`. To change the CLI's own login, run `npx convex login` (npx doesn't go through Keyfit) |
+| `this folder belongs to acme-api (Convex team Acme); refusing --deployment-name NAME: it belongs to another team` (also `--deployment`, `--env-file`, `--team`, `--admin-key`) | inside a project, `convex` works only with deployments of the project's team. Leave the option out to use the folder's own deployment |
+| `npx convex` in a plain terminal acts as another account | `npx convex` doesn't go through Keyfit; only a Claude or Codex session (or `keyfit run -- npx convex …`) gives it the project's account |
+| **Codex** `not signed in` | `codex login` (another home: `CODEX_HOME=… codex login`) |
 | **Codex** `not signed in` | `codex login` (another home: `CODEX_HOME=… codex login`) |
 | **Codex** `Codex is signed in with an API key`, `auth.json holds an API key next to the ChatGPT login` | `codex logout && codex login`, with your ChatGPT account |
 | `… did not answer (…)`, `→ check the network and retry` | the service could not be reached, even after one retry, and there is no success from the last 24 hours to fall back on. Check the network |
-| `project acme-api has no aws account mapped, so aws was not started` (same for `gh` and `github`, `vercel` and `vercel`) | inside a project, these three start only with the project's account for them. Map one: `keyfit add aws --profile …`, `keyfit add github --login …` or `keyfit add vercel`. To skip Keyfit once: `KEYFIT_DISABLE=1 aws …`. `supabase` and `wrangler` are different: without a Supabase or Cloudflare account they run as before |
+| `project acme-api has no aws account mapped, so aws was not started` (same for `gh` and `github`, `vercel` and `vercel`) | inside a project, these three start only with the project's account for them. Map one: `keyfit add aws --profile …`, `keyfit add github --login …` or `keyfit add vercel`. To skip Keyfit once: `KEYFIT_DISABLE=1 aws …`. `supabase`, `wrangler` and `convex` are different: without a Supabase, Cloudflare or Convex account they run as before |
 | `✘ github  octocta  no account [accounts.github.octocta]`, `✘ asw … unknown connection (a typo? …)` | a hand edit of `~/.config/keyfit/registry.toml` names an account that isn't there, or a connection Keyfit doesn't know. Fix the name, or map it again with `keyfit add …`. Only this project is affected |
 | `this folder belongs to acme-api (AWS profile acme-dev); refusing --profile other` | another project's profile was asked for inside this project. If the profile belongs to a machine-wide tool, list it under `[settings] shared_aws_profiles` in `~/.config/keyfit/registry.toml` |
 
@@ -129,7 +138,7 @@ When a service doesn't answer but a check succeeded within the last 24 hours, th
 Successful online checks are reused for 30 minutes (see [the verification cache](security.md#the-verification-cache)). Keyfit checks again right away when the identity behind a connection changes:
 
 - a new AWS SSO or console sign-in
-- a different Linear key, GitHub token, Vercel login or Supabase token, a different linked Supabase project, a new (or renewed) wrangler sign-in, and any `gh auth login`, `logout` or `switch`
+- a different Linear key, GitHub token, Vercel login, Supabase token or Convex login, a different linked Supabase project or Convex deployment, a new (or renewed) wrangler sign-in, and any `gh auth login`, `logout` or `switch`
 - a different Claude organization
 - a connection changed with `keyfit add`
 
@@ -201,7 +210,7 @@ pipx uninstall keyfit            # last, or: brew uninstall keyfit
 - **What stays.** Without `--purge`, the registry stays, and `keyfit setup --rc` turns everything back on.
 - **What `--purge` deletes:** the registry, the check cache, the Claude config folders made by `keyfit add claude --new` and the Vercel login folders made by `keyfit add vercel --new` (with the logins in them). It refuses if `~/.config/keyfit` holds files Keyfit didn't write; delete those yourself if you are sure. Without a terminal it needs `--yes`.
 - **Keychain items** Keyfit stored (service `keyfit`) are never deleted; `--purge` prints their names. Delete them in Keychain Access, or with `security delete-generic-password -s keyfit -a NAME`.
-- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `aws`, `gh`, `vercel`, `supabase` and `wrangler` then run directly again.
+- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` then run directly again.
 
 If `keyfit` itself no longer runs, do it by hand:
 
