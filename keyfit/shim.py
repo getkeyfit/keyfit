@@ -336,7 +336,7 @@ def wrangler_login_check(project: Project, args: list[str], registry: Registry, 
             users.setdefault(theirs["profile"], []).append(other.name)
     action, rest = words[1], words[2:]
     name = rest[0] if rest else None
-    if action == "create" and name and [p for p in users.get(name, []) if p != project.name]:
+    if action == "create" and name and name != own and users.get(name):  # a profile it shares stays its own
         others = ", ".join(p for p in users[name] if p != project.name)
         raise Refused(f"keyfit: this folder belongs to {project.name}; refusing `wrangler auth create {printable(name)}`: "
                       f"that profile is the sign-in of {others}.{bypass}")

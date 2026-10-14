@@ -499,6 +499,18 @@ class ShimTests(CloudflareCase):
         code, argv, _ = self.run_shim("auth", "deactivate")
         self.assertEqual(argv, ["wrangler", "auth", "deactivate"])
 
+    def test_a_shared_profile_can_be_signed_in_again_from_each_of_its_projects(self):
+        reg = Registry.load(self.config / "registry.toml")
+        reg.set_connection("plain", "cloudflare", "acme")  # two projects of the same client, one wrangler profile
+        reg.save()
+        self.bind({str(self.repos["client"]): "acme", str(self.repos["plain"]): "acme", str(self.repos["mine"]): "globex"})
+        for repo in ("client", "plain"):
+            code, argv, _ = self.run_shim("auth", "create", "acme", cwd=self.repos[repo])
+            self.assertEqual(argv, ["wrangler", "auth", "create", "acme"], self.stderr)
+        code, argv, _ = self.run_shim("auth", "create", "globex", cwd=self.repos["plain"])  # another project's: no
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn("refusing `wrangler auth create globex`: that profile is the sign-in of mine", self.stderr)
+
     def test_session_keeps_wrangler_on_its_project(self):
         code, argv, _ = self.run_shim("deploy", cwd=self.repos["plain"], KEYFIT_PROJECT="client")
         self.assertEqual(code, 1)  # wrangler would use another sign-in there: the binding check says so
