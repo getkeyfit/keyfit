@@ -338,13 +338,19 @@ def copilot_folder(args: list[str], cwd: Path | None = None) -> str | None:
 def copilot_args(project: Project, args: list[str], env: dict, cwd: Path, owners: dict | None = None) -> list[str]:
     """Sessions (and `init` and `workflow`, which run the agent) start with every MCP server the project must not
     see switched off by name, for the folder Copilot works in; `--enable-mcp-server` cannot bring one back."""
-    if subcommand(args, COPILOT_SUBCOMMANDS) not in COPILOT_SESSIONS:
+    sub = subcommand(args, COPILOT_SUBCOMMANDS)
+    if sub == "login":  # an option before it hid it from the sign-in commands (`copilot -C DIR login`)
+        copilot_login_check(project)
+        for var in LOGIN_SCRUB["copilot"]:
+            env.pop(var, None)
+        return args
+    if sub not in COPILOT_SESSIONS:
         return args
     given = copilot_options(args)
     folder = copilot_folder(args, cwd)
     config = [value for name, value in given if name == "--config-dir" and value]
     names = mcp.copilot_hidden(project, env, (cwd / folder).resolve() if folder else cwd, owners,
-                               config_dir=str(cwd / config[-1]) if config else None,
+                               config_dir=str(cwd / Path(config[-1]).expanduser()) if config else None,
                                additional=[value for name, value in given if name == "--additional-mcp-config" and value])
     for name, value in given:
         if name == "--enable-mcp-server" and value in names:

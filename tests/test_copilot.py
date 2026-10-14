@@ -309,6 +309,22 @@ class ArgumentTests(unittest.TestCase):
             self.assertIn("refusing --enable-mcp-server globex_cloud_eu", str(caught.exception))
         self.assertEqual(self.args("--enable-mcp-server", "paper")[-2:], ["--enable-mcp-server", "paper"])
 
+    def test_a_sign_in_behind_an_option_is_still_a_sign_in(self):
+        env = {"HOME": str(self.home), "COPILOT_GITHUB_TOKEN": "gho_x", "GH_TOKEN": "gho_x", "GITHUB_TOKEN": "gho_x"}
+        given = ["-C", str(self.repo), "login"]
+        self.assertEqual(adjust_args("copilot", self.registry.get("demo"), list(given), env, self.repo), given)
+        self.assertEqual(env, {"HOME": str(self.home)})  # Copilot signs in itself, it takes no token from here
+        self.registry.set_connection("demo", "copilot", {"login": "octocat"})
+        with self.assertRaises(Refused):
+            adjust_args("copilot", self.registry.get("demo"), list(given), dict(env), self.repo)
+
+    def test_config_dir_with_a_tilde(self):
+        (self.home / "work-copilot").mkdir()
+        (self.home / "work-copilot" / "mcp-config.json").write_text(json.dumps({"mcpServers": {
+            "globex_cloud_work": {"command": "x"}}}))
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            self.assertEqual(self.args("--config-dir", "~/work-copilot")[0], "--disable-mcp-server=globex_cloud_work")
+
     def test_options_in_every_form_copilot_takes(self):
         given = ["-C", "a", "-Cb", "-C=c", "--config-dir=d", "--additional-mcp-config", "@e", "--", "-C", "f"]
         self.assertEqual(copilot_options(given), [("-C", "a"), ("-C", "b"), ("-C", "c"), ("--config-dir", "d"),
