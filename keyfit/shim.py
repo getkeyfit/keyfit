@@ -58,8 +58,9 @@ LOGIN_COMMANDS = {
 }
 LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",),
                "supabase": ("supabase",)}
-# Variables sign-in commands run without: gh must manage its own tokens, and `supabase login` its own login.
-LOGIN_SCRUB = {"gh": ("GH_TOKEN", "GITHUB_TOKEN"), "supabase": ("SUPABASE_ACCESS_TOKEN", "SUPABASE_PROFILE")}
+# Variables sign-in commands run without: gh must manage its own tokens. (`supabase login` runs only in a project
+# without a Supabase account, where Keyfit has removed the token it set for another project, and nothing else.)
+LOGIN_SCRUB = {"gh": ("GH_TOKEN", "GITHUB_TOKEN")}
 # Fixes that are nothing but a sign-in, which Keyfit offers to run when you start a tool yourself in a terminal
 # (None: one value such as a profile name). Every other fix, including gh's (it switches gh's active account), is
 # only printed. A variable a fix may set in front: Claude's and Codex's config folder of the account.
@@ -100,7 +101,7 @@ def positionals(args: list[str]) -> list[str]:
 
 
 def is_login_command(tool: str, args: list[str]) -> bool:
-    words = positionals(args)
+    words = supabase.words(args) if tool == "supabase" else positionals(args)
     return any(tuple(words[:len(prefix)]) == prefix for prefix in LOGIN_COMMANDS.get(tool, ()))
 
 
@@ -206,7 +207,7 @@ def supabase_args(project: Project, args: list[str], env: dict, cwd: Path) -> li
     bypass = "\n  Bypass once: KEYFIT_DISABLE=1 supabase …"
     given = supabase.options(args)
     named = {name for name, _ in given}
-    words = positionals(args)
+    words = supabase.words(args)
     asked = []  # (what the command line said, the project ref it means)
     for name, value in given:
         if value is None:
@@ -221,10 +222,10 @@ def supabase_args(project: Project, args: list[str], env: dict, cwd: Path) -> li
             ref, source = supabase.linked_ref(cwd, {**env, "SUPABASE_WORKDIR": value})
             if ref:
                 asked.append((f"--workdir {value} (linked to {ref} in {source})", ref))
-    if words[:1] == ["link"] and len(words) > 1:
-        asked.append((f"link {words[1]}", words[1]))
-    if words[:2] == ["projects", "delete"] and len(words) > 2:
-        asked.append((f"projects delete {words[2]}", words[2]))
+    if words[:1] == ["link"]:  # every word after it that could be a ref: an option Keyfit does not know may hold
+        asked += [(f"link {word}", word) for word in words[1:]]  # one value in between
+    if words[:2] == ["projects", "delete"]:
+        asked += [(f"projects delete {word}", word) for word in words[2:]]
     checked, _ = supabase.linked_ref(cwd, env)
     for shown, ref in asked:
         if ref == checked or not supabase.REF.fullmatch(ref):  # checked already; or a branch name, which the CLI
@@ -263,7 +264,7 @@ def supabase_login_check(project: Project, args: list[str]) -> None:
     conn = project.connections.get("supabase")
     if not isinstance(conn, dict):
         return  # no Supabase account: the CLI's own login is what supabase uses here
-    word = positionals(args)[0]
+    word = supabase.words(args)[0]
     raise Refused(f"keyfit: this folder belongs to {project.name}, whose Supabase token Keyfit keeps "
                   f"({secrets.describe(conn.get('token', ''))}); `supabase {word}` would change only the supabase CLI's "
                   f"own login, which {project.name} does not use.\n  Another token for {project.name}: "

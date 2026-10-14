@@ -154,6 +154,15 @@ class AdapterTests(SupabaseCase):
         self.supabase.inject(self.conn(token="env:SUPABASE_ACCESS_TOKEN", org="globex-org"), env)
         self.assertEqual(env["SUPABASE_ACCESS_TOKEN"], GLOBEX)
 
+    def test_supabase_access_token_as_the_source_survives_its_own_session(self):
+        conn = self.conn(name="globex", token="env:SUPABASE_ACCESS_TOKEN", org="globex-org")
+        project = Project("mine", [str(self.repos["mine"])], {"supabase": conn})
+        session = environment.build(project, dict(self.env, SUPABASE_ACCESS_TOKEN=GLOBEX))  # e.g. claude
+        nested = environment.build(project, session)  # supabase, or keyfit status, inside that session
+        self.assertEqual(nested["SUPABASE_ACCESS_TOKEN"], GLOBEX)
+        other = Project("client", [str(self.repos["client"])], {"supabase": self.conn(token="env:SUPABASE_ACCESS_TOKEN")})
+        self.assertNotIn("SUPABASE_ACCESS_TOKEN", environment.build(other, session))  # never another account's
+
     def test_another_projects_token_does_not_follow_into_a_project_without_supabase(self):
         client = Project("client", [str(self.repos["client"])], {"supabase": self.conn()})
         plain = Project("plain", [str(self.repos["plain"])], {})
@@ -272,6 +281,12 @@ class AdapterTests(SupabaseCase):
         self.assertNotEqual(linked, self.supabase.fingerprint(self.conn(), env))
         self.assertNotIn(BOTH, linked + first)
 
+    def test_words_skip_flags_and_option_values(self):
+        self.assertEqual(supabase.words(["--debug", "--yes", "login"]), ["login"])
+        self.assertEqual(supabase.words(["--workdir", "w", "-o", "json", "projects", "delete", "--debug", "r"]),
+                         ["projects", "delete", "r"])
+        self.assertEqual(supabase.words(["link", "-p", "secret", "--project-ref=x", "--", "r"]), ["link"])
+
     def test_options_are_read_like_the_cli(self):
         self.assertEqual(supabase.options(["link", "--project-ref", "x", "--profile=p", "--workdir", "w", "--org-id"]),
                          [("--project-ref", "x"), ("--profile", "p"), ("--workdir", "w"), ("--org-id", None)])
@@ -372,6 +387,11 @@ class ShimTests(SupabaseCase):
             self.assertEqual((code, argv), (1, None), args)
             self.assertIn(f"keyfit: this folder belongs to client (Supabase organization Acme); refusing", self.stderr)
             self.assertIn("it belongs to another organization (globex-org)", self.stderr)
+        for args in (["--yes", "projects", "delete", GLOBEX_REF], ["projects", "delete", "--debug", GLOBEX_REF],
+                     ["--yes", "gen", "types", "--project-id", GLOBEX_REF],
+                     ["link", "--unknown-option", "value", GLOBEX_REF]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
         code, argv, _ = self.run_shim("link", "--project-ref", ACME_REF)
         self.assertEqual(argv, ["supabase", "link", "--project-ref", ACME_REF])
         code, argv, _ = self.run_shim("link", "--project-ref", FOREIGN_REF)
@@ -416,6 +436,9 @@ class ShimTests(SupabaseCase):
         self.assertIn("Another token for client: keyfit add supabase --name acme", self.stderr)
         code, argv, _ = self.run_shim("logout", "--yes")
         self.assertEqual(code, 1)
+        for args in (["--debug", "login"], ["--yes", "--workdir", ".", "logout"]):  # flags first: still a sign-in
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
         self.assertEqual(self.fetched, [])  # no check ran
 
     def test_login_elsewhere_runs_without_injected_variables(self):
@@ -425,6 +448,9 @@ class ShimTests(SupabaseCase):
         self.assertEqual(argv, ["supabase", "login"])
         for var in ("SUPABASE_ACCESS_TOKEN", "SUPABASE_PROFILE"):
             self.assertNotIn(var, env)  # the 2.1xx CLI would store an injected token as its own login
+        code, argv, env = self.run_shim("login", cwd=self.repos["plain"], SUPABASE_PROFILE="selfhosted",
+                                        SUPABASE_ACCESS_TOKEN=GLOBEX)
+        self.assertEqual((env["SUPABASE_PROFILE"], env["SUPABASE_ACCESS_TOKEN"]), ("selfhosted", GLOBEX))  # yours
 
     def test_session_keeps_supabase_on_its_project(self):
         code, argv, env = self.run_shim("projects", "list", cwd=self.outside, KEYFIT_PROJECT="mine")
@@ -485,12 +511,28 @@ class AddSupabaseTests(SupabaseCase):
             self.assertNotIn(TOKEN, " ".join(argv))
         self.assertNotIn(TOKEN, out + err + (self.config / "registry.toml").read_text())
 
+    def test_default_name_never_takes_another_organizations_account(self):
+        self.add("--token", "env:GLOBEX_SUPABASE_TOKEN")  # account "globex"
+        with mock.patch.dict(ORG_NAMES, {"acme-org": "Globex"}):  # another organization, same display name
+            os.environ["ACME_TOKEN"] = TOKEN
+            code, out, err = self.add("--token", "ACME_TOKEN")
+        self.assertEqual(code, 0, err)
+        accounts = self.registry()["accounts"]["supabase"]
+        self.assertEqual((accounts["globex"]["org"], accounts["globex-2"]["org"]), ("globex-org", "acme-org"))
+        self.assertIn("supabase account 'globex-2'", out)
+
     def test_token_typed_as_an_option_is_refused(self):
         code, out, err = self.add("--token", TOKEN)
         self.assertEqual(code, 1)
         self.assertIn("--token takes where the token lives", err)
         self.assertNotIn(TOKEN, out + err)
+        for option in ("--name", "--org"):
+            code, out, err = self.add("--token", "env:GLOBEX_SUPABASE_TOKEN", option, TOKEN)
+            self.assertEqual(code, 1, option)
+            self.assertIn("take a short name, not a token", err)
+            self.assertNotIn(TOKEN, out + err)
         self.assertEqual(self.fetched, [])
+        self.assertFalse((self.config / "registry.toml").exists() and TOKEN in (self.config / "registry.toml").read_text())
 
     def test_something_else_is_never_sent_to_supabase(self):
         code, out, err = self.add(stdin="ghp_" + "x" * 36 + "\n")

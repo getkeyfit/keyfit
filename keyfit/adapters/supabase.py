@@ -49,6 +49,10 @@ MARK = "KEYFIT_SUPABASE"  # set next to a token Keyfit injected: the account's n
 CONFIG = Path("supabase") / "config.toml"
 LINK = Path("supabase") / ".temp" / "project-ref"
 OPTIONS = {"--profile", "--project-ref", "--project-id", "--org-id", "--workdir"}
+# Options that take a value, of the root command and of the commands Keyfit looks at; any other option is read as a
+# flag without one (--debug, --yes, --linked …), so `supabase --debug login` is still `login`.
+VALUED = OPTIONS | {"--output", "-o", "--network-id", "--dns-resolver", "--password", "-p", "--db-url", "--token",
+                    "--name", "--lang", "--schema", "-s", "--region", "--db-password", "--plan", "--size"}
 TOKENS_PAGE = "supabase.com/dashboard/account/tokens"
 
 
@@ -169,6 +173,21 @@ def options(args: list[str]) -> list[tuple[str, str | None]]:
     return found
 
 
+def words(args: list[str]) -> list[str]:
+    """The command words and arguments, without options and the values of VALUED options."""
+    out, i = [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            break
+        if arg.startswith("-") and len(arg) > 1:
+            i += 2 if arg in VALUED else 1
+            continue
+        out.append(arg)
+        i += 1
+    return out
+
+
 def _fetch(path: str, token: str, timeout: float) -> tuple[int, object]:
     import urllib.error  # only for online checks: urllib.request and TLS take ~30 ms to import
     import urllib.request
@@ -203,7 +222,8 @@ class SupabaseAdapter(Adapter):
         return conn.get("org_name") or conn.get("org") or conn.get("name", "?")
 
     def inject(self, conn, env: dict) -> None:
-        self.forget(env)
+        if env.get(MARK) != conn.get("name"):  # what a session of this same account set stays: it is this token
+            self.forget(env)
         token = secrets.resolve(conn.get("token", ""), env)  # before the removal: env:SUPABASE_ACCESS_TOKEN works too
         env.pop("SUPABASE_ACCESS_TOKEN", None)
         if token:
