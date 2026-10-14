@@ -10,7 +10,7 @@ import Term, { type Line } from '../components/Term.astro';
 
 const title = 'Keyfit: the right accounts for every repo';
 const description =
-	'Keyfit verifies each project’s AWS, Linear, GitHub, Claude, Codex, Vercel and Supabase accounts before your agent runs.';
+	'Keyfit verifies each project’s AWS, Linear, GitHub, Claude, Codex, Vercel, Supabase and Cloudflare accounts before your agent runs.';
 const repo = 'https://github.com/FlamurMaliqi/keyfit';
 // Launch day (KEY-38): set to true once PyPI and the Homebrew tap have Keyfit. Until then the
 // install commands stay hidden, so nobody copies `pipx install keyfit` before that name is ours.
@@ -33,6 +33,7 @@ const session: Line[] = [
 	{ t: '  ✔ claude    Lumen   Lumen (team) confirmed', k: 'ok' },
 	{ t: '  ✔ vercel    lumen-ci → lumen   login and team confirmed', k: 'ok' },
 	{ t: '  ✔ supabase  Lumen   token and organization confirmed', k: 'ok' },
+	{ t: '  ✔ cloudflare lumen → Lumen   bound at ~/code/lumen-web · profile and account confirmed', k: 'ok' },
 	{ t: 'claude', k: 'cmd' },
 ];
 
@@ -44,13 +45,14 @@ const tools = [
 	{ name: 'Codex', logo: 'openai' },
 	{ name: 'Vercel', logo: 'vercel' },
 	{ name: 'Supabase', logo: 'supabase' },
+	{ name: 'Cloudflare', logo: 'cloudflare' },
 ];
 
 const features: { label: string; title: string; text: string; term: string; lines: Line[] }[] = [
 	{
 		label: 'Verified, not assumed',
 		title: 'Checked with each service.',
-		text: 'Keyfit asks AWS, Linear, GitHub, Claude, Vercel and Supabase who you are signed in as. Expired sign-ins are caught before anything runs.',
+		text: 'Keyfit asks AWS, Linear, GitHub, Claude, Vercel, Supabase and Cloudflare who you are signed in as. Expired sign-ins are caught before anything runs.',
 		term: '~/code/harbor-api',
 		lines: [
 			{ t: 'keyfit status', k: 'cmd' },
@@ -64,7 +66,7 @@ const features: { label: string; title: string; text: string; term: string; line
 	{
 		label: 'Wrong account refused',
 		title: 'Another client’s profile? Refused.',
-		text: 'Inside a project, an AWS profile, Vercel team or Supabase project that belongs to another client is blocked, and you see why.',
+		text: 'Inside a project, an AWS profile, Vercel team, Supabase project or Cloudflare account that belongs to another client is blocked, and you see why.',
 		term: '~/code/lumen-web',
 		lines: [
 			{ t: 'aws --profile harbor s3 ls', k: 'cmd' },
@@ -164,7 +166,7 @@ const faq = [
 						<span class="h1-line">The Right Accounts.</span>
 						<span class="h1-line marked">For Every Repo.<i class="mark tl"></i><i class="mark tr"></i><i class="mark bl"></i><i class="mark br"></i></span>
 					</h1>
-					<p class="hero-sub">Keyfit verifies each project’s AWS, Linear, GitHub, Claude, Codex, Vercel and Supabase accounts before your agent runs.</p>
+					<p class="hero-sub">Keyfit verifies each project’s AWS, Linear, GitHub, Claude, Codex, Vercel, Supabase and Cloudflare accounts before your agent runs.</p>
 					<div class="hero-ctas">
 						<a href="#install" class="btn btn-light">Install Keyfit <Icon name="download" /></a>
 						<a href={repo} class="btn btn-square" aria-label="Keyfit on GitHub"><Icon name="github" /></a>

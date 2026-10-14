@@ -80,7 +80,7 @@ keyfit: claude not started, acme-api needs attention
   (bypass once: KEYFIT_DISABLE=1 claude …)
 ```
 
-When you started the tool yourself in a terminal and the fix is only a sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`), Keyfit asks `Sign in now? [Y/n]`: press Enter, sign in, and the tool starts once the checks pass. Agents and scripts are never asked. Otherwise, run the command after `→`. Sign-in commands always go through, even while checks fail, and they run with the project's environment. That way they sign in the account the project needs. Then start the tool again; failed checks are never cached.
+When you started the tool yourself in a terminal and the fix is only a sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`, `wrangler auth create NAME`, `wrangler login`), Keyfit asks `Sign in now? [Y/n]`: press Enter, sign in, and the tool starts once the checks pass. Agents and scripts are never asked. Otherwise, run the command after `→`. Sign-in commands always go through, even while checks fail, and they run with the project's environment. That way they sign in the account the project needs. Then start the tool again; failed checks are never cached.
 
 | Message | What to do |
 |---|---|
@@ -111,10 +111,21 @@ When you started the tool yourself in a terminal and the fix is only a sign-in (
 | **Supabase** `! supabase … names REF, which this token does not find as a project (a preview branch?)` | a warning, not a failure: Supabase's API doesn't say which organization a preview branch belongs to, so that link isn't checked |
 | `this folder belongs to acme-api, whose Supabase token Keyfit keeps …; supabase login would change only the supabase CLI's own login` (also `logout`) | inside a project with a Supabase account, the CLI's own login isn't used. To change the project's token: `keyfit add supabase --name …`. To change the CLI's own login, run `supabase login` outside the project |
 | `this folder belongs to acme-api (Supabase organization Acme); refusing --project-ref REF: it belongs to another organization` (also `link REF`, `projects delete REF`, `gen types --project-id`, `--workdir`, `--org-id`, `--profile`) | inside a project, `supabase` works only with projects of the project's organization. Leave the option out to use the folder's linked project |
+| **Cloudflare** `wrangler has no profile NAME on this Mac`, `wrangler profile NAME: not signed in`, `… the sign-in expired and wrangler could not renew it` | `wrangler auth create NAME` signs that profile in again (in the browser); in a terminal, Keyfit offers to run it. For the default profile it is `wrangler login` |
+| **Cloudflare** `FOLDER is not bound to wrangler profile NAME (wrangler would use its default login)` | `wrangler auth activate NAME FOLDER`, as printed: it binds the folder and everything under it. Worktrees outside the repository's folder (Superset's) need their own binding; bind the folder that holds them once (`wrangler auth activate NAME ~/.superset/worktrees/<repository>`). A folder you moved needs its binding again: wrangler matches bound folders by path |
+| **Cloudflare** `FOLDER uses wrangler profile OTHER (bound at SUBFOLDER), project expects NAME` | a subfolder has a binding of its own, and the nearest binding wins. Run the printed `wrangler auth activate NAME SUBFOLDER`, or remove that binding: `wrangler auth deactivate SUBFOLDER`. `wrangler auth list` shows every binding |
+| **Cloudflare** `wrangler profile NAME has no access to account A (…); it reaches …` | the profile is signed in as someone who isn't a member of the project's account. `wrangler auth create NAME` and sign in as a member, or, if the project moved accounts, `keyfit add cloudflare --account <the new one>` |
+| **Cloudflare** `wrangler.toml sets account_id X, project expects A (…)` (also `wrangler.json`, `wrangler.jsonc`, `[env.NAME]`) | the repository's wrangler config targets another account. Set `account_id` to the project's account, or, if the project moved, map it: `keyfit add cloudflare --profile NAME --account X` |
+| **Cloudflare** `… is wrangler 4.x, which ignores profiles (4.106 or newer needed)` | the wrangler `npx` runs here is too old for profiles. `npm install --save-dev wrangler@latest` in the project (or `npm install -g wrangler@latest` for the global one) |
+| **Cloudflare** `! cloudflare … not checked online: no wrangler here` (a warning, the tool still starts) | no wrangler in the project's `node_modules` or on PATH to check the sign-in with. `npm install` in the project, or `npm install -g wrangler` |
+| `this folder belongs to acme-api (wrangler profile acme, Cloudflare account Acme); refusing --profile other` (also `--cwd`, `--config`) | inside a project, `wrangler` works only with the project's profile and account. Leave the option out; the folder's binding already picks the profile |
+| `this folder belongs to acme-api, which uses wrangler profile acme; wrangler login would change only wrangler's default login` (also `logout`) | `wrangler login` and `logout` act on wrangler's default sign-in, which the project doesn't use. To sign the project's profile in again: `wrangler auth create acme`. To change the default sign-in, run `wrangler login` outside the project |
+| `refusing wrangler auth activate OTHER for FOLDER: that folder belongs to acme-api` (also `auth deactivate`, `auth create` and `auth delete` of a project's profile) | that command would move a registered folder off its project's sign-in. Change the project's profile with `keyfit add cloudflare --profile …` first, or bypass once: `KEYFIT_DISABLE=1 wrangler auth …` |
+| **Cloudflare**, wrangler still uses another account although the checks pass | a `CLOUDFLARE_API_TOKEN` (or `CLOUDFLARE_API_KEY`) beats every wrangler profile. Keyfit removes it from the environment, but wrangler also reads it from the folder's `.env` and `.env.local`: remove it there. While it is there, the account stays pinned (`CLOUDFLARE_ACCOUNT_ID`) and Keyfit's online check runs with that token. With such a token set, wrangler also refuses `wrangler auth create` and `activate` |
 | **Codex** `not signed in` | `codex login` (another home: `CODEX_HOME=… codex login`) |
 | **Codex** `Codex is signed in with an API key`, `auth.json holds an API key next to the ChatGPT login` | `codex logout && codex login`, with your ChatGPT account |
 | `… did not answer (…)`, `→ check the network and retry` | the service could not be reached, even after one retry, and there is no success from the last 24 hours to fall back on. Check the network |
-| `project acme-api has no aws account mapped, so aws was not started` (same for `gh` and `github`, `vercel` and `vercel`) | inside a project, these three start only with the project's account for them. Map one: `keyfit add aws --profile …`, `keyfit add github --login …` or `keyfit add vercel`. To skip Keyfit once: `KEYFIT_DISABLE=1 aws …`. `supabase` is different: without a Supabase account it runs as before |
+| `project acme-api has no aws account mapped, so aws was not started` (same for `gh` and `github`, `vercel` and `vercel`) | inside a project, these three start only with the project's account for them. Map one: `keyfit add aws --profile …`, `keyfit add github --login …` or `keyfit add vercel`. To skip Keyfit once: `KEYFIT_DISABLE=1 aws …`. `supabase` and `wrangler` are different: without a Supabase or Cloudflare account they run as before |
 | `✘ github  octocta  no account [accounts.github.octocta]`, `✘ asw … unknown connection (a typo? …)` | a hand edit of `~/.config/keyfit/registry.toml` names an account that isn't there, or a connection Keyfit doesn't know. Fix the name, or map it again with `keyfit add …`. Only this project is affected |
 | `this folder belongs to acme-api (AWS profile acme-dev); refusing --profile other` | another project's profile was asked for inside this project. If the profile belongs to a machine-wide tool, list it under `[settings] shared_aws_profiles` in `~/.config/keyfit/registry.toml` |
 
@@ -125,7 +136,7 @@ When a service doesn't answer but a check succeeded within the last 24 hours, th
 Successful online checks are reused for 30 minutes (see [the verification cache](/docs/security/#the-verification-cache)). Keyfit checks again right away when the identity behind a connection changes:
 
 - a new AWS SSO or console sign-in
-- a different Linear key, GitHub token, Vercel login or Supabase token, a different linked Supabase project, and any `gh auth login`, `logout` or `switch`
+- a different Linear key, GitHub token, Vercel login or Supabase token, a different linked Supabase project, a new (or renewed) wrangler sign-in, and any `gh auth login`, `logout` or `switch`
 - a different Claude organization
 - a connection changed with `keyfit add`
 
@@ -179,7 +190,7 @@ When Keyfit itself fails, it stops the tool instead of starting it unchecked.
 
 ## Other messages
 
-- **`keyfit: claude is not installed (no claude on PATH besides Keyfit's shim)`.** The tool isn't installed, or its folder isn't on PATH. Keyfit skips its own shims and Superset's wrappers when looking for the real tool. Install it with the command printed below the message; `keyfit doctor` shows where it found each tool.
+- **`keyfit: claude is not installed (no claude on PATH besides Keyfit's shim)`.** The tool isn't installed, or its folder isn't on PATH. Keyfit skips its own shims and Superset's wrappers when looking for the real tool. Install it with the command printed below the message; `keyfit doctor` shows where it found each tool. For `wrangler`, a project that has it in `node_modules` runs its own copy with `npx wrangler`.
 - **`keyfit: claude not started: Keyfit is not installed where its shims expect it`.** The Python or the package that ran `keyfit setup` is gone. After an upgrade, a reinstall or a move to another Python, run `keyfit setup` again. If you uninstalled Keyfit before running `keyfit setup --remove`, remove its line from your shell startup file (see [Uninstall](#uninstall)) and open a new terminal.
 - **`keyfit needs Python 3.11 or newer`.** The `python3` that comes with macOS is 3.9. Install a newer one (`brew install python@3.13`, or `brew install pipx`, which brings one) and install Keyfit with it.
 - **`keyfit: claude nested 6 levels deep through Keyfit — stopping to avoid a loop`.** Another wrapper on PATH calls the tool by name and leads back into Keyfit. Look at `type -a claude`.
@@ -197,7 +208,7 @@ pipx uninstall keyfit            # last, or: brew uninstall keyfit
 - **What stays.** Without `--purge`, the registry stays, and `keyfit setup --rc` turns everything back on.
 - **What `--purge` deletes:** the registry, the check cache, the Claude config folders made by `keyfit add claude --new` and the Vercel login folders made by `keyfit add vercel --new` (with the logins in them). It refuses if `~/.config/keyfit` holds files Keyfit didn't write; delete those yourself if you are sure. Without a terminal it needs `--yes`.
 - **Keychain items** Keyfit stored (service `keyfit`) are never deleted; `--purge` prints their names. Delete them in Keychain Access, or with `security delete-generic-password -s keyfit -a NAME`.
-- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `aws`, `gh`, `vercel` and `supabase` then run directly again.
+- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `aws`, `gh`, `vercel`, `supabase` and `wrangler` then run directly again.
 
 If `keyfit` itself no longer runs, do it by hand:
 
