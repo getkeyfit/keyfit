@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Copilot CLI, the fourth agent (tenth tool).** `copilot` starts with the project's accounts, checked,
+  like `claude`, `codex` and `opencode`, and as the project's GitHub account. Copilot CLI signs in to
+  GitHub and takes `COPILOT_GITHUB_TOKEN` before `GH_TOKEN`, `GITHUB_TOKEN`, its own login and gh's, so
+  a Copilot account is a GitHub login gh holds: `keyfit add copilot` records the project's GitHub
+  account (`--login` for another), and every session of the project gets gh's token for it in
+  `COPILOT_GITHUB_TOKEN` (`npx @github/copilot` inside a Claude session too). Copilot's own folder
+  (`~/.copilot`, or `COPILOT_HOME`) stays shared. Before a start, gh must hold a token for the login
+  that isn't a classic personal access token (`ghp_…`, which Copilot refuses), and `api.github.com/user`
+  must return the login, as for GitHub; a token the project's GitHub check already confirmed is reused
+  without asking gh again. Inherited Copilot tokens (also the coding agent's `GITHUB_COPILOT_…_TOKEN`),
+  `COPILOT_GH_HOST`, `GH_HOST` and `COPILOT_PROVIDER_…` (a model provider of your own instead of the
+  account) are removed. Sessions (`copilot`, `-p`, `init`, `workflow`) start with
+  `--disable-mcp-server=NAME` for each server another project owns, from `mcp-config.json`,
+  `.mcp.json` and `.github/mcp.json` up to the repository's top and `--additional-mcp-config`;
+  `--enable-mcp-server` of such a server and `copilot -C DIR` with a folder of another project are
+  refused, and so is `copilot login` where the project has a Copilot account (it would change only
+  Copilot's own login). The fixes are gh's sign-ins, which Keyfit prints and never runs. `keyfit init`
+  offers Copilot CLI right after OpenCode when the project has a GitHub account; `doctor` shows the
+  account and Copilot's folder; `setup` writes ten shims. Verified with Copilot CLI 1.0.97.
 - **OpenCode, the third agent (ninth tool).** `opencode` starts with the project's accounts, checked,
   like `claude` and `codex`. OpenCode 2 keeps every sign-in in its SQLite database, which
   `OPENCODE_DB` moves, so an OpenCode account is a database: `keyfit add opencode` records OpenCode's
