@@ -10,7 +10,9 @@ project owns it too — e.g. a server signed in to a team both projects share.
 Claude gets `--settings` with `deniedMcpServers` (user scope) and
 `disabledMcpjsonServers` (.mcp.json); Codex gets `-c mcp_servers.<name>.enabled=false`;
 OpenCode gets the servers switched off in OPENCODE_CONFIG_CONTENT (opencode.json in the
-folder and the folders above it counts like .mcp.json).
+folder and the folders above it counts like .mcp.json); Copilot CLI gets
+`--disable-mcp-server=NAME` (.mcp.json and .github/mcp.json up to the repository's top count
+like .mcp.json).
 Every other server stays visible everywhere.
 """
 
@@ -247,3 +249,74 @@ def opencode_environment(project: Project, env: dict, cwd: Path, owners: dict | 
     env["OPENCODE_CONFIG_CONTENT"] = json.dumps(content)
     env[OPENCODE_OWN] = own
     return names
+
+
+# Copilot CLI (1.0.97): the user's mcp-config.json in its config folder (--config-dir, else COPILOT_HOME, else
+# ~/.copilot), .mcp.json and .github/mcp.json in the folder and the folders above it up to the repository's top, the
+# servers of installed plugins and any --additional-mcp-config. `--disable-mcp-server=NAME` switches one off for the
+# session by name, whatever its source; it is never written to Copilot's settings.
+COPILOT_FILES = (".mcp.json", ".github/mcp.json")
+
+
+def copilot_config_dir(env: dict, config_dir: str | None = None) -> Path:
+    if config_dir:
+        return Path(config_dir).expanduser()
+    if env.get("COPILOT_HOME"):
+        return Path(env["COPILOT_HOME"]).expanduser()
+    return Path(env.get("HOME") or Path.home()) / ".copilot"
+
+
+def _copilot_table(data) -> dict:
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    return {name: spec for name, spec in servers.items() if isinstance(spec, dict)} if isinstance(servers, dict) else {}
+
+
+def _copilot_file(path: Path) -> dict:
+    try:
+        return _copilot_table(json.loads(path.read_text()))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return {}
+
+
+def _copilot_workspace(cwd: Path) -> list[Path]:
+    """The folders Copilot looks for workspace servers in: *cwd* and those above it, up to the repository's top."""
+    folders = [cwd, *cwd.parents]
+    top = next((i for i, folder in enumerate(folders) if (folder / ".git").exists()), None)
+    return folders[:top + 1] if top is not None else [cwd]
+
+
+def copilot_servers(env: dict, cwd: Path, config_dir: str | None = None,
+                    additional: list[str] = ()) -> list[tuple[str, dict, bool]]:
+    """(name, spec, verified) of the servers Copilot CLI loads in *cwd* from files and the command line: the user's
+    and --additional-mcp-config (JSON, or @FILE) verified, the folder's unverified (like .mcp.json)."""
+    out = [(name, spec, True) for name, spec in _copilot_file(copilot_config_dir(env, config_dir) / "mcp-config.json").items()]
+    for value in additional:
+        if value.startswith("@"):
+            path = Path(value[1:]).expanduser()
+            table = _copilot_file(path if path.is_absolute() else cwd / path)
+        else:
+            try:
+                table = _copilot_table(json.loads(value))
+            except ValueError:
+                table = {}
+        out += [(name, spec, True) for name, spec in table.items()]
+    for folder in _copilot_workspace(cwd):
+        for name in COPILOT_FILES:
+            out += [(server, spec, False) for server, spec in _copilot_file(folder / name).items()]
+    return out
+
+
+def _copilot_var(spec: dict) -> str | None:
+    for table in (spec.get("headers"), spec.get("env")):
+        for value in (table or {}).values() if isinstance(table, dict) else ():
+            m = VAR.search(str(value))
+            if m:
+                return m.group(1)
+    return None
+
+
+def copilot_hidden(project: Project, env: dict, cwd: Path, owners: dict | None = None, config_dir: str | None = None,
+                   additional: list[str] = ()) -> list[str]:
+    """The servers a Copilot CLI session of *project* must not see, by name."""
+    return sorted({name for name, spec, verified in copilot_servers(env, cwd, config_dir, additional)
+                   if hidden(name, spec, project, owners, key_var=_copilot_var(spec), verified=verified)})

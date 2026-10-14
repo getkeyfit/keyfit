@@ -115,6 +115,7 @@ def hosts_file(env: dict) -> str:
 
 class GithubAdapter(Adapter):
     kind = "github"
+    token_var = "GH_TOKEN"  # where inject puts the account's token (Copilot CLI's adapter uses its own variable)
 
     def __init__(self, fetch=_fetch, timeout: float = 15):
         self.fetch = fetch
@@ -149,7 +150,7 @@ class GithubAdapter(Adapter):
         return hit is not None and hit.get("status") == "ok"  # a warning never vouches for a token
 
     def fingerprint(self, conn, env: dict) -> str:
-        return self._fingerprint(env.get("GH_TOKEN", ""), env)
+        return self._fingerprint(env.get(self.token_var, ""), env)
 
     @staticmethod
     def _fingerprint(token: str, env: dict) -> str:
@@ -179,7 +180,7 @@ class GithubAdapter(Adapter):
     def remote(self, conn, env: dict) -> Check:
         label = self.label(conn)
         try:
-            status, body = self.fetch(env["GH_TOKEN"], self.timeout)
+            status, body = self.fetch(env[self.token_var], self.timeout)
         except (OSError, ValueError) as err:
             return Check(self.kind, "fail", label, f"GitHub did not answer ({getattr(err, 'reason', None) or type(err).__name__})",
                          "check the network and retry", transient=True)
