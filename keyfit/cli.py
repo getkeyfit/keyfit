@@ -13,6 +13,7 @@ from . import __version__, environment, mcp, secrets
 from .adapters import ADAPTERS
 from .adapters import claude as claude_adapter
 from .adapters import cloudflare as cloudflare_adapter
+from .adapters import convex as convex_adapter
 from .adapters import linear as linear_adapter
 from .adapters import supabase as supabase_adapter
 from .adapters import vercel as vercel_adapter
@@ -70,8 +71,8 @@ def _not_active() -> str:
 
     folder = canonical(shim_dir())
     if not (folder / MARKER).is_file():
-        return "Keyfit is not set up yet, so claude, codex, aws, gh, vercel, supabase and wrangler still run without " \
-               "checks.\n" \
+        return "Keyfit is not set up yet, so claude, codex, aws, gh, vercel, supabase, wrangler and convex still run " \
+               "without checks.\n" \
                "  Set it up: keyfit setup --rc, then open a new terminal"
     if folder not in [canonical(e) for e in os.environ.get("PATH", "").split(os.pathsep) if e]:
         return f"{tilde(folder)} is not on PATH in this terminal, so tools here still run without checks.\n" \
@@ -279,6 +280,17 @@ def _offer_cloudflare(name: str, base: dict) -> None:
         cmd_add_cloudflare(argparse.Namespace(**base, profile=None, account=None, name=None))
 
 
+def _offer_convex(name: str, base: dict) -> None:
+    token, where = convex_adapter.read_cli_login(dict(os.environ))  # a plain file; nothing is sent before a yes
+    if not token:
+        print(f"Convex: {where} — later: npx convex login, then: keyfit add convex --cli")
+        return
+    print(f"Convex: the convex CLI is signed in ({where}). Keyfit can use that login for {name} and check it "
+          "reaches the project's team.")
+    if _yes(f"Use this Convex login for {name}?"):
+        cmd_add_convex(argparse.Namespace(**base, name=None, token=None, cli=True, copy=False, team=None))
+
+
 def _offer_linear(name: str, base: dict) -> None:
     if not secrets.can_store():
         print("Linear: later, with a key in an environment variable: keyfit add linear --key env:<VARIABLE>")
@@ -292,7 +304,7 @@ def _offer_linear(name: str, base: dict) -> None:
 GUIDED = (("aws", "AWS", _offer_aws), ("github", "GitHub", _offer_github), ("claude", "Claude", _offer_claude),
           ("codex", "Codex", _offer_codex), ("vercel", "Vercel", _offer_vercel),
           ("supabase", "Supabase", _offer_supabase), ("cloudflare", "Cloudflare", _offer_cloudflare),
-          ("linear", "Linear", _offer_linear))
+          ("convex", "Convex", _offer_convex), ("linear", "Linear", _offer_linear))
 
 
 def _guided_init(args, name: str, root: Path) -> int:
@@ -355,7 +367,7 @@ def cmd_status(args) -> int:
     checks = []
     if not r.project.connections:
         print("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add aws|github|"
-              "claude|codex|vercel|supabase|cloudflare|linear …")
+              "claude|codex|vercel|supabase|cloudflare|convex|linear …")
     else:
         env = environment.build(r.project)
         checks = environment.verify(r.project, env, remote=not args.offline)  # fresh; refreshes the cache
@@ -981,6 +993,129 @@ def cmd_add_cloudflare(args) -> int:
     return 0
 
 
+def _convex_team(token: str, wanted: str | None, start: Path | None) -> tuple[tuple[str, str] | None, str]:
+    """(slug, name) of the team the project uses: --team (slug or name), else the team of the deployment the folder
+    points at, else the login's only team, else one picked at the terminal. Labels only."""
+    adapter = ADAPTERS["convex"]
+    teams, reason, _ = adapter.teams(token)
+    if teams is None:
+        return None, reason
+    if not teams:
+        return None, "this login belongs to no Convex team"
+    listing = ", ".join(f"{title} ({slug})" for slug, title in teams.items())
+    if wanted:
+        found = [(s, t) for s, t in teams.items() if wanted == s or wanted.lower() == t.lower()]
+        return (found[0], "") if found else (None, f"this login has no team {wanted} (it has {listing})")
+    env = dict(os.environ)
+    if start:
+        convex_adapter.scrub(env, start)  # as in a session: the folder's own files decide
+    aim = convex_adapter.target(start, env) if start else None
+    if aim and aim["kind"] == "preview" and aim["team"] in teams:
+        return (aim["team"], teams[aim["team"]]), ""
+    if aim and aim["kind"] == "deployment":
+        found, reason, _ = adapter.deployment(token, aim["name"])
+        if found is None:
+            return None, f"{aim['source']} points this folder at deployment {aim['name']}: {reason}"
+        return (found["team"], teams.get(found["team"], found["team"])), ""
+    if len(teams) == 1:
+        return next(iter(teams.items())), ""
+    if sys.stdin.isatty():
+        print("This login belongs to several Convex teams:")
+        options = [f"{title} ({slug})" for slug, title in teams.items()]
+        picked = _choose("Team of this project", options)
+        if picked:
+            return list(teams.items())[options.index(picked)], ""
+    return None, f"this login belongs to {len(teams)} teams ({listing}): pick one with --team SLUG"
+
+
+def cmd_add_convex(args) -> int:
+    """Record which Convex login (a token Keyfit keeps, or the convex CLI's own login) and team a project uses."""
+    reg = Registry.load(args.registry)
+    project = _project_from_args(reg, args)
+    if project is None:
+        return 1
+    if any(secrets.looks_like_key(v) or convex_adapter.DEPLOY_KEY.match(v or "") for v in (args.name, args.team)):
+        print("--name and --team take a short name, not a token: run `keyfit add convex` and paste the token at the "
+              "hidden prompt (the token may now be in your shell history)", file=sys.stderr)
+        return 1
+    if args.name and not secrets.NAME.fullmatch(f"convex-{args.name}"):
+        print("a name is letters, digits, '.', '_' and '-' (at most 57)", file=sys.stderr)
+        return 1
+    env, ref = dict(os.environ), None
+    if args.cli or args.copy:  # the CLI's login: used as it is (--cli), or a copy Keyfit keeps (--copy)
+        if args.copy and not secrets.can_store():
+            print(secrets.NOT_MACOS, file=sys.stderr)
+            return 1
+        token, where = convex_adapter.read_cli_login(env)
+        if not token:
+            print(f"could not read the convex CLI's login: {where}\n  → sign in: npx convex login, then: keyfit add "
+                  f"convex {'--cli' if args.cli else '--copy'}", file=sys.stderr)
+            return 1
+        if args.cli:
+            ref = convex_adapter.CLI
+    elif args.token is not None:
+        if secrets.looks_like_key(args.token) or convex_adapter.DEPLOY_KEY.match(args.token):
+            print("--token takes where the token lives (env:VAR or keychain:service/account), not the token itself: "
+                  "run `keyfit add convex` without --token to paste it at a hidden prompt "
+                  "(the token may now be in your shell history)", file=sys.stderr)
+            return 1
+        ref = secrets.normalise(args.token)
+        token, where = secrets.resolve(ref, env), secrets.describe(ref)
+        if not token:
+            print(f"{where} is empty or missing in this shell.\n  Set it first, or paste the token instead "
+                  "(stored in the Keychain): keyfit add convex", file=sys.stderr)
+            return 1
+    else:  # paste the token: checked with Convex first, then stored in the Keychain
+        if not secrets.can_store():
+            print(secrets.NOT_MACOS, file=sys.stderr)
+            return 1
+        token = (_read_secret("Convex access token (input hidden): ") or "").strip()
+        where = None
+        if not token:
+            print("no token given — paste it at the prompt, or pipe it on stdin", file=sys.stderr)
+            return 1
+    problem = convex_adapter.shape_problem(token)
+    if problem:  # anything else is never sent to Convex
+        print(f"that value {problem}, so it was not sent to Convex — sign in with npx convex login, then: "
+              "keyfit add convex --cli (or --copy)", file=sys.stderr)
+        return 1
+    here = resolve(".", reg).project
+    team, reason = _convex_team(token, args.team, Path.cwd() if here and here.name == project.name else None)
+    if team is None:
+        fix = ("check the network and retry" if "did not answer" in reason else
+               "sign in as a member of the project's team: npx convex login --force")
+        print(f"could not read the team: {reason}\n  → {fix}", file=sys.stderr)
+        return 1
+    slug, title = team
+    taken = reg.data["accounts"].get("convex", {})
+    name = args.name
+    if not name:  # the team's slug: never another team's account
+        base = name = _account_name(slug, "convex")
+        n = 1
+        while isinstance(taken.get(name), dict) and taken[name].get("team") != slug:
+            n += 1
+            name = f"{base}-{n}"
+    if ref is None:
+        item = f"convex-{name}"
+        reason = secrets.store(secrets.SERVICE, item, token)
+        if reason:
+            print(f"could not store the token in the Keychain: {reason}", file=sys.stderr)
+            return 1
+        reg.add_stored_secret(item)
+        ref = f"keychain:{secrets.SERVICE}/{item}"
+    before = taken.get(name) if isinstance(taken.get(name), dict) else None
+    reg.set_account("convex", name, {"token": ref, "team": slug, "team_name": title})
+    reg.set_connection(project.name, "convex", name)
+    reg.save()
+    copied = f", a copy of the convex CLI's login ({where})" if args.copy else ""
+    print(f"{project.name}: convex account '{name}' → team {title} ({slug}) via "
+          f"{convex_adapter.where({'token': ref})}{copied}")
+    others = sorted(p for p, body in reg.data["projects"].items() if p != project.name and body.get("convex") == name)
+    if before and others and (before.get("team"), before.get("token")) != (slug, ref):
+        print(f"  account '{name}' changed for {', '.join(others)} too")
+    return 0
+
+
 def cmd_run(args) -> int:
     """Run a command with the project's environment (its accounts, checked first)."""
     reg = Registry.load(args.registry)
@@ -1018,7 +1153,7 @@ NOT_MACOS = "Keyfit supports macOS for now (it stores keys in the Keychain); Lin
 # is Superset wrapper → Keyfit shim → real tool (Superset finds "the next claude"). Both move to the very front:
 # a login profile that prepends another folder after Superset set PATH (e.g. `brew shellenv` in ~/.zprofile)
 # must not put real tools ahead of the shims.
-SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase/wrangler shims on PATH (written by `keyfit setup`).
+SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase/wrangler/convex shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 () {
   local kf="@SHIMS@" ss="$HOME/.superset/bin"
@@ -1028,7 +1163,7 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase/wrangler sh
 
 # The same rule in POSIX sh, for bash (macOS ships 3.2): no arrays or `local`, so _kf_ variables unset at the
 # end; PATH is walked with parameter expansion (never word-split or globbed). Like zsh, it drops empty entries.
-SHELL_SH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase/wrangler shims on PATH (written by `keyfit setup`).
+SHELL_SH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase/wrangler/convex shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 _kf="@SHIMS@"; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
 while [ -n "$_kf_rest" ]; do
@@ -1259,8 +1394,8 @@ def _remove_setup(args) -> int:
             folder.rmdir()  # only when nothing else is left in it
         except OSError:
             pass
-    print("Open a new terminal (or run: hash -r): claude, codex, aws, gh, vercel, supabase and wrangler run directly "
-          "again.")
+    print("Open a new terminal (or run: hash -r): claude, codex, aws, gh, vercel, supabase, wrangler and convex run "
+          "directly again.")
     return 0
 
 
@@ -1342,8 +1477,13 @@ def cmd_doctor(args) -> int:
     ]
     for tool in TOOLS:
         real = find_real(tool, env, skip_wrappers=True)
-        checks.append(Check(tool, "ok", _short(real)) if real else
-                      Check(tool, "warn", "not found on PATH", "needed only if you use it", INSTALL[tool]))
+        if real:
+            checks.append(Check(tool, "ok", _short(real)))
+        elif tool == "convex":  # projects run it through npx, which gets the account in claude and codex sessions
+            checks.append(Check(tool, "ok", "not installed globally", "npx convex gets its account from claude "
+                                "and codex sessions"))
+        else:
+            checks.append(Check(tool, "warn", "not found on PATH", "needed only if you use it", INSTALL[tool]))
     path = Path(args.registry) if args.registry else default_path()
     try:
         reg = Registry.load(path)
@@ -1380,8 +1520,8 @@ def cmd_doctor(args) -> int:
 
 
 START = """start here:
-  keyfit setup --rc     put Keyfit in front of claude, codex, aws, gh, vercel, supabase and wrangler, then open a
-                        new terminal
+  keyfit setup --rc     put Keyfit in front of claude, codex, aws, gh, vercel, supabase, wrangler and convex, then
+                        open a new terminal
   keyfit init           inside a project's repository: register it and pick its accounts
   claude                starts with that project's accounts, checked
 something off? keyfit doctor
@@ -1398,7 +1538,7 @@ def build_parser() -> argparse.ArgumentParser:
     def command(parent, name: str, text: str):  # the one-line help is also the command's own --help description
         return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
 
-    p = command(sub, "setup", "write the claude/codex/aws/gh/vercel/supabase/wrangler shims; with --rc also put them "
+    p = command(sub, "setup", "write the claude/codex/aws/gh/vercel/supabase/wrangler/convex shims; with --rc also put them "
                               "on PATH")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
@@ -1417,7 +1557,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_setup)
 
     p = command(sub, "init", "register the current repository as a project, then offer the AWS, GitHub, Claude, "
-                             "Codex, Vercel, Supabase, Cloudflare and Linear accounts found on this Mac (imports "
+                             "Codex, Vercel, Supabase, Cloudflare, Convex and Linear accounts found on this Mac (imports "
                              "`use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
@@ -1491,6 +1631,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help="short account name, reusable across projects (default: the profile's name)")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_cloudflare)
+    p = command(kinds, "convex", "Convex login (access token) and team for this project")
+    p.add_argument("--name", help="short account name, reusable across projects (default: the team's slug)")
+    where = p.add_mutually_exclusive_group()
+    where.add_argument("--token", help="env:VAR, keychain:service/account, or a bare variable name "
+                                       "(default: paste the token; it is verified, then stored in the Keychain)")
+    where.add_argument("--cli", action="store_true",
+                       help="use the convex CLI's own login (npx convex login), read from ~/.convex/config.json")
+    where.add_argument("--copy", action="store_true",
+                       help="keep a copy of the convex CLI's current login in the Keychain (for a second account: "
+                            "sign the CLI in as the other one afterwards)")
+    p.add_argument("--team", help="team slug or name (default: the team of the folder's deployment, else the "
+                                  "login's only one)")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_convex)
     p = command(kinds, "linear", "Linear workspace and where its API key lives")
     p.add_argument("--key", help="env:VAR, keychain:service/account, or a bare variable name "
                                  "(default: paste the key; it is verified, then stored in the Keychain)")
