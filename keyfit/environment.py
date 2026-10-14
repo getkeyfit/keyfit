@@ -83,7 +83,7 @@ def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cac
         return local.merge(result)
 
     items = _selected(project, kinds)
-    if len(items) < 2:  # aws, gh and vercel check one connection: no thread pool (or its ~5 ms import) needed
+    if len(items) < 2:  # aws, gh, vercel and supabase check one connection: no thread pool (or its ~5 ms import) needed
         return [one(item) for item in items]
     from concurrent.futures import ThreadPoolExecutor
 

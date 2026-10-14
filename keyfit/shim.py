@@ -394,7 +394,7 @@ def main(argv: list[str]) -> int:
                 os.execve(real, [tool, *args], environment.build(project, env, kinds=relevant))
             raise Refused(f"keyfit: project {project.name} has no {relevant[0]} account mapped, so {tool} was not "
                           f"started.\n  Map one: {MAP[relevant[0]]}   (bypass once: KEYFIT_DISABLE=1 {tool} …)")
-        run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel/supabase: only their own connection
+        run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel/supabase: only their own account
         checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
         failed = [c for c in checks if c.failed]
         if failed:

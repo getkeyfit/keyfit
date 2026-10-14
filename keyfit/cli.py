@@ -69,7 +69,7 @@ def _not_active() -> str:
 
     folder = canonical(shim_dir())
     if not (folder / MARKER).is_file():
-        return "Keyfit is not set up yet, so claude, codex, aws, gh and vercel still run without checks.\n" \
+        return "Keyfit is not set up yet, so claude, codex, aws, gh, vercel and supabase still run without checks.\n" \
                "  Set it up: keyfit setup --rc, then open a new terminal"
     if folder not in [canonical(e) for e in os.environ.get("PATH", "").split(os.pathsep) if e]:
         return f"{tilde(folder)} is not on PATH in this terminal, so tools here still run without checks.\n" \
@@ -328,7 +328,7 @@ def cmd_status(args) -> int:
     checks = []
     if not r.project.connections:
         print("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add aws|github|"
-              "claude|codex|vercel|linear …")
+              "claude|codex|vercel|supabase|linear …")
     else:
         env = environment.build(r.project)
         checks = environment.verify(r.project, env, remote=not args.offline)  # fresh; refreshes the cache
@@ -852,7 +852,7 @@ NOT_MACOS = "Keyfit supports macOS for now (it stores keys in the Keychain); Lin
 # is Superset wrapper → Keyfit shim → real tool (Superset finds "the next claude"). Both move to the very front:
 # a login profile that prepends another folder after Superset set PATH (e.g. `brew shellenv` in ~/.zprofile)
 # must not put real tools ahead of the shims.
-SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel shims on PATH (written by `keyfit setup`).
+SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 () {
   local kf="@SHIMS@" ss="$HOME/.superset/bin"
@@ -862,7 +862,7 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/aws/gh/vercel shims on PATH (writt
 
 # The same rule in POSIX sh, for bash (macOS ships 3.2): no arrays or `local`, so _kf_ variables unset at the
 # end; PATH is walked with parameter expansion (never word-split or globbed). Like zsh, it drops empty entries.
-SHELL_SH = """# Keyfit: put the claude/codex/aws/gh/vercel shims on PATH (written by `keyfit setup`).
+SHELL_SH = """# Keyfit: put the claude/codex/aws/gh/vercel/supabase shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 _kf="@SHIMS@"; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
 while [ -n "$_kf_rest" ]; do
@@ -1093,7 +1093,7 @@ def _remove_setup(args) -> int:
             folder.rmdir()  # only when nothing else is left in it
         except OSError:
             pass
-    print("Open a new terminal (or run: hash -r): claude, codex, aws, gh and vercel run directly again.")
+    print("Open a new terminal (or run: hash -r): claude, codex, aws, gh, vercel and supabase run directly again.")
     return 0
 
 
@@ -1207,7 +1207,7 @@ def cmd_doctor(args) -> int:
 
 
 START = """start here:
-  keyfit setup --rc     put Keyfit in front of claude, codex, aws, gh and vercel, then open a new terminal
+  keyfit setup --rc     put Keyfit in front of claude, codex, aws, gh, vercel and supabase, then open a new terminal
   keyfit init           inside a project's repository: register it and pick its accounts
   claude                starts with that project's accounts, checked
 something off? keyfit doctor
@@ -1224,7 +1224,7 @@ def build_parser() -> argparse.ArgumentParser:
     def command(parent, name: str, text: str):  # the one-line help is also the command's own --help description
         return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
 
-    p = command(sub, "setup", "write the claude/codex/aws/gh/vercel shims; with --rc also put them on PATH")
+    p = command(sub, "setup", "write the claude/codex/aws/gh/vercel/supabase shims; with --rc also put them on PATH")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
     p.add_argument("--rc", nargs="?", const="", metavar="FILE",
@@ -1242,7 +1242,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_setup)
 
     p = command(sub, "init", "register the current repository as a project, then offer the AWS, GitHub, Claude, "
-                             "Codex, Vercel and Linear accounts found on this Mac (imports `use aws` / "
+                             "Codex, Vercel, Supabase and Linear accounts found on this Mac (imports `use aws` / "
                              "LINEAR_API_KEY lines from its .envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
