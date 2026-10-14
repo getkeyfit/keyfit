@@ -28,7 +28,7 @@ The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkou
 ## Quickstart
 
 ```bash
-keyfit setup --rc     # shims for claude, codex, opencode, aws, gh, vercel, supabase, wrangler and convex, plus one line in your shell startup file
+keyfit setup --rc     # shims for claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler and convex, plus one line in your shell startup file
 ```
 
 Open a new terminal, then go to a repository of one of your clients (a repository, not your home folder: everything under the folder you register belongs to that project):
@@ -45,6 +45,7 @@ claude                # starts with this project's accounts, checked
 - **GitHub:** one of the accounts `gh` is signed in to.
 - **Claude and Codex:** whether to use the login currently in `~/.claude` or `~/.codex`.
 - **OpenCode:** whether to use the sign-ins in OpenCode's own database (`~/.local/share/opencode/opencode.db`).
+- **Copilot CLI:** whether Copilot CLI runs as the project's GitHub account (asked when `copilot` is installed and you picked a GitHub account).
 - **Vercel:** whether to use the login the `vercel` CLI has now, with the team selected in it.
 - **Supabase:** whether to use the login the `supabase` CLI has now. Keyfit keeps a copy of its token in the macOS Keychain (macOS may ask once to allow that).
 - **Cloudflare:** the wrangler sign-in (auth profile) bound to the repository's folder, and the Cloudflare account it deploys to. Keyfit keeps no Cloudflare token: wrangler keeps the sign-in, Keyfit checks it.
@@ -67,6 +68,7 @@ acme-api
   ✔ claude    Acme   Acme (team) confirmed
   ✔ codex     ChatGPT pro   subscription login, no API key
   ✔ opencode  default   anthropic, openai signed in · confirmed by OpenCode
+  ✔ copilot   octocat   login confirmed
 ```
 
 When a check fails, the tool does not start:

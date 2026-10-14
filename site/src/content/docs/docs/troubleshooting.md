@@ -96,6 +96,13 @@ When you started the tool yourself in a terminal and the fix is only a sign-in (
 | **Linear** `the key belongs to workspace 'x', project expects 'y'` | paste the key for the expected workspace: `keyfit add linear --workspace y` |
 | **GitHub** `gh has no stored login for octocat`, `the stored token for octocat was rejected` | `gh auth login --hostname github.com --git-protocol ssh --web` as octocat, then `gh auth switch --user <your usual account>` |
 | **GitHub** `! … commits here are authored as …` (a warning, the tool still starts) | `git config user.email <the account's email>`, as printed |
+| **Copilot CLI** `gh has no stored login for octocat`, `the stored token for octocat was rejected`, `gh's stored login for octocat actually authenticates as hubot` | Copilot CLI runs with gh's token for the account, so the fix is gh's: `gh auth login --hostname github.com --git-protocol ssh --web` as octocat, then `gh auth switch --user <your usual account>`. Keyfit prints it and never runs it, as it switches gh's active account |
+| **Copilot CLI** `gh's stored login for octocat is a classic personal access token, which Copilot CLI refuses` | gh was signed in with a classic token (`ghp_…`). Sign gh in again as octocat in the browser (the command above); that replaces the token with gh's own login token, which Copilot CLI accepts |
+| **Copilot CLI** starts, then says the account has no Copilot access | Keyfit checks the GitHub login, not the Copilot plan. Enable Copilot for that account (or its organization) on github.com, or run Copilot CLI as another account: `keyfit add copilot --login <login>` |
+| `this folder belongs to acme-api, whose Copilot CLI runs as GitHub octocat with the token gh keeps for it; copilot login would change only Copilot's own login` | inside a project with a Copilot CLI account, Copilot's own login (and `/login` in a session) isn't used. Sign gh in as the account instead (the command printed). To change Copilot's own login, run `copilot login` outside the project |
+| `this folder belongs to acme-api; refusing --enable-mcp-server globex_cloud` | that MCP server belongs to another project, so Keyfit switched it off for the session. Leave the option out |
+| `copilot not started: ~/code/globex belongs to globex, this folder to acme-api` | `copilot -C DIR` would work in DIR with this folder's accounts. Start it there: `cd ~/code/globex && copilot` |
+| `copilot mcp list` shows another project's servers | Copilot's own commands (`mcp`, `config`, `plugin`, …) run as typed. Sessions (`copilot`, `copilot -p …`) start with those servers switched off (`--disable-mcp-server`; see `KEYFIT_DRY_RUN=1 copilot`) |
 | **Claude** `not signed in` | `claude auth login`. For an account in another config folder, use `CLAUDE_CONFIG_DIR=… claude auth login`, as printed |
 | **Claude** `signed in with api_key instead of a Claude subscription` | remove `ANTHROPIC_API_KEY` or `apiKeyHelper` from your Claude settings, or sign in again |
 | **Claude** `signed in to org 'X', project expects 'Y'` | sign in to the expected organization (`claude auth login`) |
@@ -122,14 +129,14 @@ When you started the tool yourself in a terminal and the fix is only a sign-in (
 | `this folder belongs to acme-api, which uses wrangler profile acme; wrangler login would change only wrangler's default login` (also `logout`) | `wrangler login` and `logout` act on wrangler's default sign-in, which the project doesn't use. To sign the project's profile in again: `wrangler auth create acme`. To change the default sign-in, run `wrangler login` outside the project |
 | `refusing wrangler auth activate OTHER for FOLDER: that folder belongs to acme-api` (also `auth deactivate`, `auth create` and `auth delete` of a project's profile) | that command would move a registered folder off its project's sign-in. Change the project's profile with `keyfit add cloudflare --profile …` first, or bypass once: `KEYFIT_DISABLE=1 wrangler auth …` |
 | **Cloudflare**, wrangler still uses another account although the checks pass | a `CLOUDFLARE_API_TOKEN` (or `CLOUDFLARE_API_KEY`) beats every wrangler profile. Keyfit removes it from the environment, but wrangler also reads it from the folder's `.env` and `.env.local`: remove it there. While it is there, the account stays pinned (`CLOUDFLARE_ACCOUNT_ID`) and Keyfit's online check runs with that token. With such a token set, wrangler also refuses `wrangler auth create` and `activate` |
-| **Convex** `the convex CLI is not signed in`, `Convex rejected the token (signed out or revoked?)` for an account that is the CLI's own login | `npx convex login --force`. Starting `claude`, `codex`, `opencode` or `convex` in a terminal offers to run it (`Sign in now?`) |
+| **Convex** `the convex CLI is not signed in`, `Convex rejected the token (signed out or revoked?)` for an account that is the CLI's own login | `npx convex login --force`. Starting `claude`, `codex`, `opencode`, `copilot` or `convex` in a terminal offers to run it (`Sign in now?`) |
 | **Convex** `token not found (Keychain item keyfit/convex-…)`, `Convex rejected the token`, `… holds a deploy key (…\|…), not an access token` for a token Keyfit keeps | give the account a working token: sign the CLI in as that account (`npx convex login --force`), then `keyfit add convex --name … --copy`. A deploy key (`prod:…\|…`) is not a login; it belongs in the project's `.env.local` or CI settings |
 | **Convex** `this login has no access to team …` | the login belongs to someone who isn't a member of the project's team. Sign in as a member (`npx convex login --force`), or for a token Keyfit keeps, add a member's: `keyfit add convex --name … --copy` |
 | **Convex** `CONVEX_DEPLOYMENT in .env.local points this folder at deployment NAME of another team`, `… this login cannot reach it` | the folder was configured with another account or team. Run `npx convex dev --configure existing --team <the project's team>` inside the project and pick one of the team's projects; it rewrites `.env.local` |
 | **Convex** `! convex … holds a project deploy key, which the convex CLI uses instead of any login` | a warning, not a failure. With a project deploy key in the folder, the convex CLI refuses every other login, so Keyfit leaves it as it is and doesn't check it (it can't tell the key's team without sending the key). Remove the key from `.env.local` to use the project's Convex account there |
 | `this folder belongs to acme-api, whose Convex token Keyfit keeps …; convex login would change only the convex CLI's own login` (also `logout`) | inside a project whose Convex token Keyfit keeps, the CLI's own login isn't used. To change the project's token: `keyfit add convex --name …`. To change the CLI's own login, run `npx convex login` (npx doesn't go through Keyfit) |
 | `this folder belongs to acme-api (Convex team Acme); refusing --deployment-name NAME: it belongs to another team` (also `--deployment`, `--env-file`, `--team`, `--admin-key`) | inside a project, `convex` works only with deployments of the project's team. Leave the option out to use the folder's own deployment |
-| `npx convex` in a plain terminal acts as another account | `npx convex` doesn't go through Keyfit; only a Claude, Codex or OpenCode session (or `keyfit run -- npx convex …`) gives it the project's account |
+| `npx convex` in a plain terminal acts as another account | `npx convex` doesn't go through Keyfit; only a Claude, Codex, OpenCode or Copilot CLI session (or `keyfit run -- npx convex …`) gives it the project's account |
 | **Codex** `not signed in` | `codex login` (another home: `CODEX_HOME=… codex login`) |
 | **Codex** `Codex is signed in with an API key`, `auth.json holds an API key next to the ChatGPT login` | `codex logout && codex login`, with your ChatGPT account |
 | **OpenCode** `not signed in (no OpenCode database yet)`, `not signed in to anthropic in …`, `OpenCode does not see the anthropic sign-in` | `opencode auth login anthropic --standalone`, as printed (with `OPENCODE_DB=…` for an account Keyfit made); in a terminal, Keyfit offers to run it. Inside the project plain `opencode auth login` works too: Keyfit adds `--standalone` and the project's database. Without `--standalone`, a running background server would take the sign-in to its own database |
@@ -152,7 +159,7 @@ When a service doesn't answer but a check succeeded within the last 24 hours, th
 Successful online checks are reused for 30 minutes (see [the verification cache](/docs/security/#the-verification-cache)). Keyfit checks again right away when the identity behind a connection changes:
 
 - a new AWS SSO or console sign-in
-- a different Linear key, GitHub token, Vercel login, Supabase token or Convex login, a different linked Supabase project or Convex deployment, a new (or renewed) wrangler sign-in, and any `gh auth login`, `logout` or `switch`
+- a different Linear key, GitHub token (also the one for Copilot CLI), Vercel login, Supabase token or Convex login, a different linked Supabase project or Convex deployment, a new (or renewed) wrangler sign-in, and any `gh auth login`, `logout` or `switch`
 - a different Claude organization
 - a new, removed or switched OpenCode sign-in in the project's database, and a new `…_API_KEY` or `…_TOKEN` variable in your shell (by name)
 - a connection changed with `keyfit add`
@@ -167,11 +174,11 @@ Deleting `~/.config/keyfit/cache/checks.json` is also safe; the next launch simp
 
 ## Starts feel slow
 
-With the checks cached, a shim adds about 0.1 s, and about 0.2 s for `gh`, `claude`, `codex` and `opencode` in a project with a GitHub account (see [Speed](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/../README.md#speed)). If every start takes longer:
+With the checks cached, a shim adds about 0.1 s, and about 0.2 s for `gh`, `claude`, `codex`, `opencode` and `copilot` in a project with a GitHub or Copilot CLI account (see [Speed](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/../README.md#speed)). If every start takes longer:
 
 - **A check goes online every time.** Only successful checks are cached. A check that fails, or that is accepted only from the last 24 hours because the service did not answer (`could not re-check now`), is tried online again at the next start, with one retry. Run `keyfit status` and fix what it shows.
 - **The cache can't be written.** Keyfit keeps it in `~/.config/keyfit/cache/checks.json`. If that folder isn't writable, every start checks online.
-- **gh answers slowly.** In a project with a GitHub account, every `gh`, `claude`, `codex` and `opencode` start runs `gh auth token`. Time it with `time gh auth token --hostname github.com --user <login> >/dev/null`; it should take about 0.1 s.
+- **gh answers slowly.** In a project with a GitHub or Copilot CLI account, every `gh`, `claude`, `codex`, `opencode` and `copilot` start runs `gh auth token`. Time it with `time gh auth token --hostname github.com --user <login> >/dev/null`; it should take about 0.1 s.
 
 To see what a start costs, run `time KEYFIT_DRY_RUN=1 gh` in the project. It runs the checks and starts nothing.
 
@@ -225,7 +232,7 @@ pipx uninstall keyfit            # last, or: brew uninstall keyfit
 - **What stays.** Without `--purge`, the registry stays, and `keyfit setup --rc` turns everything back on.
 - **What `--purge` deletes:** the registry, the check cache, the Claude config folders made by `keyfit add claude --new`, the Vercel login folders made by `keyfit add vercel --new` and the OpenCode databases made by `keyfit add opencode --new` (with the logins in them). It refuses if `~/.config/keyfit` holds files Keyfit didn't write; delete those yourself if you are sure. Without a terminal it needs `--yes`.
 - **Keychain items** Keyfit stored (service `keyfit`) are never deleted; `--purge` prints their names. Delete them in Keychain Access, or with `security delete-generic-password -s keyfit -a NAME`.
-- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `opencode`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` then run directly again.
+- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `opencode`, `copilot`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` then run directly again.
 
 If `keyfit` itself no longer runs, do it by hand:
 
