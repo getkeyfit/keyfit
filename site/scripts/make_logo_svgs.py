@@ -1,4 +1,4 @@
-"""Draw the Keyfit wordmark and favicon as SVG paths from the Sixtyfour font (SIL OFL 1.1).
+"""Draw the Keyfit wordmark as SVG paths from the Sixtyfour font (SIL OFL 1.1), and the favicon as pixel blocks.
 
     python3 site/scripts/make_logo_svgs.py
 
@@ -19,6 +19,9 @@ SITE = Path(__file__).resolve().parents[1]
 FONT = SITE / "node_modules/@fontsource/sixtyfour/files/sixtyfour-latin-400-normal.woff"
 AMBER, INK, PAPER = "#f59e0b", "#111111", "#fafafa"
 TRACKING = -0.02  # em, as on the logo options page
+# Sixtyfour's K as solid pixels. The font draws each pixel row as a separate scanline, which turns
+# into stripes at 16px, so the favicon uses the same glyph without the gaps.
+K_PIXELS = ("##..##", "##.##.", "####..", "###...", "####..", "##.##.", "##..##")
 
 
 def outline(text: str, font: TTFont, size: float) -> tuple[str, tuple[float, float, float, float]]:
@@ -49,24 +52,30 @@ def wordmark(path_data: str, bounds, fill: str, pad: float = 2) -> str:
             f'role="img" aria-label="Keyfit"><path fill="{fill}" d="{path_data}"/></svg>\n')
 
 
-def tile(letter_data: str, bounds, background: str, fill: str, size: int = 32) -> str:
-    x0, y0, x1, y1 = bounds
-    dx, dy = (size - (x1 - x0)) / 2 - x0, (size - (y1 - y0)) / 2 - y0
+def tile(background: str, fill: str, size: int = 32, cell: int = 3) -> str:
+    # Whole-number cells and offsets keep every edge on a device pixel at 32px (a 16px tab on Retina).
+    x0, y0 = (size - len(K_PIXELS[0]) * cell) // 2, (size - len(K_PIXELS) * cell) // 2
+    runs = []
+    for row, line in enumerate(K_PIXELS):
+        col = 0
+        for run in line.split("."):
+            if run:
+                runs.append(f"M{x0 + col * cell} {y0 + row * cell}h{len(run) * cell}v{cell}h-{len(run) * cell}z")
+            col += len(run) + 1
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">'
             f'<rect width="{size}" height="{size}" rx="{size * 0.22:.1f}" fill="{background}"/>'
-            f'<path transform="translate({dx:.2f} {dy:.2f})" fill="{fill}" d="{letter_data}"/></svg>\n')
+            f'<path fill="{fill}" d="{"".join(runs)}"/></svg>\n')
 
 
 def main() -> None:
     font = TTFont(FONT)
     words, wbounds = outline("KEYFIT", font, 48)
-    k, kbounds = outline("K", font, 19)
     out = {
         SITE / "src/assets/wordmark-on-dark.svg": wordmark(words, wbounds, PAPER),
         SITE / "src/assets/wordmark-on-light.svg": wordmark(words, wbounds, INK),
         SITE / "public/logo/keyfit-wordmark.svg": wordmark(words, wbounds, "currentColor"),
-        SITE / "public/favicon.svg": tile(k, kbounds, AMBER, INK),
-        SITE / "public/logo/keyfit-icon-dark.svg": tile(k, kbounds, INK, PAPER),
+        SITE / "public/favicon.svg": tile(AMBER, INK),
+        SITE / "public/logo/keyfit-icon-dark.svg": tile(INK, PAPER),
     }
     for path, svg in out.items():
         path.parent.mkdir(parents=True, exist_ok=True)
