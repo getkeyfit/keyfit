@@ -751,6 +751,10 @@ def cmd_add_supabase(args) -> int:
     project = _project_from_args(reg, args)
     if project is None:
         return 1
+    if any(secrets.looks_like_key(v) or supabase_adapter.TOKEN.search(v or "") for v in (args.name, args.org)):
+        print("--name and --org take a short name, not a token: run `keyfit add supabase` and paste the token at the "
+              "hidden prompt (the token may now be in your shell history)", file=sys.stderr)
+        return 1
     if args.name and not secrets.NAME.fullmatch(f"supabase-{args.name}"):
         print("a name is letters, digits, '.', '_' and '-' (at most 55)", file=sys.stderr)
         return 1
@@ -797,7 +801,14 @@ def cmd_add_supabase(args) -> int:
         print(f"could not read the organization: {reason}\n  → {fix}", file=sys.stderr)
         return 1
     slug, title = org
-    name = args.name or _account_name(title)
+    taken = reg.data["accounts"].get("supabase", {})
+    name = args.name
+    if not name:  # from the organization's name, which Supabase does not keep unique: never another org's account
+        base = name = _account_name(title)
+        n = 1
+        while isinstance(taken.get(name), dict) and taken[name].get("org") != slug:
+            n += 1
+            name = f"{base}-{n}"
     copied = f", a copy of the supabase CLI's login ({where})" if args.cli else ""
     if ref is None:
         item = f"supabase-{name}"
@@ -807,11 +818,16 @@ def cmd_add_supabase(args) -> int:
             return 1
         reg.add_stored_secret(item)
         ref = f"keychain:{secrets.SERVICE}/{item}"
+    before = taken.get(name) if isinstance(taken.get(name), dict) else None
     reg.set_account("supabase", name, {"token": ref, "org": slug, "org_name": title})
     reg.set_connection(project.name, "supabase", name)
     reg.save()
     print(f"{project.name}: supabase account '{name}' → organization {title} ({slug}) via {secrets.describe(ref)}"
           f"{copied}")
+    others = sorted(p for p, body in reg.data["projects"].items() if p != project.name and body.get("supabase") == name)
+    if before and others and before.get("org") != slug:
+        print(f"  account '{name}' was organization {before.get('org_name') or before.get('org')}; it changed for "
+              f"{', '.join(others)} too")
     return 0
 
 
