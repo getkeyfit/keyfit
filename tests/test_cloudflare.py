@@ -363,6 +363,8 @@ class AdapterTests(CloudflareCase):
         self.assertEqual(cloudflare.words(args), ["deploy"])
         self.assertEqual(cloudflare.words(["--x-provision", "auth", "activate", "acme", "."]),
                          ["auth", "activate", "acme", "."])
+        self.assertEqual(cloudflare.words(["auth", "create", "--callback-port", "8976", "--scopes", "d1:write", "x"]),
+                         ["auth", "create", "x"])
 
     def test_whoami_output_of_a_real_process(self):
         script = self.tmp / "wrangler-script"
@@ -487,6 +489,7 @@ class ShimTests(CloudflareCase):
                                                      f"client uses wrangler profile acme there"),
                             (["auth", "create", "globex"], "refusing `wrangler auth create globex`: that profile is "
                                                            "the sign-in of mine"),
+                            (["auth", "create", "--callback-port", "8976", "globex"], "the sign-in of mine"),
                             (["auth", "delete", "acme"], "refusing `wrangler auth delete acme`: client uses that "
                                                          "profile")):
             code, argv, _ = self.run_shim(*args)

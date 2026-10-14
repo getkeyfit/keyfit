@@ -55,9 +55,11 @@ SCRUB = ("CLOUDFLARE_API_TOKEN", "CF_API_TOKEN", "CLOUDFLARE_API_KEY", "CF_API_K
          "CLOUDFLARE_ACCOUNT_ID", "CF_ACCOUNT_ID")
 CONFIGS = ("wrangler.json", "wrangler.jsonc", "wrangler.toml")
 BINDINGS = Path("profiles") / "directory-bindings.json"
-# wrangler's global options that take a value (yargs: `--name value`, `--name=value`, `-c value`); every other option
-# is read as a flag, so `wrangler --x-provision login` is still `login`.
-VALUED = {"-c", "--config", "--cwd", "-e", "--env", "--env-file", "--profile"}
+# Options that take a value (yargs: `--name value`, `--name=value`, `-c value`): wrangler's global ones and those of
+# the commands Keyfit looks at (login, auth create, whoami). Every other option is read as a flag, so
+# `wrangler --x-provision login` is still `login`.
+VALUED = {"-c", "--config", "--cwd", "-e", "--env", "--env-file", "--profile", "--scopes", "--callback-host",
+          "--callback-port", "--account"}
 OPTIONS = {"-c": "--config", "--config": "--config", "--cwd": "--cwd", "--profile": "--profile"}
 UNREACHABLE = ("could not be reached", "fetch failed", "enotfound", "econnrefused", "econnreset", "etimedout",
                "eai_again", "getaddrinfo", "network")
@@ -343,7 +345,7 @@ def _fetch(path: str, token: str, timeout: float) -> tuple[int, object]:
 class CloudflareAdapter(Adapter):
     kind = "cloudflare"
 
-    def __init__(self, run=_run, fetch=_fetch, timeout: float = 15, cli_timeout: float = 45):
+    def __init__(self, run=_run, fetch=_fetch, timeout: float = 15, cli_timeout: float = 30):
         self.run = run
         self.fetch = fetch
         self.timeout = timeout
@@ -369,8 +371,8 @@ class CloudflareAdapter(Adapter):
 
     def fingerprint(self, conn, env: dict) -> str:
         """Changes with the profile's sign-in file (a new sign-in, or one wrangler renewed), so a cached check never
-        vouches for another sign-in."""
-        seen = []
+        vouches for another sign-in, and with the wrangler that checks it (one installed since)."""
+        seen = [wrangler_bin(env, os.getcwd()) or ""]
         for ext in (".toml", ".enc"):
             try:
                 st = (store(env) / "config" / f"{conn.get('profile')}{ext}").stat()
@@ -435,7 +437,8 @@ class CloudflareAdapter(Adapter):
         try:
             code, out, err = self.run([binary, "whoami", "--json"], folder, wrangler_env(env), self.cli_timeout)
         except subprocess.TimeoutExpired:
-            return None, f"wrangler whoami did not answer within {self.cli_timeout:g} s", "transient"
+            return None, (f"wrangler did not answer within {self.cli_timeout:g} s (a Keychain prompt may be waiting — "
+                          f"choose Always Allow)"), "transient"
         except OSError:
             return None, f"{tilde(binary)} could not run", "error"
         data = _json(out)
