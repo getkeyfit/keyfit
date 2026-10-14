@@ -280,7 +280,7 @@ class ShimTests(unittest.TestCase):
         self.assertEqual(self.run_tool("claude", "-p", "hi", cwd=self.outside).returncode, 0)  # other folders too
         reg.write_text(reg.read_text().replace("aws = {", "asw = {"))
         out = self.run_tool("claude", "-p", "hi")
-        self.assertRegex(out.stderr, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, opencode, "
+        self.assertRegex(out.stderr, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, opencode, copilot, "
                                      r"github, vercel, supabase, cloudflare, convex\)\n    → rename or remove asw in ")
 
     def test_missing_tool_says_how_to_install_it(self):

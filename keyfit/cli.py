@@ -72,8 +72,8 @@ def _not_active() -> str:
 
     folder = canonical(shim_dir())
     if not (folder / MARKER).is_file():
-        return "Keyfit is not set up yet, so claude, codex, opencode, aws, gh, vercel, supabase, wrangler and convex " \
-               "still run without checks.\n" \
+        return "Keyfit is not set up yet, so claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler and " \
+               "convex still run without checks.\n" \
                "  Set it up: keyfit setup --rc, then open a new terminal"
     if folder not in [canonical(e) for e in os.environ.get("PATH", "").split(os.pathsep) if e]:
         return f"{tilde(folder)} is not on PATH in this terminal, so tools here still run without checks.\n" \
@@ -239,6 +239,22 @@ def _offer_opencode(name: str, base: dict) -> None:
         cmd_add_opencode(argparse.Namespace(**base, name=None, db=None, new=False))
 
 
+def _offer_copilot(name: str, base: dict) -> None:
+    from .realbin import find_real
+
+    if find_real("copilot", dict(os.environ), skip_wrappers=True) is None:
+        print("Copilot CLI: copilot not found on PATH — skipped")
+        return
+    github = Registry.load(base["registry"]).get(name).connections.get("github")
+    login = github.get("login") if isinstance(github, dict) else None
+    if not login:
+        print(f"Copilot CLI: {name} has no GitHub account, which Copilot CLI signs in with — map one "
+              "(keyfit add github --login <login>), then: keyfit add copilot")
+        return
+    if _yes(f"Start Copilot CLI in {name} as its GitHub account {login}?"):
+        cmd_add_copilot(argparse.Namespace(**base, login=None, name=None))
+
+
 def _offer_vercel(name: str, base: dict) -> None:
     from .realbin import find_real
 
@@ -322,7 +338,7 @@ def _offer_linear(name: str, base: dict) -> None:
 
 GUIDED = (("aws", "AWS", _offer_aws), ("github", "GitHub", _offer_github), ("claude", "Claude", _offer_claude),
           ("codex", "Codex", _offer_codex), ("opencode", "OpenCode", _offer_opencode),
-          ("vercel", "Vercel", _offer_vercel),
+          ("copilot", "Copilot CLI", _offer_copilot), ("vercel", "Vercel", _offer_vercel),
           ("supabase", "Supabase", _offer_supabase), ("cloudflare", "Cloudflare", _offer_cloudflare),
           ("convex", "Convex", _offer_convex), ("linear", "Linear", _offer_linear))
 
@@ -387,7 +403,7 @@ def cmd_status(args) -> int:
     checks = []
     if not r.project.connections:
         print("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add aws|github|"
-              "claude|codex|opencode|vercel|supabase|cloudflare|convex|linear …")
+              "claude|codex|opencode|copilot|vercel|supabase|cloudflare|convex|linear …")
     else:
         env = environment.build(r.project)
         checks = environment.verify(r.project, env, remote=not args.offline)  # fresh; refreshes the cache
@@ -744,6 +760,51 @@ def cmd_add_opencode(args) -> int:
     reg.set_connection(project.name, "opencode", name)
     reg.save()
     print(f"{project.name}: opencode account '{name}' → {', '.join(sorted(found))} in {tilde(db)}")
+    return 0
+
+
+def cmd_add_copilot(args) -> int:
+    """Record which GitHub account a project's Copilot CLI runs as. Default: the project's GitHub account. The login
+    must already be in `gh auth status`: Copilot gets the token gh keeps for it."""
+    from .adapters.copilot import CLASSIC
+    from .adapters.github import read_token
+
+    reg = Registry.load(args.registry)
+    project = _project_from_args(reg, args)
+    if project is None:
+        return 1
+    github = project.connections.get("github")
+    login = args.login or (github.get("login") if isinstance(github, dict) else None)
+    if not login:
+        print(f"{project.name} has no GitHub account to take the login from — map one (keyfit add github --login "
+              f"<login>), or name it: keyfit add copilot --login <login>", file=sys.stderr)
+        return 1
+    adapter = ADAPTERS["copilot"]
+    token, reason = read_token(login, dict(os.environ))
+    if token is None:
+        fix = (f"install it ({INSTALL['gh']}), then sign in" if "not found" in reason else f"sign in first as {login}")
+        print(f"{reason} — {fix}: gh auth login --hostname github.com --web", file=sys.stderr)
+        return 1
+    classic = token.startswith(CLASSIC)
+    actual = None if classic else adapter.whoami(token)
+    del token
+    if classic:
+        print(f"gh's stored login for {login} is a classic personal access token, which Copilot CLI refuses.\n"
+              f"  Sign in again as {login} in the browser: {adapter.login_fix({'login': login})}", file=sys.stderr)
+        return 1
+    if actual is None:
+        print("GitHub did not confirm the stored token", file=sys.stderr)
+        return 1
+    if actual.lower() != login.lower():
+        print(f"gh's stored login for {login} actually authenticates as {actual}.\n"
+              f"  Sign in again as {login}: {adapter.login_fix({'login': login})}", file=sys.stderr)
+        return 1
+    name = args.name or login.lower()
+    reg.set_account("copilot", name, {"login": login})
+    reg.set_connection(project.name, "copilot", name)
+    reg.save()
+    same = isinstance(github, dict) and str(github.get("login", "")).lower() == login.lower()
+    print(f"{project.name}: copilot account '{name}' → GitHub {login}" + (", the project's GitHub account" if same else ""))
     return 0
 
 
@@ -1209,8 +1270,8 @@ NOT_MACOS = "Keyfit supports macOS for now (it stores keys in the Keychain); Lin
 # is Superset wrapper → Keyfit shim → real tool (Superset finds "the next claude"). Both move to the very front:
 # a login profile that prepends another folder after Superset set PATH (e.g. `brew shellenv` in ~/.zprofile)
 # must not put real tools ahead of the shims.
-SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/aws/gh/vercel/supabase/wrangler/convex shims on PATH (written by
-# `keyfit setup`).
+SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/copilot/aws/gh/vercel/supabase/wrangler/convex shims on PATH
+# (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 () {
   local kf="@SHIMS@" ss="$HOME/.superset/bin"
@@ -1220,8 +1281,8 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/aws/gh/vercel/supabase/wr
 
 # The same rule in POSIX sh, for bash (macOS ships 3.2): no arrays or `local`, so _kf_ variables unset at the
 # end; PATH is walked with parameter expansion (never word-split or globbed). Like zsh, it drops empty entries.
-SHELL_SH = """# Keyfit: put the claude/codex/opencode/aws/gh/vercel/supabase/wrangler/convex shims on PATH (written by
-# `keyfit setup`).
+SHELL_SH = """# Keyfit: put the claude/codex/opencode/copilot/aws/gh/vercel/supabase/wrangler/convex shims on PATH
+# (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 _kf="@SHIMS@"; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
 while [ -n "$_kf_rest" ]; do
@@ -1452,8 +1513,8 @@ def _remove_setup(args) -> int:
             folder.rmdir()  # only when nothing else is left in it
         except OSError:
             pass
-    print("Open a new terminal (or run: hash -r): claude, codex, opencode, aws, gh, vercel, supabase, wrangler and "
-          "convex run directly again.")
+    print("Open a new terminal (or run: hash -r): claude, codex, opencode, copilot, aws, gh, vercel, supabase, "
+          "wrangler and convex run directly again.")
     return 0
 
 
@@ -1539,7 +1600,7 @@ def cmd_doctor(args) -> int:
             checks.append(Check(tool, "ok", _short(real)))
         elif tool == "convex":  # projects run it through npx, which gets the account in agent sessions
             checks.append(Check(tool, "ok", "not installed globally", "npx convex gets its account from claude, "
-                                "codex and opencode sessions"))
+                                "codex, opencode and copilot sessions"))
         else:
             checks.append(Check(tool, "warn", "not found on PATH", "needed only if you use it", INSTALL[tool]))
     path = Path(args.registry) if args.registry else default_path()
@@ -1572,6 +1633,17 @@ def cmd_doctor(args) -> int:
                     db = opencode_adapter.database(conn, env)
                     check = Check("opencode", "ok", check.label, f"{check.detail} · {tilde(db)}")
                 checks.append(check)
+            conn = r.project.connections.get("copilot")
+            if isinstance(conn, dict):  # which account and config folder Copilot gets, from the registry (no token)
+                github = r.project.connections.get("github")
+                theirs = github.get("login") if isinstance(github, dict) else None
+                where = f"settings and MCP servers in {tilde(mcp.copilot_config_dir(env))}"
+                login = conn.get("login") or "?"
+                checks.append(Check("copilot", "ok", login, f"GitHub {login}, gh's token · {where}")
+                              if theirs and theirs.lower() == login.lower() else
+                              Check("copilot", "warn", login, f"GitHub {login}, gh's token, while the project's GitHub "
+                                    f"account is {theirs or 'not mapped'} · {where}",
+                                    "fine if intended; else: keyfit add copilot"))
         else:  # outside a repository, `keyfit init` would register the whole folder (the home folder, say)
             fix = "keyfit init" if git_main_checkout(r.path) else "cd into a project's repository, then: keyfit init"
             checks.append(Check("project", "warn", "this folder", f"not registered ({r.how}): tools run here unchanged",
@@ -1585,8 +1657,8 @@ def cmd_doctor(args) -> int:
 
 
 START = """start here:
-  keyfit setup --rc     put Keyfit in front of claude, codex, opencode, aws, gh, vercel, supabase, wrangler and
-                        convex, then open a new terminal
+  keyfit setup --rc     put Keyfit in front of claude, codex, opencode, copilot, aws, gh, vercel, supabase,
+                        wrangler and convex, then open a new terminal
   keyfit init           inside a project's repository: register it and pick its accounts
   claude                starts with that project's accounts, checked
 something off? keyfit doctor
@@ -1603,8 +1675,8 @@ def build_parser() -> argparse.ArgumentParser:
     def command(parent, name: str, text: str):  # the one-line help is also the command's own --help description
         return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
 
-    p = command(sub, "setup", "write the claude/codex/opencode/aws/gh/vercel/supabase/wrangler/convex shims; with --rc "
-                              "also put them on PATH")
+    p = command(sub, "setup", "write the claude/codex/opencode/copilot/aws/gh/vercel/supabase/wrangler/convex shims; "
+                              "with --rc also put them on PATH")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
     p.add_argument("--rc", nargs="?", const="", metavar="FILE",
@@ -1622,8 +1694,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_setup)
 
     p = command(sub, "init", "register the current repository as a project, then offer the AWS, GitHub, Claude, "
-                             "Codex, OpenCode, Vercel, Supabase, Cloudflare, Convex and Linear accounts found on this "
-                             "Mac (imports `use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
+                             "Codex, OpenCode, Copilot CLI, Vercel, Supabase, Cloudflare, Convex and Linear accounts "
+                             "found on this Mac (imports `use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
     p.add_argument("-y", "--yes", action="store_true",
@@ -1677,6 +1749,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="create a folder for other sign-ins (~/.config/keyfit/opencode/NAME); sign in afterwards")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_opencode)
+    p = command(kinds, "copilot", "GitHub account Copilot CLI runs as in this project (gh's token for it)")
+    p.add_argument("--login", help="GitHub login, already signed in to gh (default: the project's GitHub account)")
+    p.add_argument("--name", help="short account name, reusable across projects (default: the login)")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_copilot)
     p = command(kinds, "vercel", "Vercel login (global config folder) and team for this project")
     p.add_argument("--name", help="short account name, reusable across projects (default: the team slug, "
                                   "else the username)")
