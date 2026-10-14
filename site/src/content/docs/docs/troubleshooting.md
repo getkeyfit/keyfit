@@ -80,7 +80,7 @@ keyfit: claude not started, acme-api needs attention
   (bypass once: KEYFIT_DISABLE=1 claude …)
 ```
 
-When you started the tool yourself in a terminal and the fix is only a sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`, `wrangler auth create NAME`, `wrangler login`, `npx convex login --force`), Keyfit asks `Sign in now? [Y/n]`: press Enter, sign in, and the tool starts once the checks pass. Agents and scripts are never asked. Otherwise, run the command after `→`. Sign-in commands always go through, even while checks fail, and they run with the project's environment. That way they sign in the account the project needs. Then start the tool again; failed checks are never cached.
+When you started the tool yourself in a terminal and the fix is only a sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `opencode auth login … --standalone`, `vercel login`, `wrangler auth create NAME`, `wrangler login`, `npx convex login --force`), Keyfit asks `Sign in now? [Y/n]`: press Enter, sign in, and the tool starts once the checks pass. Agents and scripts are never asked. Otherwise, run the command after `→`. Sign-in commands always go through, even while checks fail, and they run with the project's environment. That way they sign in the account the project needs. Then start the tool again; failed checks are never cached.
 
 | Message | What to do |
 |---|---|
@@ -122,17 +122,24 @@ When you started the tool yourself in a terminal and the fix is only a sign-in (
 | `this folder belongs to acme-api, which uses wrangler profile acme; wrangler login would change only wrangler's default login` (also `logout`) | `wrangler login` and `logout` act on wrangler's default sign-in, which the project doesn't use. To sign the project's profile in again: `wrangler auth create acme`. To change the default sign-in, run `wrangler login` outside the project |
 | `refusing wrangler auth activate OTHER for FOLDER: that folder belongs to acme-api` (also `auth deactivate`, `auth create` and `auth delete` of a project's profile) | that command would move a registered folder off its project's sign-in. Change the project's profile with `keyfit add cloudflare --profile …` first, or bypass once: `KEYFIT_DISABLE=1 wrangler auth …` |
 | **Cloudflare**, wrangler still uses another account although the checks pass | a `CLOUDFLARE_API_TOKEN` (or `CLOUDFLARE_API_KEY`) beats every wrangler profile. Keyfit removes it from the environment, but wrangler also reads it from the folder's `.env` and `.env.local`: remove it there. While it is there, the account stays pinned (`CLOUDFLARE_ACCOUNT_ID`) and Keyfit's online check runs with that token. With such a token set, wrangler also refuses `wrangler auth create` and `activate` |
-| **Convex** `the convex CLI is not signed in`, `Convex rejected the token (signed out or revoked?)` for an account that is the CLI's own login | `npx convex login --force`. Starting `claude`, `codex` or `convex` in a terminal offers to run it (`Sign in now?`) |
+| **Convex** `the convex CLI is not signed in`, `Convex rejected the token (signed out or revoked?)` for an account that is the CLI's own login | `npx convex login --force`. Starting `claude`, `codex`, `opencode` or `convex` in a terminal offers to run it (`Sign in now?`) |
 | **Convex** `token not found (Keychain item keyfit/convex-…)`, `Convex rejected the token`, `… holds a deploy key (…\|…), not an access token` for a token Keyfit keeps | give the account a working token: sign the CLI in as that account (`npx convex login --force`), then `keyfit add convex --name … --copy`. A deploy key (`prod:…\|…`) is not a login; it belongs in the project's `.env.local` or CI settings |
 | **Convex** `this login has no access to team …` | the login belongs to someone who isn't a member of the project's team. Sign in as a member (`npx convex login --force`), or for a token Keyfit keeps, add a member's: `keyfit add convex --name … --copy` |
 | **Convex** `CONVEX_DEPLOYMENT in .env.local points this folder at deployment NAME of another team`, `… this login cannot reach it` | the folder was configured with another account or team. Run `npx convex dev --configure existing --team <the project's team>` inside the project and pick one of the team's projects; it rewrites `.env.local` |
 | **Convex** `! convex … holds a project deploy key, which the convex CLI uses instead of any login` | a warning, not a failure. With a project deploy key in the folder, the convex CLI refuses every other login, so Keyfit leaves it as it is and doesn't check it (it can't tell the key's team without sending the key). Remove the key from `.env.local` to use the project's Convex account there |
 | `this folder belongs to acme-api, whose Convex token Keyfit keeps …; convex login would change only the convex CLI's own login` (also `logout`) | inside a project whose Convex token Keyfit keeps, the CLI's own login isn't used. To change the project's token: `keyfit add convex --name …`. To change the CLI's own login, run `npx convex login` (npx doesn't go through Keyfit) |
 | `this folder belongs to acme-api (Convex team Acme); refusing --deployment-name NAME: it belongs to another team` (also `--deployment`, `--env-file`, `--team`, `--admin-key`) | inside a project, `convex` works only with deployments of the project's team. Leave the option out to use the folder's own deployment |
-| `npx convex` in a plain terminal acts as another account | `npx convex` doesn't go through Keyfit; only a Claude or Codex session (or `keyfit run -- npx convex …`) gives it the project's account |
-| **Codex** `not signed in` | `codex login` (another home: `CODEX_HOME=… codex login`) |
+| `npx convex` in a plain terminal acts as another account | `npx convex` doesn't go through Keyfit; only a Claude, Codex or OpenCode session (or `keyfit run -- npx convex …`) gives it the project's account |
 | **Codex** `not signed in` | `codex login` (another home: `CODEX_HOME=… codex login`) |
 | **Codex** `Codex is signed in with an API key`, `auth.json holds an API key next to the ChatGPT login` | `codex logout && codex login`, with your ChatGPT account |
+| **OpenCode** `not signed in (no OpenCode database yet)`, `not signed in to anthropic in …`, `OpenCode does not see the anthropic sign-in` | `opencode auth login anthropic --standalone`, as printed (with `OPENCODE_DB=…` for an account Keyfit made); in a terminal, Keyfit offers to run it. Inside the project plain `opencode auth login` works too: Keyfit adds `--standalone` and the project's database. Without `--standalone`, a running background server would take the sign-in to its own database |
+| **OpenCode** `OPENROUTER_API_KEY from your shell would compete with the project's OpenRouter sign-in` (any provider) | your shell has a key for a provider the project's database also has a sign-in for. Remove the variable from your shell startup file. To use the key in the project, store it there instead: `opencode auth login <provider>` inside the project, and pick the API key method |
+| **OpenCode** `opencode auth list did not answer within 30 s`, or another error from it | OpenCode didn't start its private server, or stopped with that error. Run `opencode auth list` inside the project (Keyfit adds `--standalone`) to see why |
+| `opencode not started: inside a session of acme-api, opencode mcp could start OpenCode's background server with that project's accounts` (also `debug`, `plugin`, `service`, `pair`, `serve`) | OpenCode's background server serves every folder and keeps the environment of whichever start launched it; started from an agent session, it would keep that project's accounts. Run the command in a terminal of your own |
+| `refusing opencode acp --login` | it signs in through the background server. Sign in with `opencode auth login` inside the project instead |
+| `this folder belongs to acme-api; refusing --server` | inside a project, an OpenCode session runs on its own private server with the project's accounts; another server has its own sign-ins and environment. Leave the option out |
+| `opencode not started: ~/code/globex belongs to globex, this folder to acme-api` | `opencode DIR` would start in DIR with this folder's accounts. Start it there: `cd ~/code/globex && opencode` |
+| `opencode mcp list` shows another project's servers, or `opencode` in a plain terminal uses other sign-ins | `opencode mcp`, `serve`, `service` and the like talk to OpenCode's background server, which serves every folder, so Keyfit runs them unchanged. Sessions inside the project run on their own server with the project's sign-ins and servers |
 | `… did not answer (…)`, `→ check the network and retry` | the service could not be reached, even after one retry, and there is no success from the last 24 hours to fall back on. Check the network |
 | `project acme-api has no aws account mapped, so aws was not started` (same for `gh` and `github`, `vercel` and `vercel`) | inside a project, these three start only with the project's account for them. Map one: `keyfit add aws --profile …`, `keyfit add github --login …` or `keyfit add vercel`. To skip Keyfit once: `KEYFIT_DISABLE=1 aws …`. `supabase`, `wrangler` and `convex` are different: without a Supabase, Cloudflare or Convex account they run as before |
 | `✘ github  octocta  no account [accounts.github.octocta]`, `✘ asw … unknown connection (a typo? …)` | a hand edit of `~/.config/keyfit/registry.toml` names an account that isn't there, or a connection Keyfit doesn't know. Fix the name, or map it again with `keyfit add …`. Only this project is affected |
@@ -147,6 +154,7 @@ Successful online checks are reused for 30 minutes (see [the verification cache]
 - a new AWS SSO or console sign-in
 - a different Linear key, GitHub token, Vercel login, Supabase token or Convex login, a different linked Supabase project or Convex deployment, a new (or renewed) wrangler sign-in, and any `gh auth login`, `logout` or `switch`
 - a different Claude organization
+- a new, removed or switched OpenCode sign-in in the project's database, and a new `…_API_KEY` or `…_TOKEN` variable in your shell (by name)
 - a connection changed with `keyfit add`
 
 Other changes are only noticed after the 30 minutes, for example a key revoked in the meantime. To check right now:
@@ -159,11 +167,11 @@ Deleting `~/.config/keyfit/cache/checks.json` is also safe; the next launch simp
 
 ## Starts feel slow
 
-With the checks cached, a shim adds about 0.1 s, and about 0.2 s for `gh`, `claude` and `codex` in a project with a GitHub account (see [Speed](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/../README.md#speed)). If every start takes longer:
+With the checks cached, a shim adds about 0.1 s, and about 0.2 s for `gh`, `claude`, `codex` and `opencode` in a project with a GitHub account (see [Speed](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/../README.md#speed)). If every start takes longer:
 
 - **A check goes online every time.** Only successful checks are cached. A check that fails, or that is accepted only from the last 24 hours because the service did not answer (`could not re-check now`), is tried online again at the next start, with one retry. Run `keyfit status` and fix what it shows.
 - **The cache can't be written.** Keyfit keeps it in `~/.config/keyfit/cache/checks.json`. If that folder isn't writable, every start checks online.
-- **gh answers slowly.** In a project with a GitHub account, every `gh`, `claude` and `codex` start runs `gh auth token`. Time it with `time gh auth token --hostname github.com --user <login> >/dev/null`; it should take about 0.1 s.
+- **gh answers slowly.** In a project with a GitHub account, every `gh`, `claude`, `codex` and `opencode` start runs `gh auth token`. Time it with `time gh auth token --hostname github.com --user <login> >/dev/null`; it should take about 0.1 s.
 
 To see what a start costs, run `time KEYFIT_DRY_RUN=1 gh` in the project. It runs the checks and starts nothing.
 
@@ -215,9 +223,9 @@ pipx uninstall keyfit            # last, or: brew uninstall keyfit
 
 - **Which startup files.** `--remove` takes Keyfit's line, and the blank line before it, out of `~/.zshrc` (and `$ZDOTDIR/.zshrc`), `~/.bash_profile`, `~/.bash_login`, `~/.profile` and `~/.bashrc`. If you used `keyfit setup --rc PATH` for another file, run `keyfit setup --remove --rc PATH`.
 - **What stays.** Without `--purge`, the registry stays, and `keyfit setup --rc` turns everything back on.
-- **What `--purge` deletes:** the registry, the check cache, the Claude config folders made by `keyfit add claude --new` and the Vercel login folders made by `keyfit add vercel --new` (with the logins in them). It refuses if `~/.config/keyfit` holds files Keyfit didn't write; delete those yourself if you are sure. Without a terminal it needs `--yes`.
+- **What `--purge` deletes:** the registry, the check cache, the Claude config folders made by `keyfit add claude --new`, the Vercel login folders made by `keyfit add vercel --new` and the OpenCode databases made by `keyfit add opencode --new` (with the logins in them). It refuses if `~/.config/keyfit` holds files Keyfit didn't write; delete those yourself if you are sure. Without a terminal it needs `--yes`.
 - **Keychain items** Keyfit stored (service `keyfit`) are never deleted; `--purge` prints their names. Delete them in Keychain Access, or with `security delete-generic-password -s keyfit -a NAME`.
-- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` then run directly again.
+- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `opencode`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and `convex` then run directly again.
 
 If `keyfit` itself no longer runs, do it by hand:
 
