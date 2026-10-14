@@ -661,6 +661,14 @@ code {
 	font-family: var(--mono);
 	font-size: 12px;
 }
+.soon {
+	padding: 0.85rem 1rem;
+	border: 1px dashed var(--term-line);
+	border-radius: var(--radius);
+	color: var(--muted);
+	font-family: var(--mono);
+	font-size: 0.9rem;
+}
 .install-note {
 	margin-top: 0.9rem;
 	color: var(--muted);

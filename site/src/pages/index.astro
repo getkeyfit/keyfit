@@ -12,6 +12,9 @@ const title = 'Keyfit: the right accounts for every repo';
 const description =
 	'Keyfit verifies each project’s AWS, Linear, GitHub, Claude, Codex and Vercel accounts before your agent runs.';
 const repo = 'https://github.com/FlamurMaliqi/keyfit';
+// Launch day (KEY-38): set to true once PyPI and the Homebrew tap have Keyfit. Until then the
+// install commands stay hidden, so nobody copies `pipx install keyfit` before that name is ours.
+const released = false;
 
 // Real Keyfit and CLI output for invented client projects (lumen-web, harbor-api).
 const session: Line[] = [
@@ -227,9 +230,15 @@ const faq = [
 					<div class="install-steps">
 						<div>
 							<p class="label">Install</p>
-							<Copy command="brew install flamurmaliqi/keyfit/keyfit" />
-							<p class="or">or</p>
-							<Copy command="pipx install keyfit" />
+							{released ? (
+								<>
+									<Copy command="brew install flamurmaliqi/keyfit/keyfit" />
+									<p class="or">or</p>
+									<Copy command="pipx install keyfit" />
+								</>
+							) : (
+								<p class="soon">Available 25 October, with Homebrew and pipx.</p>
+							)}
 						</div>
 						<div>
 							<p class="label">Turn it on</p>
