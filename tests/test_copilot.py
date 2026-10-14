@@ -63,6 +63,9 @@ class AdapterTests(unittest.TestCase):
         executable(self.bin / "gh", FAKE_GH)
         self.adapter = CopilotAdapter(fetch=fetch)
         self.conn = {"name": "octocat", "login": "octocat"}
+        config = mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.tmp / "keyfit")})  # a cache of its own
+        config.start()
+        self.addCleanup(config.stop)
 
     def env(self, tokens=None, **extra):
         return {"HOME": str(self.home), "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin",
