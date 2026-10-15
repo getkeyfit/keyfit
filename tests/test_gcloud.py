@@ -720,7 +720,8 @@ class AddTests(GcloudCase):
         with mock.patch.object(cli, "_ask", return_value="1"), contextlib.redirect_stdout(io.StringIO()) as out:
             cli._offer_google("client", base)
             cli._offer_gcloud("client", base)
-        self.assertIn(f"Google accounts gcloud is signed in to", out.getvalue())
+        self.assertIn(f"Google: the project's one Google account, work or personal; its Google tools are checked against "
+                      f"it. gcloud is signed in to:\n  1. {ACME}\n", out.getvalue())
         self.assertIn(f"gcloud configurations signed in as {ACME}:\n  1. acme  ({ACME} → acme-prod)\n", out.getvalue())
         reg = self.registry()
         self.assertEqual((reg["projects"]["client"]["google"], reg["projects"]["client"]["gcloud"]), ("acme", "acme"))
