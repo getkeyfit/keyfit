@@ -184,6 +184,15 @@ def access_token(path: Path) -> str | None:
     return token if expiry / 1000 > time.time() + EXPIRY_MARGIN else None
 
 
+def sign_in_again(conn, path: Path, env: dict) -> str:
+    """The fix when the home holds another account's sign-in: Gemini CLI keeps using a sign-in that still works, so it
+    must go first; in your own home, Keyfit never suggests removing yours, but a home of the project's own."""
+    if is_default(path, env):
+        return f"keyfit add gemini --name {conn.get('name', '<name>')} --new   (a Gemini CLI folder of the project's own; " \
+               f"sign in there)"
+    return f"rm {tilde(folder(path) / 'oauth_creds.json')}, then: {sign_in(path, env)}"
+
+
 def scrub(conn, env: dict) -> None:
     """Where Gemini CLI starts: remove what would pick another sign-in, then preselect the account's method in Gemini
     CLI's dialog and hand it the account's Google Cloud project."""
@@ -324,8 +333,7 @@ class GeminiAdapter(Adapter):
         if login is None:
             return fail(reason, sign_in(path, env))
         creds = folder(path) / "oauth_creds.json"
-        again = f"keyfit add gemini --name {name} --new   (a Gemini CLI folder of the project's own; sign in there)" \
-            if is_default(path, env) else f"rm {tilde(creds)}, then: {sign_in(path, env)}"
+        again = sign_in_again(conn, path, env)
         if login["kind"] != "authorized_user":
             return fail(f"{tilde(creds)} holds {printable(login['kind'])} credentials, not a Google sign-in", again)
         if login["email"] is None:
@@ -345,24 +353,22 @@ class GeminiAdapter(Adapter):
         if token is None:  # renewing it takes Gemini CLI's own OAuth client: Gemini CLI does when it starts
             return Check(self.kind, "ok", label, "not confirmed online (the token has expired; Gemini CLI renews it)")
         account = conn["account"]
-        creds = folder(path) / "oauth_creds.json"
-        again = f"rm {tilde(creds)}, then: {sign_in(path, env)}"
         try:
             status, body = self.fetch(TOKENINFO, token, self.timeout)
         except (OSError, ValueError) as err:
             return Check(self.kind, "fail", label,
                          f"Google did not answer ({getattr(err, 'reason', None) or type(err).__name__})",
                          "check the network and retry", transient=True)
-        if status in (400, 401):
+        if status in (400, 401):  # Gemini CLI signs in afresh when its sign-in no longer works
             return Check(self.kind, "fail", label, "Google does not accept the sign-in's token (signed out or revoked)",
-                         again)
+                         sign_in(path, env))
         email = body.get("email") if isinstance(body, dict) else None
         if status != 200 or not isinstance(email, str):
             return Check(self.kind, "fail", label, f"Google's tokeninfo answered {status}", "check the network and retry",
                          transient=status >= 500 or status == 429)
         if not same(email, account):
             return Check(self.kind, "fail", label, f"the sign-in's token belongs to {printable(email)}, the project's "
-                                                   f"Google account is {account}", again)
+                                                   f"Google account is {account}", sign_in_again(conn, path, env))
         return Check(self.kind, "ok", label, "confirmed by Google")
 
     def _key(self, label: str, key: str) -> Check:
