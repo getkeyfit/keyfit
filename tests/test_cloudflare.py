@@ -1050,7 +1050,7 @@ class AddCloudflareTests(CloudflareCase):
         with contextlib.redirect_stdout(io.StringIO()) as out, mock.patch.object(secrets, "keychain_reachable",
                                                                                  return_value=""):
             main(["doctor"])
-        self.assertIn(f"✔ wrangler  {self.bin / 'wrangler'}", out.getvalue())
+        self.assertIn(f"✔ wrangler   {self.bin / 'wrangler'}", out.getvalue())
         self.assertIn(f"✔ cloudflare acme → Acme   bound at {self.repos['client']} · account {ACME_ID}\n", out.getvalue())
 
 

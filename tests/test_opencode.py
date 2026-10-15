@@ -408,7 +408,7 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("run", "hi")
         self.assertEqual((out.returncode, out.stdout), (1, ""))
         self.assertIn("keyfit: opencode not started, demo needs attention\n"
-                      "  ✘ opencode  work   not signed in (no OpenCode database yet)\n"
+                      "  ✘ opencode   work   not signed in (no OpenCode database yet)\n"
                       f"    → OPENCODE_DB={self.db} opencode auth login anthropic --standalone\n", out.stderr)
         self.assertNotIn("Sign in now?", out.stderr)  # no terminal: nothing is asked
 
@@ -639,8 +639,8 @@ class AddTests(unittest.TestCase):
         database(self.home / ".local" / "share" / "opencode" / "opencode.db", ("anthropic", "Anthropic"))
         self.run_main("add", "opencode")
         _, out, _ = self.run_main("doctor")
-        self.assertIn("  ✔ opencode  default   anthropic signed in · ~/.local/share/opencode/opencode.db\n", out)
-        self.assertIn("  ! opencode  not found on PATH   needed only if you use it\n    → brew install opencode\n", out)
+        self.assertIn("  ✔ opencode   default   anthropic signed in · ~/.local/share/opencode/opencode.db\n", out)
+        self.assertIn("  ! opencode   not found on PATH   needed only if you use it\n    → brew install opencode\n", out)
 
 
 if __name__ == "__main__":

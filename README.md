@@ -67,21 +67,21 @@ It ends with `keyfit status`:
 
 ```
 acme-api
-  ✔ aws       acme-dev → …4321   SSO token valid 6h 41m · refreshes automatically · account confirmed
-  ✔ linear    acme   workspace confirmed
-  ✔ github    octocat   login confirmed
-  ✔ vercel    octocat → acme   login and team confirmed
-  ✔ supabase  Acme   token, organization and linked project abcdefghijklmnopqrst confirmed
+  ✔ aws        acme-dev → …4321   SSO token valid 6h 41m · refreshes automatically · account confirmed
+  ✔ linear     acme   workspace confirmed
+  ✔ github     octocat   login confirmed
+  ✔ vercel     octocat → acme   login and team confirmed
+  ✔ supabase   Acme   token, organization and linked project abcdefghijklmnopqrst confirmed
   ✔ cloudflare acme → Acme   bound at ~/code/acme-api · profile and account confirmed
-  ✔ convex    Acme   login, team and deployment happy-animal-123 (acme-web) confirmed
-  ✔ google    me@acme.com
-  ✔ gcloud    acme → acme-prod   me@acme.com · account and project confirmed
-  ✔ firebase  acme-prod   me@acme.com, bound at ~/code/acme-api · account and project confirmed
-  ✔ claude    Acme   Acme (team) confirmed
-  ✔ codex     ChatGPT pro   subscription login, no API key
-  ✔ opencode  default   anthropic, openai signed in · confirmed by OpenCode
-  ✔ copilot   octocat   login confirmed
-  ✔ gemini    me@acme.com   Google sign-in in ~/.config/keyfit/gemini/acme · confirmed by Google
+  ✔ convex     Acme   login, team and deployment happy-animal-123 (acme-web) confirmed
+  ✔ google     me@acme.com
+  ✔ gcloud     acme → acme-prod   me@acme.com · account and project confirmed
+  ✔ firebase   acme-prod   me@acme.com, bound at ~/code/acme-api · account and project confirmed
+  ✔ claude     Acme   Acme (team) confirmed
+  ✔ codex      ChatGPT pro   subscription login, no API key
+  ✔ opencode   default   anthropic, openai signed in · confirmed by OpenCode
+  ✔ copilot    octocat   login confirmed
+  ✔ gemini     me@acme.com   Google sign-in in ~/.config/keyfit/gemini/acme · confirmed by Google
 ```
 
 When a check fails, the tool does not start:
@@ -89,7 +89,7 @@ When a check fails, the tool does not start:
 ```
 $ claude
 keyfit: claude not started, acme-api needs attention
-  ✘ aws       acme-dev → …4321   SSO session expired
+  ✘ aws        acme-dev → …4321   SSO session expired
     → aws sso login --sso-session acme
   (bypass once: KEYFIT_DISABLE=1 claude …)
 ```

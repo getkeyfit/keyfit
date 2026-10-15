@@ -31,7 +31,7 @@ class Check:
         return Check(self.kind, status, self.label, detail, self.fix or remote.fix)
 
     def lines(self) -> list[str]:
-        head = f"  {_SYMBOL[self.status]} {self.kind:<9} {printable(self.label)}"
+        head = f"  {_SYMBOL[self.status]} {self.kind:<10} {printable(self.label)}"
         if self.detail:
             head += f"   {printable(self.detail)}"
         out = [head]

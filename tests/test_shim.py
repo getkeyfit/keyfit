@@ -142,7 +142,7 @@ class ShimTests(unittest.TestCase):
         executable(self.bin / "claude", FAKE_CLAUDE_SIGNED_OUT)
         code, out, terminal = self.run_in_terminal("claude", "-p", "hi", answer="\n")
         self.assertEqual(code, 0, terminal)
-        self.assertIn("✘ claude    Work   not signed in\n    → claude auth login\n  Sign in now? [Y/n] ", terminal)
+        self.assertIn("✘ claude     Work   not signed in\n    → claude auth login\n  Sign in now? [Y/n] ", terminal)
         self.assertIn("fake sign-in done", out)  # the sign-in ran, with the terminal's stdin
         self.assertIn("keyfit: signed in, starting claude\n", terminal)
         self.assertEqual(json.loads(out.splitlines()[-1])["argv"][-2:], ["-p", "hi"])
@@ -302,7 +302,7 @@ class ShimTests(unittest.TestCase):
         reg.write_text(reg.read_text().replace('claude = "work"', 'claude = "wrok"'))
         out = self.run_tool("claude", "-p", "hi")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("✘ claude    wrok   no account [accounts.claude.wrok]\n    → map it again: keyfit add claude …",
+        self.assertIn("✘ claude     wrok   no account [accounts.claude.wrok]\n    → map it again: keyfit add claude …",
                       out.stderr)
         self.assertNotIn("internal error", out.stderr)
         self.assertEqual(self.run_tool("aws", "s3", "ls").returncode, 0)  # the project's aws has its own account
