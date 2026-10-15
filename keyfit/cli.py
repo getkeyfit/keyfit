@@ -14,6 +14,8 @@ from .adapters import ADAPTERS
 from .adapters import claude as claude_adapter
 from .adapters import cloudflare as cloudflare_adapter
 from .adapters import convex as convex_adapter
+from .adapters import gcloud as gcloud_adapter
+from .adapters import google as google_adapter
 from .adapters import linear as linear_adapter
 from .adapters import opencode as opencode_adapter
 from .adapters import supabase as supabase_adapter
@@ -72,8 +74,8 @@ def _not_active() -> str:
 
     folder = canonical(shim_dir())
     if not (folder / MARKER).is_file():
-        return "Keyfit is not set up yet, so claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler and " \
-               "convex still run without checks.\n" \
+        return "Keyfit is not set up yet, so claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler, " \
+               "convex and gcloud still run without checks.\n" \
                "  Set it up: keyfit setup --rc, then open a new terminal"
     if folder not in [canonical(e) for e in os.environ.get("PATH", "").split(os.pathsep) if e]:
         return f"{tilde(folder)} is not on PATH in this terminal, so tools here still run without checks.\n" \
@@ -326,6 +328,47 @@ def _offer_convex(name: str, base: dict) -> None:
         cmd_add_convex(argparse.Namespace(**base, name=None, token=None, cli=True, copy=False, team=None))
 
 
+def _offer_google(name: str, base: dict) -> None:
+    found = _google_accounts(dict(os.environ))
+    if not found:
+        print("Google: gcloud is not signed in to a Google account here — later: keyfit add google --email "
+              "<the project's work or personal email>")
+        return
+    print("Google accounts gcloud is signed in to (gcloud, and later the firebase CLI and Gemini CLI, are checked "
+          "against the project's one):")
+    email = _choose(f"Google account for {name}", found)
+    if email:
+        cmd_add_google(argparse.Namespace(**base, email=email, name=None, guided=True))
+
+
+def _offer_gcloud(name: str, base: dict) -> None:
+    from .realbin import find_real
+
+    env = dict(os.environ)
+    if find_real("gcloud", env, skip_wrappers=True) is None:
+        print("Google Cloud: gcloud not found on PATH — skipped")
+        return
+    names = gcloud_adapter.configurations(env)
+    if not names:
+        print(f"Google Cloud: gcloud has no configurations yet — later: gcloud config configurations create "
+              f"{_account_name(name, 'gcloud')} --no-activate, then: keyfit add gcloud")
+        return
+    email = google_adapter.email_of(Registry.load(base["registry"]).get(name).connections.get("google"))
+    rows = {n: gcloud_adapter.read(env, n) or {} for n in names}
+    fits = [n for n in names if email is None or google_adapter.same(rows[n].get("account"), email)]
+    if not fits:
+        print(f"Google Cloud: no gcloud configuration uses {email} (gcloud has {', '.join(names)}) — later: "
+              f"gcloud config configurations create {_account_name(name, 'gcloud')} --no-activate, then: keyfit add "
+              f"gcloud")
+        return
+    print("gcloud configurations" + (f" signed in as {email}:" if email else ":"))
+    options = [_configuration_line(n, rows[n]) for n in fits]
+    picked = _choose(f"gcloud configuration for {name}", options)
+    if picked:
+        cmd_add_gcloud(argparse.Namespace(**base, configuration=fits[options.index(picked)], project_id=None, name=None,
+                                          guided=True))
+
+
 def _offer_linear(name: str, base: dict) -> None:
     if not secrets.can_store():
         print("Linear: later, with a key in an environment variable: keyfit add linear --key env:<VARIABLE>")
@@ -340,7 +383,8 @@ GUIDED = (("aws", "AWS", _offer_aws), ("github", "GitHub", _offer_github), ("cla
           ("codex", "Codex", _offer_codex), ("opencode", "OpenCode", _offer_opencode),
           ("copilot", "Copilot CLI", _offer_copilot), ("vercel", "Vercel", _offer_vercel),
           ("supabase", "Supabase", _offer_supabase), ("cloudflare", "Cloudflare", _offer_cloudflare),
-          ("convex", "Convex", _offer_convex), ("linear", "Linear", _offer_linear))
+          ("convex", "Convex", _offer_convex), ("google", "Google", _offer_google),
+          ("gcloud", "Google Cloud", _offer_gcloud), ("linear", "Linear", _offer_linear))
 
 
 def _guided_init(args, name: str, root: Path) -> int:
@@ -403,7 +447,7 @@ def cmd_status(args) -> int:
     checks = []
     if not r.project.connections:
         print("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add aws|github|"
-              "claude|codex|opencode|copilot|vercel|supabase|cloudflare|convex|linear …")
+              "claude|codex|opencode|copilot|vercel|supabase|cloudflare|convex|google|gcloud|linear …")
     else:
         env = environment.build(r.project)
         checks = environment.verify(r.project, env, remote=not args.offline)  # fresh; refreshes the cache
@@ -1233,6 +1277,173 @@ def cmd_add_convex(args) -> int:
     return 0
 
 
+def _google_accounts(env: dict) -> list[str]:
+    """The Google accounts gcloud knows here, people only (no service accounts): its sign-ins, then the accounts of
+    its configurations."""
+    found = list(gcloud_adapter.signed_in(env) or [])
+    for name in gcloud_adapter.configurations(env):
+        account = (gcloud_adapter.read(env, name) or {}).get("account")
+        if account and not any(google_adapter.same(account, a) for a in found):
+            found.append(account)
+    return [a for a in found if google_adapter.EMAIL.fullmatch(a) and not a.lower().endswith(".gserviceaccount.com")]
+
+
+def cmd_add_google(args) -> int:
+    """Record the project's one Google account (the work or the personal email). Keyfit keeps no Google token: every
+    Google tool of the project is checked against this email (gcloud's configuration, later firebase and Gemini CLI)."""
+    reg = Registry.load(args.registry)
+    project = _project_from_args(reg, args)
+    if project is None:
+        return 1
+    if args.name and not secrets.NAME.fullmatch(args.name):
+        print("a name is letters, digits, '.', '_' and '-'", file=sys.stderr)
+        return 1
+    email = args.email
+    if not email:
+        found = _google_accounts(dict(os.environ))
+        if found and sys.stdin.isatty():
+            print("Google accounts gcloud is signed in to:")
+            email = _choose(f"Google account for {project.name}", found)
+        if not email:
+            known = f" (gcloud knows {', '.join(found)})" if found else ""
+            print(f"name the project's Google account: keyfit add google --email <work or personal email>{known}",
+                  file=sys.stderr)
+            return 1
+    if not google_adapter.EMAIL.fullmatch(email):
+        print(f"{printable(email)} is not an email address", file=sys.stderr)
+        return 1
+    email = email.lower()  # as Google and gcloud write it
+    taken = reg.data["accounts"].get("google", {})
+    name = args.name or next((n for n, body in taken.items()  # the account that already has this email
+                              if isinstance(body, dict) and google_adapter.same(body.get("email"), email)), None)
+    if not name:
+        base = name = google_adapter.default_name(email)
+        n = 1
+        while name in taken:
+            n += 1
+            name = f"{base}-{n}"
+    before = taken.get(name) if isinstance(taken.get(name), dict) else None
+    reg.set_account("google", name, {"email": email})
+    reg.set_connection(project.name, "google", name)
+    reg.save()
+    print(f"{project.name}: google account '{name}' → {email}")
+    others = sorted(p for p, body in reg.data["projects"].items() if p != project.name and body.get("google") == name)
+    if before and others and not google_adapter.same(before.get("email"), email):
+        print(f"  account '{name}' was {before.get('email')}; it changed for {', '.join(others)} too")
+    conn = reg.get(project.name).connections.get("gcloud")
+    if isinstance(conn, dict) and not getattr(args, "guided", False):  # the tool that checks against it right away
+        check = ADAPTERS["gcloud"].local(conn, environment.build(reg.get(project.name), kinds=("gcloud",)))
+        if check.failed:
+            print(f"  next: {check.detail}\n  → {check.fix}")
+    return 0
+
+
+def _configuration_line(name: str, settings: dict) -> str:
+    return f"{name}  ({settings.get('account') or 'no account'} → {settings.get('project') or 'no project'})"
+
+
+def _gcloud_configuration(project: str, names: list[str], email: str | None, env: dict) -> tuple[str | None, str]:
+    """The gcloud configuration a project uses, when not given: the only one signed in as the project's Google
+    account, else the only one, else one picked at the terminal."""
+    rows = {n: gcloud_adapter.read(env, n) or {} for n in names}
+    fits = [n for n in names if email and google_adapter.same(rows[n].get("account"), email)]
+    if len(fits) == 1:
+        return fits[0], ""
+    if len(names) == 1:
+        return names[0], ""
+    if sys.stdin.isatty():
+        print("gcloud configurations on this Mac:")
+        options = [_configuration_line(n, rows[n]) for n in fits or names]
+        picked = _choose(f"gcloud configuration for {project}", options)
+        if picked:
+            return (fits or names)[options.index(picked)], ""
+    return None, f"pick a gcloud configuration with --configuration NAME (this Mac has {', '.join(names)})"
+
+
+def cmd_add_gcloud(args) -> int:
+    """Record which gcloud configuration and Google Cloud project a project uses. Keyfit keeps no token: gcloud keeps
+    the sign-in, the project's Google account says whose it must be, and Keyfit checks and enforces both."""
+    from .realbin import find_real
+
+    reg = Registry.load(args.registry)
+    project = _project_from_args(reg, args)
+    if project is None:
+        return 1
+    if args.name and not secrets.NAME.fullmatch(args.name):
+        print("a name is letters, digits, '.', '_' and '-'", file=sys.stderr)
+        return 1
+    env = dict(os.environ)
+    names = gcloud_adapter.configurations(env)
+    folder = tilde(gcloud_adapter.folder(env))
+    suggested = args.configuration or _account_name(project.name, "gcloud")
+    if not names:
+        print(f"gcloud is not installed.\n  → {INSTALL['gcloud']}" if find_real("gcloud", env, skip_wrappers=True) is None
+              else f"gcloud has no configurations in {folder} yet.\n  → gcloud config configurations create "
+                   f"{suggested} --no-activate, then: keyfit add gcloud --configuration {suggested}", file=sys.stderr)
+        return 1
+    email = google_adapter.email_of(project.connections.get("google"))
+    configuration, reason = (args.configuration, "") if args.configuration else \
+        _gcloud_configuration(project.name, names, email, env)
+    if configuration is None:
+        print(reason, file=sys.stderr)
+        return 1
+    if configuration not in names:
+        print(f"gcloud has no configuration {printable(configuration)} in {folder} (it has {', '.join(names)})\n"
+              f"  → create it: gcloud config configurations create {printable(configuration)} --no-activate",
+              file=sys.stderr)
+        return 1
+    settings = gcloud_adapter.read(env, configuration)
+    if settings.get("unreadable"):
+        print(f"{tilde(gcloud_adapter.config_file(env, configuration))} does not parse — see: gcloud config "
+              f"configurations describe {configuration}", file=sys.stderr)
+        return 1
+    cloud = args.project_id or settings["project"]
+    if not cloud:
+        print(f"configuration {configuration} has no project: name it with --project-id ID", file=sys.stderr)
+        return 1
+    if not gcloud_adapter.PROJECT.fullmatch(cloud):
+        print(f"{printable(cloud)} is not a Google Cloud project ID (6 to 30 lowercase letters, digits and hyphens)",
+              file=sys.stderr)
+        return 1
+    account = settings["account"]
+    if email is None and account and account in _google_accounts(env):  # said once, here: the configuration's
+        cmd_add_google(argparse.Namespace(registry=args.registry, project=project.name, email=account, name=None,
+                                          guided=True))
+        reg = Registry.load(args.registry)
+    record = {"configuration": configuration, "project": cloud}
+    if env.get(gcloud_adapter.FOLDER):  # the shims scrub the variable: the project keeps the folder its configuration is in
+        record["config_dir"] = tilde(env[gcloud_adapter.FOLDER])
+    taken = reg.data["accounts"].get("gcloud", {})
+    name = args.name
+    if not name:  # the configuration's name; never another configuration's or project's record
+        base = name = configuration
+        n = 1
+        while isinstance(taken.get(name), dict) and taken[name] != record:
+            n += 1
+            name = f"{base}-{n}"
+    before = taken.get(name) if isinstance(taken.get(name), dict) else None
+    reg.set_account("gcloud", name, record)
+    reg.set_connection(project.name, "gcloud", name)
+    reg.save()
+    print(f"{project.name}: gcloud account '{name}' → configuration {configuration}, project {cloud}")
+    others = sorted(p for p, body in reg.data["projects"].items() if p != project.name and body.get("gcloud") == name)
+    if before and others and before != record:
+        print(f"  account '{name}' was configuration {before.get('configuration')}, project {before.get('project')}; it "
+              f"changed for {', '.join(others)} too")
+    current = reg.get(project.name)
+    check_env = environment.build(current, env, kinds=("gcloud",))
+    check = ADAPTERS["gcloud"].local(current.connections["gcloud"], check_env)
+    if check.failed:
+        print(f"  next: {check.detail}\n  → {check.fix}")
+        return 0
+    if getattr(args, "guided", False):
+        return 0  # `keyfit init` checks every connection once at the end
+    checks = environment.verify(current, check_env, kinds=("gcloud",))
+    for line in (line for c in checks for line in c.lines()):
+        print(line)
+    return 1 if any(c.failed for c in checks) else 0
+
+
 def cmd_run(args) -> int:
     """Run a command with the project's environment (its accounts, checked first)."""
     reg = Registry.load(args.registry)
@@ -1270,8 +1481,8 @@ NOT_MACOS = "Keyfit supports macOS for now (it stores keys in the Keychain); Lin
 # is Superset wrapper → Keyfit shim → real tool (Superset finds "the next claude"). Both move to the very front:
 # a login profile that prepends another folder after Superset set PATH (e.g. `brew shellenv` in ~/.zprofile)
 # must not put real tools ahead of the shims.
-SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/copilot/aws/gh/vercel/supabase/wrangler/convex shims on PATH
-# (written by `keyfit setup`).
+SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/copilot/aws/gh/vercel/supabase/wrangler/convex/gcloud
+# shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 () {
   local kf="@SHIMS@" ss="$HOME/.superset/bin"
@@ -1281,8 +1492,8 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/copilot/aws/gh/vercel/sup
 
 # The same rule in POSIX sh, for bash (macOS ships 3.2): no arrays or `local`, so _kf_ variables unset at the
 # end; PATH is walked with parameter expansion (never word-split or globbed). Like zsh, it drops empty entries.
-SHELL_SH = """# Keyfit: put the claude/codex/opencode/copilot/aws/gh/vercel/supabase/wrangler/convex shims on PATH
-# (written by `keyfit setup`).
+SHELL_SH = """# Keyfit: put the claude/codex/opencode/copilot/aws/gh/vercel/supabase/wrangler/convex/gcloud
+# shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 _kf="@SHIMS@"; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
 while [ -n "$_kf_rest" ]; do
@@ -1514,7 +1725,7 @@ def _remove_setup(args) -> int:
         except OSError:
             pass
     print("Open a new terminal (or run: hash -r): claude, codex, opencode, copilot, aws, gh, vercel, supabase, "
-          "wrangler and convex run directly again.")
+          "wrangler, convex and gcloud run directly again.")
     return 0
 
 
@@ -1626,6 +1837,14 @@ def cmd_doctor(args) -> int:
                 if not check.failed:
                     check = Check("cloudflare", "ok", check.label, f"{check.detail} · account {conn['account_id']}")
                 checks.append(check)
+            conn = r.project.connections.get("gcloud")
+            if isinstance(conn, dict):  # which configuration, account and project gcloud gets, from gcloud's files only
+                gcloud_env = environment.build(r.project, env, kinds=("gcloud",))
+                check = ADAPTERS["gcloud"].local(conn, gcloud_env)
+                if not check.failed:
+                    check = Check("gcloud", "ok", check.label, f"{check.detail} · configuration {conn['configuration']} "
+                                  f"in {tilde(gcloud_adapter.folder(gcloud_env))}")
+                checks.append(check)
             conn = r.project.connections.get("opencode")
             if isinstance(conn, dict):  # which database this project's OpenCode sessions use, from the file only
                 check = ADAPTERS["opencode"].local(conn, environment.build(r.project, env, kinds=("opencode",)))
@@ -1658,7 +1877,7 @@ def cmd_doctor(args) -> int:
 
 START = """start here:
   keyfit setup --rc     put Keyfit in front of claude, codex, opencode, copilot, aws, gh, vercel, supabase,
-                        wrangler and convex, then open a new terminal
+                        wrangler, convex and gcloud, then open a new terminal
   keyfit init           inside a project's repository: register it and pick its accounts
   claude                starts with that project's accounts, checked
 something off? keyfit doctor
@@ -1676,7 +1895,7 @@ def build_parser() -> argparse.ArgumentParser:
         return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
 
     p = command(sub, "setup", "write the shims for claude, codex, opencode, copilot, aws, gh, vercel, supabase, "
-                              "wrangler and convex; with --rc also put them on PATH")
+                              "wrangler, convex and gcloud; with --rc also put them on PATH")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
     p.add_argument("--rc", nargs="?", const="", metavar="FILE",
@@ -1694,8 +1913,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_setup)
 
     p = command(sub, "init", "register the current repository as a project, then offer the AWS, GitHub, Claude, "
-                             "Codex, OpenCode, Copilot CLI, Vercel, Supabase, Cloudflare, Convex and Linear accounts "
-                             "found on this Mac (imports `use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
+                             "Codex, OpenCode, Copilot CLI, Vercel, Supabase, Cloudflare, Convex, Google, Google Cloud "
+                             "and Linear accounts found on this Mac (imports `use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
     p.add_argument("-y", "--yes", action="store_true",
@@ -1797,6 +2016,20 @@ def build_parser() -> argparse.ArgumentParser:
                                   "login's only one)")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_convex)
+    p = command(kinds, "google", "the project's Google account (work or personal email), which its Google tools are "
+                                 "checked against")
+    p.add_argument("--email", help="the Google account's email (default: pick one of gcloud's sign-ins)")
+    p.add_argument("--name", help="short account name, reusable across projects (default: personal for a Gmail "
+                                  "address, else the domain, e.g. acme)")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_google)
+    p = command(kinds, "gcloud", "gcloud configuration and Google Cloud project for this project")
+    p.add_argument("--configuration", help="a gcloud configuration (default: the one signed in as the project's Google "
+                                           "account, else the only one, else pick one)")
+    p.add_argument("--project-id", help="the Google Cloud project it works on (default: the configuration's project)")
+    p.add_argument("--name", help="short account name, reusable across projects (default: the configuration's name)")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_gcloud)
     p = command(kinds, "linear", "Linear workspace and where its API key lives")
     p.add_argument("--key", help="env:VAR, keychain:service/account, or a bare variable name "
                                  "(default: paste the key; it is verified, then stored in the Keychain)")
