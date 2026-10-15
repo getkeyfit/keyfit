@@ -57,8 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OPENCODE_API_KEY` (Claude and Codex sessions keep them), and other projects' MCP servers are
   switched off in `OPENCODE_CONFIG_CONTENT` for the folder OpenCode opens (your own content is kept). `--server`, `acp --login` and `opencode DIR` with a
   folder of another project are refused. `Sign in now?` runs `opencode auth login PROVIDER --standalone`;
-  `keyfit init` offers OpenCode's sign-ins; `doctor` shows the project's database; `setup` writes
-  nine shims. Verified with OpenCode 2.0.25.
+  `keyfit init` offers OpenCode's sign-ins; `doctor` shows the project's database. Verified with
+  OpenCode 2.0.25.
 - **Convex, the eighth tool.** `convex` and `npx convex` use the project's Convex account. The convex
   CLI keeps one login per Mac (`~/.convex/config.json`) and has no account switch, so Keyfit hands each
   session the project's token in `CONVEX_OVERRIDE_ACCESS_TOKEN`, which the CLI takes before its own
@@ -73,8 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   another team's deployment named with `--deployment`, `--deployment-name` or `--env-file`;
   `convex login` and `logout` are refused where Keyfit keeps the project's token. When the account is
   the CLI's own login and it expired, `Sign in now?` runs `npx convex login --force`. A project without
-  a Convex account runs `convex` as before. `keyfit init` offers the CLI's login; `setup` writes eight
-  shims and `doctor` checks eight tools (a convex used only through npx is fine).
+  a Convex account runs `convex` as before. `keyfit init` offers the CLI's login; `doctor` accepts a
+  convex used only through npx.
 - **Cloudflare, the seventh tool.** `wrangler` uses the project's Cloudflare account. wrangler keeps
   named sign-ins bound to folders since 4.106 (`wrangler auth create NAME`, `wrangler auth activate
   NAME DIR`), so Keyfit keeps no Cloudflare token: an account is a wrangler profile plus the expected
@@ -90,8 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the default sign-in) and `wrangler auth activate`/`deactivate`/`create`/`delete` that would move a
   registered folder off its project's profile are refused. A project without a Cloudflare account runs
   `wrangler` as before. `Sign in now?` runs `wrangler auth create NAME`; `keyfit init` offers the
-  profile bound to the folder; `doctor` shows the profile, its binding and the account; `setup` writes
-  seven shims.
+  profile bound to the folder; `doctor` shows the profile, its binding and the account.
 - **Supabase, the sixth tool.** `supabase` uses the project's Supabase account: a personal access token
   Keyfit keeps in the Keychain (`keyfit add supabase` checks it with Supabase and records its
   organization; `--cli` copies the token of the supabase CLI's current login; `--token env:VAR` names
@@ -104,7 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   project are refused, and so are `--org-id` of another organization and another `--profile`.
   `supabase login` and `logout` are refused there too, since they change only the CLI's own login.
   A project without a Supabase account runs `supabase` as before (it is often used only locally).
-  `keyfit init` offers the CLI's login; `setup` writes six shims and `doctor` checks six tools.
+  `keyfit init` offers the CLI's login.
 - **`Sign in now? [Y/n]`.** When you start a tool yourself in a terminal and every failed check is fixed
   by a plain sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`,
   `wrangler auth create NAME`, `npx convex login --force`),
