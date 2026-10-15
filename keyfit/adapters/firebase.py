@@ -169,22 +169,37 @@ def fresh(tokens) -> bool:
     return isinstance(expires, (int, float)) and expires > (time.time() + FRESH) * 1000
 
 
+def _short(arg: str) -> tuple[list[tuple[str, str | None]], bool]:
+    """A group of short options as commander reads it (-jP → -j -P; -Pfoo → -P with the value foo): the OPTIONS
+    among them, and whether the last one takes the next argument as its value."""
+    rest = arg[1:]
+    while rest:
+        letter, rest = rest[0], rest[1:]
+        if f"-{letter}" in OPTIONS:  # takes a value: the rest of the group, else the next argument
+            return [(OPTIONS[f"-{letter}"], rest or None)], not rest
+    return [], False
+
+
 def options(args: list[str]) -> list[tuple[str, str | None]]:
     """(long name, value) of each --project/-P, --account, --token and --config/-c, read like the CLI's parser
-    (commander): `--name value`, `--name=value`, `-P value`, `-Pvalue`, anywhere before `--`."""
+    (commander): `--name value`, `--name=value`, `-P value`, `-Pvalue`, `-jP value`, anywhere before `--`."""
     found, i = [], 0
     while i < len(args):
         arg = args[i]
         if arg == "--":
             break
-        name, eq, value = arg.partition("=")
-        if name in OPTIONS:
-            if not eq:
-                value = args[i + 1] if i + 1 < len(args) else None
-                i += 1
-            found.append((OPTIONS[name], value))
-        elif len(arg) > 2 and arg[:2] in ("-P", "-c") and arg[1] != "-":
-            found.append((OPTIONS[arg[:2]], arg[2:]))
+        nxt = args[i + 1] if i + 1 < len(args) else None
+        if arg.startswith("--"):
+            name, eq, value = arg.partition("=")
+            if name in OPTIONS:
+                if not eq:
+                    value, i = nxt, i + 1
+                found.append((OPTIONS[name], value))
+        elif arg.startswith("-") and len(arg) > 1:
+            short, takes = _short(arg)
+            if takes:
+                short, i = [(short[0][0], nxt)], i + 1
+            found += short
         i += 1
     return found
 
@@ -199,11 +214,13 @@ def words(args: list[str]) -> list[str]:
         if arg == "--":
             break
         if arg.startswith("-") and len(arg) > 1:
-            if arg in VALUED:
+            short, takes = _short(arg) if not arg.startswith("--") else ([], False)
+            if arg in VALUED or takes:
                 i += 2
                 continue
-            if "=" not in arg and arg not in FLAGS and arg[:2] not in ("-P", "-c") and i + 1 < len(args) \
-                    and not args[i + 1].startswith("-"):
+            known = short or "=" in arg or arg in FLAGS or \
+                (not arg.startswith("--") and all(f"-{c}" in FLAGS for c in arg[1:]))
+            if not known and i + 1 < len(args) and not args[i + 1].startswith("-"):
                 break
             i += 1
             continue
