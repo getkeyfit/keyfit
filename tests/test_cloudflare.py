@@ -390,6 +390,28 @@ class AdapterTests(CloudflareCase):
         self.assertEqual(cloudflare.words(["auth", "create", "--callback-port", "8976", "--scopes", "d1:write", "x"]),
                          ["auth", "create", "x"])
 
+    def test_short_options_are_read_like_yargs(self):
+        """wrangler's parser (yargs-parser) reads -c in a group of short options and with the value attached."""
+        for args, config in ((["-c/abs/w.toml", "deploy"], "/abs/w.toml"),  # attached: starts with a non-word character
+                             (["-c~/w.toml", "deploy"], "~/w.toml"),
+                             (["-ec./w.toml", "deploy"], "./w.toml"),  # in a group, attached relative path
+                             (["-ec", "w.toml", "deploy"], "w.toml"),  # a group ending in c
+                             (["-vc", "w.toml", "deploy"], "w.toml"),
+                             (["-c=w.toml", "deploy"], "w.toml"), (["-ec=w.toml", "deploy"], "w.toml"),
+                             (["--c", "w.toml", "deploy"], "w.toml"), (["--c=w.toml", "deploy"], "w.toml"),
+                             (["-c123", "deploy"], "123"), (["-c-", "deploy"], "-")):
+            self.assertEqual(cloudflare.options(args), [("--config", config)], args)
+            self.assertEqual(cloudflare.words(args), ["deploy"], args)
+        self.assertEqual(cloudflare.options(["-cc", "w.toml", "deploy"]), [("--config", None), ("--config", "w.toml")])
+        # `-cw.toml` is the flags c, w, ., t, o, m and l; `-c./w.toml` a dotted key, and wrangler gets an object for
+        # its config (it stops), with the next argument as the object's value
+        self.assertEqual(cloudflare.options(["-cw.toml", "deploy"]), [("--config", None)])
+        self.assertEqual((cloudflare.options(["-c./w.toml", "deploy"]), cloudflare.words(["-c./w.toml", "deploy"])),
+                         ([], []))
+        self.assertEqual(cloudflare.words(["--env-file", "a.env", "b.env", "--profile", "p", "auth", "list"]),
+                         ["auth", "list"])  # --env-file takes every argument up to the next option
+        self.assertEqual(cloudflare.words(["-1", "--no-x-provision", "login", "--json", "true"]), ["-1", "login"])
+
     def test_whoami_output_of_a_real_process(self):
         script = self.tmp / "wrangler-script"
         executable(script, f"#!{sys.executable}\nimport json, os, sys\n"
@@ -483,6 +505,42 @@ class ShimTests(CloudflareCase):
         (sub / "wrangler.toml").write_text(f'account_id = "{ACME_ID}"\n')
         code, argv, _ = self.run_shim("deploy", "--config", "app/wrangler.toml", "--cwd", ".")
         self.assertIsNone(code, self.stderr)
+
+    def test_config_in_every_short_option_spelling_is_refused(self):
+        """yargs' attached and grouped spellings of -c (KEY-59), alone and after --cwd: refused like `-c FILE`."""
+        other = self.repos["client"] / "other.toml"
+        other.write_text(f'account_id = "{GLOBEX_ID}"\n')
+        app = self.repos["client"] / "app"
+        app.mkdir()
+        (app / "wrangler.toml").write_text(f'account_id = "{ACME_ID}"\n')
+        (self.repos["mine"] / "wrangler.toml").write_text(f'account_id = "{GLOBEX_ID}"\n')
+        spellings = (("attached absolute path", [f"-c{other}"], f"--config {other}"),
+                     ("attached relative path", ["-ec./other.toml"], "--config ./other.toml"),
+                     ("group ending in c", ["-ec", "other.toml"], "--config other.toml"),
+                     ("-c=", ["-c=other.toml"], "--config other.toml"),
+                     ("--c", ["--c", "other.toml"], "--config other.toml"))
+        for what, spelling, shown in spellings:
+            code, argv, _ = self.run_shim("deploy", *spelling)
+            self.assertEqual((code, argv), (1, None), what)
+            self.assertIn(f"refusing {shown}: {other} sets account_id {GLOBEX_ID}", self.stderr, what)
+        moved = (("attached absolute path", [f"-c{self.repos['mine']}/wrangler.toml"],
+                  f"--config {self.repos['mine']}/wrangler.toml", "uses wrangler profile globex"),
+                 ("attached relative path", ["-ec../other.toml"], "--config ../other.toml",
+                  f"{other} sets account_id {GLOBEX_ID}"),
+                 ("group ending in c", ["-vc", "../../mine/wrangler.toml"], "--config ../../mine/wrangler.toml",
+                  "uses wrangler profile globex"),
+                 ("-c=", ["-c=../other.toml"], "--config ../other.toml", f"{other} sets account_id {GLOBEX_ID}"))
+        for what, spelling, shown, why in moved:
+            code, argv, _ = self.run_shim("--cwd", "app", "deploy", *spelling)
+            self.assertEqual((code, argv), (1, None), what)
+            self.assertIn(f"refusing --cwd app {shown}: ", self.stderr, what)
+            self.assertIn(why, self.stderr, what)
+        for spelling in (["-ec", "app/wrangler.toml"], ["-c=app/wrangler.toml"], [f"-c{app}/wrangler.toml"]):
+            code, argv, _ = self.run_shim("deploy", *spelling)  # the project's own config: runs
+            self.assertEqual(argv, ["wrangler", "deploy", *spelling], self.stderr)
+        code, argv, _ = self.run_shim("dev", "-c", "app/wrangler.toml", "-c", "other.toml")  # dev takes several
+        self.assertEqual(code, 1)
+        self.assertIn(f"refusing --config other.toml: {other} sets account_id", self.stderr)
 
     def test_login_and_logout_are_refused_in_a_project_with_a_named_profile(self):
         for args in (["login"], ["--x-provision", "login"], ["logout"]):

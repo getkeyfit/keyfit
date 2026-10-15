@@ -500,9 +500,9 @@ def wrangler_args(project: Project, args: list[str], env: dict, cwd: Path) -> li
     refuse = (f"keyfit: this folder belongs to {project.name} (wrangler profile {conn['profile']}, Cloudflare account "
               f"{printable(title)}); refusing")
     bypass = "\n  Bypass once: KEYFIT_DISABLE=1 wrangler …"
-    given = cloudflare.options(args)
-    asked = moved = config = None
-    for name, value in given:
+    asked = moved = None
+    configs = []  # `wrangler dev` takes several
+    for name, value in cloudflare.options(args):
         if value is None:
             continue
         if name == "--profile":
@@ -512,15 +512,16 @@ def wrangler_args(project: Project, args: list[str], env: dict, cwd: Path) -> li
         elif name == "--cwd":
             moved = value
         else:
-            config = value
-    if moved is None and config is None:
+            configs.append(value)
+    if moved is None and not configs:
         return args
     base = os.path.join(cwd, moved) if moved else str(cwd)  # wrangler moves to --cwd first, then reads --config
-    path = Path(os.path.abspath(os.path.join(base, config))) if config else None
-    problem = cloudflare.mismatch(conn, path.parent if path else base, env, asked=asked, config=path)
-    if problem:
-        shown = " ".join(f"{name} {value}" for name, value in given if name != "--profile" and value is not None)
-        raise Refused(f"{refuse} {printable(shown)}: {problem[0]}.\n  → {problem[1]}{bypass}")
+    for config in configs or [None]:
+        path = Path(os.path.abspath(os.path.join(base, config))) if config else None
+        problem = cloudflare.mismatch(conn, path.parent if path else base, env, asked=asked, config=path)
+        if problem:
+            shown = " ".join(part for part in (moved and f"--cwd {moved}", config and f"--config {config}") if part)
+            raise Refused(f"{refuse} {printable(shown)}: {problem[0]}.\n  → {problem[1]}{bypass}")
     return args
 
 
