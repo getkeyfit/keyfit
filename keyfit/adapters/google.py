@@ -4,9 +4,10 @@ Account:  [accounts.google.work]  email = "me@acme.com"
 Project:  google = "work"
 
 A setting more than a login: Keyfit keeps no Google token. Every Google tool checks its own sign-in against this
-email — gcloud (its configuration's account) and the firebase CLI (the sign-in it uses in the folder) now, Gemini
-CLI later — so a work folder never runs on the personal Google login or the other way round. The registry hands the email to those connections (as
-`account`, see registry.GOOGLE_TOOLS); this adapter only says which account it is.
+email — gcloud (its configuration's account), the firebase CLI (the sign-in it uses in the folder) and Gemini CLI
+(its Google sign-in) — so a work folder never runs on the personal Google login or the other way round. The registry
+hands the email to those connections (as `account`, see registry.GOOGLE_TOOLS); this adapter only says which account
+it is.
 
 inject  — nothing: each tool's adapter sets its own variables.
 local   — the email is an email address.

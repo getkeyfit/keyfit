@@ -12,7 +12,8 @@ Claude gets `--settings` with `deniedMcpServers` (user scope) and
 OpenCode gets the servers switched off in OPENCODE_CONFIG_CONTENT (opencode.json in the
 folder and the folders above it counts like .mcp.json); Copilot CLI gets
 `--disable-mcp-server=NAME` (.mcp.json and .github/mcp.json up to the repository's top count
-like .mcp.json).
+like .mcp.json); Gemini CLI gets `--allowed-mcp-server-names` with every server it may keep
+(the folder's .gemini/settings.json counts like .mcp.json).
 Every other server stays visible everywhere.
 """
 
@@ -320,3 +321,104 @@ def copilot_hidden(project: Project, env: dict, cwd: Path, owners: dict | None =
     """The servers a Copilot CLI session of *project* must not see, by name."""
     return sorted({name for name, spec, verified in copilot_servers(env, cwd, config_dir, additional)
                    if hidden(name, spec, project, owners, key_var=_copilot_var(spec), verified=verified)})
+
+
+# Gemini CLI (0.64.0): mcpServers in its settings files (the system's and its defaults, yours in its home, and the
+# .gemini/settings.json of the folder it starts in, not the folders above it) and in each extension's
+# gemini-extension.json. Its only per-session switch is an allowlist, --allowed-mcp-server-names, which replaces the
+# settings' own mcp.allowed and mcp.excluded for that session: Keyfit passes every server the session may keep, minus
+# what those settings leave out. An empty allowlist allows everything, so when nothing may stay the list names a server
+# that does not exist. The names go comma-separated, so a server with a comma in its name stays hidden too.
+GEMINI_NONE = "keyfit-none"
+GEMINI_VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+GEMINI_ALLOWED = ("--allowed-mcp-server-names", "--allowedMcpServerNames")
+
+
+def gemini_home(env: dict) -> Path:
+    return Path(env["GEMINI_CLI_HOME"]).expanduser() if env.get("GEMINI_CLI_HOME") else Path(env.get("HOME") or Path.home())
+
+
+def _gemini_table(data) -> dict:
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    if not isinstance(servers, dict):
+        return {}
+    out = {}
+    for name, spec in servers.items():
+        if isinstance(spec, dict):  # a streamable HTTP server names its address httpUrl
+            out[name] = {**spec, "url": spec.get("httpUrl") or spec.get("url")}
+    return out
+
+
+def gemini_servers(env: dict, cwd: Path) -> list[tuple[str, dict, bool]]:
+    """(name, spec, verified) of the servers Gemini CLI loads in *cwd*: the system's, yours and your extensions'
+    (verified), and the folder's .gemini/settings.json (unverified, like .mcp.json)."""
+    from .adapters.gemini import _jsonc, settings_files
+
+    home = gemini_home(env)
+    out = []
+    for scope, path in settings_files(home, env, cwd):
+        out += [(name, spec, scope != "workspace") for name, spec in _gemini_table(_jsonc(path)).items()]
+    try:
+        extensions = sorted((home / ".gemini" / "extensions").iterdir())
+    except OSError:
+        extensions = []
+    for extension in extensions:
+        out += [(name, spec, True) for name, spec in _gemini_table(_jsonc(extension / "gemini-extension.json")).items()]
+    return out
+
+
+def _gemini_var(spec: dict) -> str | None:
+    for table in (spec.get("headers"), spec.get("env")):
+        for value in (table or {}).values() if isinstance(table, dict) else ():
+            m = GEMINI_VAR.search(str(value))
+            if m:
+                return m.group(1) or m.group(2)
+    return None
+
+
+def _gemini_own_lists(env: dict, cwd: Path) -> tuple[set | None, set]:
+    """What the settings themselves allow (None: no allowlist; several lists: the names on all of them, in any case)
+    and exclude, which --allowed-mcp-server-names would otherwise drop."""
+    from .adapters.gemini import _jsonc, settings_files
+
+    allowed, excluded = None, set()
+    for _, path in settings_files(gemini_home(env), env, cwd):
+        data = _jsonc(path)
+        table = data.get("mcp") if isinstance(data, dict) else None
+        if not isinstance(table, dict):
+            continue
+        if isinstance(table.get("allowed"), list):
+            names = {str(n).lower().strip() for n in table["allowed"]}
+            allowed = names if allowed is None else allowed & names
+        if isinstance(table.get("excluded"), list):
+            excluded |= {str(n) for n in table["excluded"]}
+    return allowed, excluded
+
+
+def gemini_hidden(project: Project, env: dict, cwd: Path, owners: dict | None = None) -> tuple[list[str], list[str]]:
+    """(hidden, kept): the servers a Gemini CLI session of *project* must not see, and the ones it keeps (what
+    --allowed-mcp-server-names should name). Both empty when nothing is hidden."""
+    servers = gemini_servers(env, cwd)
+    hide = {name for name, spec, verified in servers
+            if hidden(name, spec, project, owners, key_var=_gemini_var(spec), verified=verified) or "," in name}
+    if not hide:
+        return [], []
+    allowed, excluded = _gemini_own_lists(env, cwd)
+    names = list(dict.fromkeys(name for name, _, _ in servers))
+    kept = [name for name in names if name not in hide and name not in excluded
+            and (allowed is None or name.lower().strip() in allowed)]
+    return sorted(hide), kept
+
+
+def gemini_allowed(args: list[str]) -> list[str]:
+    """The names of --allowed-mcp-server-names on the command line (`--name a,b`, `--name=a`, repeated); words after
+    `--` are a prompt."""
+    out = []
+    for i, arg in enumerate(args):
+        if arg == "--":
+            break
+        name, eq, value = arg.partition("=")
+        if name in GEMINI_ALLOWED:
+            value = value if eq else (args[i + 1] if i + 1 < len(args) else "")
+            out += [v.strip() for v in value.split(",") if v.strip()]
+    return out
