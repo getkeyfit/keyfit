@@ -4,7 +4,7 @@ Local checks run on every launch. A remote check is reused while it is fresh
 (30 minutes) and while the connection and its fingerprint (a new sign-in, a
 different key) are unchanged. When the network does not answer, a success from
 the last 24 hours is shown as a warning instead of blocking. Failures are never
-cached. The file holds statuses and labels only — no secrets.
+cached. The file holds statuses, labels and variable names only — no secrets.
 """
 
 from __future__ import annotations
@@ -45,12 +45,13 @@ def get(k: str, now: float | None = None, max_age: float = TTL) -> dict | None:
     return None
 
 
-def put(k: str, status: str, detail: str) -> None:
-    """Best effort: a lost entry only means one more remote check later; never break a launch."""
+def put(k: str, status: str, detail: str, scrub=()) -> None:
+    """Best effort: a lost entry only means one more remote check later; never break a launch. *scrub*: the names of
+    the shell variables the check found that the tool must start without."""
     with _LOCK:
         now = time.time()
         data = {key_: v for key_, v in _load().items() if now - v.get("at", 0) < STALE}
-        data[k] = {"at": now, "status": status, "detail": detail}
+        data[k] = {"at": now, "status": status, "detail": detail, **({"scrub": list(scrub)} if scrub else {})}
         path = _path()
         try:
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

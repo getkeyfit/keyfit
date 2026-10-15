@@ -17,6 +17,7 @@ class Check:
     fix: str = ""
     pending: bool = False  # the local verdict depends on a remote check
     transient: bool = False  # failed because the network did not answer — retry, or trust a recent success
+    scrub: tuple = ()  # variables from the shell the tool must start without (names only, kept with a cached check)
 
     @property
     def failed(self) -> bool:
@@ -28,7 +29,7 @@ class Check:
             return remote
         status = max(self.status, remote.status, key=_RANK.__getitem__)
         detail = " · ".join(d for d in (self.detail, remote.detail) if d)
-        return Check(self.kind, status, self.label, detail, self.fix or remote.fix)
+        return Check(self.kind, status, self.label, detail, self.fix or remote.fix, scrub=remote.scrub)
 
     def lines(self) -> list[str]:
         head = f"  {_SYMBOL[self.status]} {self.kind:<10} {printable(self.label)}"
