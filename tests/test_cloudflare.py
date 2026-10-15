@@ -541,6 +541,13 @@ class ShimTests(CloudflareCase):
         self.assertEqual((argv, env["CLOUDFLARE_API_TOKEN"]), (["wrangler", "dev"], "yours"))
         self.assertEqual(self.stderr, "")
 
+    def test_dry_run_prints_a_project_without_cloudflare_instead_of_running_it(self):
+        code, argv, _ = self.run_shim("deploy", cwd=self.repos["plain"], KEYFIT_DRY_RUN="1")
+        self.assertEqual((code, argv), (0, None), self.stderr)  # never started
+        self.assertIn("keyfit: project plain has no cloudflare account mapped: wrangler runs without checks, as before "
+                      "Keyfit\n  would run: ", self.stderr)
+        self.assertIn("wrangler deploy\n  environment changes (names only): ", self.stderr)
+
     def test_unregistered_folder_passes_through(self):
         code, argv, env = self.run_shim("--profile", "globex", "deploy", cwd=self.outside, CLOUDFLARE_API_TOKEN="yours")
         self.assertEqual(argv, ["wrangler", "--profile", "globex", "deploy"])
@@ -1043,7 +1050,7 @@ class AddCloudflareTests(CloudflareCase):
         with contextlib.redirect_stdout(io.StringIO()) as out, mock.patch.object(secrets, "keychain_reachable",
                                                                                  return_value=""):
             main(["doctor"])
-        self.assertIn(f"✔ wrangler  {self.bin / 'wrangler'}", out.getvalue())
+        self.assertIn(f"✔ wrangler   {self.bin / 'wrangler'}", out.getvalue())
         self.assertIn(f"✔ cloudflare acme → Acme   bound at {self.repos['client']} · account {ACME_ID}\n", out.getvalue())
 
 

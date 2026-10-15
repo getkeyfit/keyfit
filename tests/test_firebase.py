@@ -509,12 +509,19 @@ class ShimTests(FirebaseCase):
         self.assertEqual(env["FIREBASE_TOKEN"], "1//mine")
         self.assertEqual((self.firebase.calls, self.fetched), ([], []))
 
+    def test_dry_run_prints_a_project_without_firebase_instead_of_running_it(self):
+        code, argv, _ = self.run_shim("deploy", cwd=self.repos["plain"], KEYFIT_DRY_RUN="1")
+        self.assertEqual((code, argv), (0, None), self.stderr)  # never started
+        self.assertIn("keyfit: project plain has no firebase account mapped: firebase runs without checks, as before "
+                      "Keyfit\n  would run: ", self.stderr)
+        self.assertIn("firebase deploy\n  environment changes (names only): ", self.stderr)
+
     def test_mismatch_blocks_with_the_fix(self):
         self.bind(self.repos["client"], GLOBEX)
         code, argv, _ = self.run_shim("deploy")
         self.assertEqual((code, argv), (1, None))
         self.assertIn("keyfit: firebase not started, client needs attention", self.stderr)
-        self.assertIn(f"✘ firebase  acme-prod   the firebase CLI's folder {self.repos['client']} is bound to {GLOBEX}, "
+        self.assertIn(f"✘ firebase   acme-prod   the firebase CLI's folder {self.repos['client']} is bound to {GLOBEX}, "
                       f"the project's Google account is {ACME}\n    → firebase login:use {ACME}\n", self.stderr)
 
     def test_another_account_project_or_a_token_is_refused(self):
@@ -595,7 +602,7 @@ class ShimTests(FirebaseCase):
     def test_another_firebase_folder_named_with_config_is_checked_too(self):
         code, argv, _ = self.run_shim("deploy", "--config", f"{self.repos['mine']}/firebase.json")
         self.assertEqual((code, argv), (1, None))
-        self.assertIn(f"keyfit: firebase not started, client needs attention\n  ✘ firebase  acme-prod   the firebase "
+        self.assertIn(f"keyfit: firebase not started, client needs attention\n  ✘ firebase   acme-prod   the firebase "
                       f"CLI's folder {self.repos['mine']} is bound to {GLOBEX}, the project's Google account is {ACME}\n"
                       f"    → firebase login:use {ACME} --config {self.repos['mine']}/firebase.json", self.stderr)
         code, argv, _ = self.run_shim("deploy", "-c", "../mono/app/firebase.json")
@@ -621,7 +628,7 @@ class ShimTests(FirebaseCase):
         self.assertIn(f"→ firebase login:use {ACME}", self.stderr)
         code, argv, _ = self.run_shim("-p", "hi", tool="claude", cwd=self.repos["mono"])
         self.assertIsNone(code, self.stderr)
-        self.assertIn(f"keyfit: ! firebase  acme-prod   no firebase.json here, so the firebase CLI uses its default login "
+        self.assertIn(f"keyfit: ! firebase   acme-prod   no firebase.json here, so the firebase CLI uses its default login "
                       f"{PERSONAL}", self.stderr)
 
     def terminal(self, answers, run, tool="firebase", *args):
@@ -712,7 +719,7 @@ class AddTests(FirebaseCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(out, f"client: google account 'acme' → {ACME}\n"
                               "client: firebase account 'acme-prod' → project acme-prod\n"
-                              f"  ✔ firebase  acme-prod   {ACME}, bound at {self.repos['client']} · account and project "
+                              f"  ✔ firebase   acme-prod   {ACME}, bound at {self.repos['client']} · account and project "
                               "confirmed\n")
         reg = self.registry()
         self.assertEqual((reg["projects"]["client"]["firebase"], reg["accounts"]["firebase"]["acme-prod"],
@@ -785,12 +792,12 @@ class AddTests(FirebaseCase):
     def test_status_and_doctor_show_the_sign_in_and_project(self):
         self.keyfit("add", "firebase")
         code, out, err = self.keyfit("status")
-        self.assertIn(f"✔ firebase  acme-prod   {ACME}, bound at {self.repos['client']} · account and project "
+        self.assertIn(f"✔ firebase   acme-prod   {ACME}, bound at {self.repos['client']} · account and project "
                       f"confirmed", out)
         with mock.patch.object(secrets, "keychain_reachable", return_value=""):
             code, out, err = self.keyfit("doctor")
-        self.assertIn(f"✔ firebase  {self.bin / 'firebase'}", out)
-        self.assertIn(f"✔ firebase  acme-prod   {ACME}, bound at {self.repos['client']} · sign-ins in "
+        self.assertIn(f"✔ firebase   {self.bin / 'firebase'}", out)
+        self.assertIn(f"✔ firebase   acme-prod   {ACME}, bound at {self.repos['client']} · sign-ins in "
                       f"~/.config/configstore/firebase-tools.json\n", out)
 
 

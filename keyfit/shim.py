@@ -881,6 +881,20 @@ def _say(lines: list[str]) -> None:
         print(line, file=sys.stderr)
 
 
+def start(real: str, tool: str, args: list[str], env: dict, run_env: dict, why: str | None = None) -> int:
+    """Every start of the real tool goes through here. Under KEYFIT_DRY_RUN=1 a start Keyfit decided (`why`: the
+    checks passed, or the command runs unchecked in a project) is only printed: why, the command, and the names of
+    the variables Keyfit changes, never their values. Starts without a reason always run, as the docs say: with
+    KEYFIT_DISABLE, in a folder outside every project, and sign-in commands."""
+    if why and env.get("KEYFIT_DRY_RUN") == "1":
+        changed = sorted(k for k in set(env) | set(run_env) if env.get(k) != run_env.get(k))
+        _say([f"keyfit: {why}", f"  would run: {real} {' '.join(args)}",
+              f"  environment changes (names only): {', '.join(changed) or 'none'}"])
+        return 0
+    os.execve(real, [tool, *args], run_env)
+    return 0  # not reached: execve replaces this process
+
+
 def sign_in_command(fix: str) -> tuple[dict, list[str]] | None:
     """The fix as (variables, words) when it is exactly one of SIGN_INS, else None."""
     import shlex
@@ -1040,19 +1054,22 @@ def main(argv: list[str]) -> int:
               f"  Bypass once: KEYFIT_DISABLE=1 {tool} …", file=sys.stderr)
         return 1
     if env.get("KEYFIT_DISABLE") == "1":
-        os.execve(real, [tool, *args], env)
+        return start(real, tool, args, env, env)
     # counted on every path, not only where checks run: a wrapper later on PATH that calls the tool by name
     # comes back through here also in folders that are not registered
     env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
 
     try:
-        if tool == "opencode" and subcommand(args, OPENCODE_SUBCOMMANDS) in OPENCODE_SHARED:
-            os.execve(real, [tool, *opencode_private(args, env)], env)
+        sub = subcommand(args, OPENCODE_SUBCOMMANDS) if tool == "opencode" else None
+        if sub in OPENCODE_SHARED:
+            return start(real, tool, opencode_private(args, env), env, env,
+                         f"opencode {sub} is OpenCode's own command: it runs without a project's accounts or checks")
         registry = Registry.load()
         shared = tool == "aws" and requested_profiles(args)
         if shared and set(shared) <= registry.shared_aws_profiles():
             # profiles of machine-wide tools rather than a project ([settings]): they run unchanged anywhere
-            os.execve(real, [tool, *args], env)
+            return start(real, tool, args, env, env, f"AWS profile {', '.join(dict.fromkeys(shared))} is shared "
+                         f"([settings] shared_aws_profiles): aws runs without a project's accounts or checks")
         pinned = env.get("KEYFIT_PROJECT") if tool in PINNED else None
         project = registry.get(pinned) if pinned else resolve(".", registry).project
         if pinned and project is None:  # the session's environment is that project's: never run it unchecked
@@ -1062,7 +1079,7 @@ def main(argv: list[str]) -> int:
         if tool in ("opencode", "copilot"):
             folder_check(tool, opencode_folder(args) if tool == "opencode" else copilot_folder(args), registry, project)
         if project is None:  # not a registered project: exactly as before Keyfit
-            os.execve(real, [tool, *(opencode_private(args, env) if tool == "opencode" else args)], env)
+            return start(real, tool, opencode_private(args, env) if tool == "opencode" else args, env, env)
         if tool == "gcloud":  # before sign-in commands too: they write into configurations
             gcloud_guard(project, args, registry, env)
         if tool == "firebase":  # before sign-in commands too: login:use and use bind folders
@@ -1088,10 +1105,12 @@ def main(argv: list[str]) -> int:
                 args = opencode_standalone(args)
             if tool == "gemini":  # a session, until it quits: without other projects' MCP servers
                 args = gemini_args(project, args, login_env, Path.cwd(), registry.mcp_owners())
-            os.execve(real, [tool, *args], login_env)
+            return start(real, tool, args, env, login_env)
         if relevant and not any(kind in project.connections for kind in relevant):
             if tool in OPTIONAL:  # no account of its kind: it runs as before Keyfit, minus other projects' tokens
-                os.execve(real, [tool, *args], environment.build(project, env, kinds=relevant))
+                return start(real, tool, args, env, environment.build(project, env, kinds=relevant),
+                             f"project {project.name} has no {relevant[0]} account mapped: {tool} runs without "
+                             f"checks, as before Keyfit")
             raise Refused(f"keyfit: project {project.name} has no {relevant[0]} account mapped, so {tool} was not "
                           f"started.\n  Map one: {MAP[relevant[0]]}   (bypass once: KEYFIT_DISABLE=1 {tool} …)")
         run_env = environment.build(project, env, kinds=relevant)  # aws/gh/vercel/…/convex: only their own account
@@ -1136,9 +1155,4 @@ def main(argv: list[str]) -> int:
         print(f"keyfit: internal error ({type(err).__name__} in {Path(where.filename).name}:{where.lineno}) — "
               f"{tool} was not started.\n  Bypass once: KEYFIT_DISABLE=1 {tool} …", file=sys.stderr)
         return 1
-    if env.get("KEYFIT_DRY_RUN") == "1":
-        changed = sorted(k for k in set(env) | set(run_env) if env.get(k) != run_env.get(k))
-        print(f"keyfit: project {project.name}, checks ok\n  would run: {real} {' '.join(args)}\n"
-              f"  environment changes (names only): {', '.join(changed)}", file=sys.stderr)
-        return 0
-    os.execve(real, [tool, *args], run_env)
+    return start(real, tool, args, env, run_env, f"project {project.name}, checks ok")

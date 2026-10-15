@@ -432,7 +432,7 @@ class ShimTests(VercelCase):
         self.assertEqual(code, 1)
         self.assertIsNone(argv)
         self.assertIn("keyfit: vercel not started, client needs attention", self.stderr)
-        self.assertIn("✘ vercel    octocat → acme   signed in as hubot, project expects octocat", self.stderr)
+        self.assertIn("✘ vercel     octocat → acme   signed in as hubot, project expects octocat", self.stderr)
 
     def test_linked_to_another_team_blocks(self):
         self.login(self.default)
@@ -578,7 +578,7 @@ class AddVercelTests(VercelCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(main(["status"]), 0)
-        self.assertEqual(out.getvalue(), "client\n  ✔ vercel    octocat → acme   login and team confirmed\n"
+        self.assertEqual(out.getvalue(), "client\n  ✔ vercel     octocat → acme   login and team confirmed\n"
                                          "  aws and gh won't start here until mapped: keyfit add aws|github …\n")
 
 

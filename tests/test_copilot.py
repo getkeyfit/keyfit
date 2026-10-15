@@ -400,7 +400,7 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("-p", "hi", tokens={})
         self.assertEqual((out.returncode, out.stdout), (1, ""))
         self.assertIn("keyfit: copilot not started, demo needs attention\n"
-                      "  ✘ copilot   octocat   gh has no stored login for octocat\n"
+                      "  ✘ copilot    octocat   gh has no stored login for octocat\n"
                       "    → gh auth login --hostname github.com --git-protocol ssh --web   (sign in as octocat), "
                       "then switch back: gh auth switch --user <your usual account>\n", out.stderr)
         self.assertNotIn("Sign in now?", out.stderr)
@@ -566,12 +566,12 @@ class AddTests(unittest.TestCase):
         self.map_github()
         self.run_main("add", "copilot")
         _, out, _ = self.run_main("doctor")
-        self.assertIn("  ✔ copilot   octocat   GitHub octocat, gh's token · settings and MCP servers in ~/.copilot\n", out)
-        self.assertIn("  ! copilot   not found on PATH   needed only if you use it\n"
+        self.assertIn("  ✔ copilot    octocat   GitHub octocat, gh's token · settings and MCP servers in ~/.copilot\n", out)
+        self.assertIn("  ! copilot    not found on PATH   needed only if you use it\n"
                       "    → npm install -g @github/copilot\n", out)
         self.run_main("add", "copilot", "--login", "hubot")
         _, out, _ = self.run_main("doctor")
-        self.assertIn("  ! copilot   hubot   GitHub hubot, gh's token, while the project's GitHub account is octocat", out)
+        self.assertIn("  ! copilot    hubot   GitHub hubot, gh's token, while the project's GitHub account is octocat", out)
 
 
 if __name__ == "__main__":

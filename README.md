@@ -67,21 +67,21 @@ It ends with `keyfit status`:
 
 ```
 acme-api
-  ✔ aws       acme-dev → …4321   SSO token valid 6h 41m · refreshes automatically · account confirmed
-  ✔ linear    acme   workspace confirmed
-  ✔ github    octocat   login confirmed
-  ✔ vercel    octocat → acme   login and team confirmed
-  ✔ supabase  Acme   token, organization and linked project abcdefghijklmnopqrst confirmed
+  ✔ aws        acme-dev → …4321   SSO token valid 6h 41m · refreshes automatically · account confirmed
+  ✔ linear     acme   workspace confirmed
+  ✔ github     octocat   login confirmed
+  ✔ vercel     octocat → acme   login and team confirmed
+  ✔ supabase   Acme   token, organization and linked project abcdefghijklmnopqrst confirmed
   ✔ cloudflare acme → Acme   bound at ~/code/acme-api · profile and account confirmed
-  ✔ convex    Acme   login, team and deployment happy-animal-123 (acme-web) confirmed
-  ✔ google    me@acme.com
-  ✔ gcloud    acme → acme-prod   me@acme.com · account and project confirmed
-  ✔ firebase  acme-prod   me@acme.com, bound at ~/code/acme-api · account and project confirmed
-  ✔ claude    Acme   Acme (team) confirmed
-  ✔ codex     ChatGPT pro   subscription login, no API key
-  ✔ opencode  default   anthropic, openai signed in · confirmed by OpenCode
-  ✔ copilot   octocat   login confirmed
-  ✔ gemini    me@acme.com   Google sign-in in ~/.config/keyfit/gemini/acme · confirmed by Google
+  ✔ convex     Acme   login, team and deployment happy-animal-123 (acme-web) confirmed
+  ✔ google     me@acme.com
+  ✔ gcloud     acme → acme-prod   me@acme.com · account and project confirmed
+  ✔ firebase   acme-prod   me@acme.com, bound at ~/code/acme-api · account and project confirmed
+  ✔ claude     Acme   Acme (team) confirmed
+  ✔ codex      ChatGPT pro   subscription login, no API key
+  ✔ opencode   default   anthropic, openai signed in · confirmed by OpenCode
+  ✔ copilot    octocat   login confirmed
+  ✔ gemini     me@acme.com   Google sign-in in ~/.config/keyfit/gemini/acme · confirmed by Google
 ```
 
 When a check fails, the tool does not start:
@@ -89,7 +89,7 @@ When a check fails, the tool does not start:
 ```
 $ claude
 keyfit: claude not started, acme-api needs attention
-  ✘ aws       acme-dev → …4321   SSO session expired
+  ✘ aws        acme-dev → …4321   SSO session expired
     → aws sso login --sso-session acme
   (bypass once: KEYFIT_DISABLE=1 claude …)
 ```
@@ -330,7 +330,7 @@ keyfit secret list                 # names of the keys Keyfit stored (never the 
 ## Turning it off
 
 - **Skip Keyfit once:** `KEYFIT_DISABLE=1 claude` runs that one command without checks, in your unchanged environment. Everything it starts inherits the variable, so an agent started this way runs its own `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` without Keyfit too.
-- **See what would run:** `KEYFIT_DRY_RUN=1 claude` runs the checks in a registered project, then prints the command and the names of the environment variables that would change, and starts nothing. In a folder that isn't registered, and for sign-in commands, the tool runs as usual.
+- **See what would run:** `KEYFIT_DRY_RUN=1 claude` runs the checks in a registered project, then prints the command and the names of the environment variables that would change, and starts nothing. Commands that would run without checks are printed too, with the reason, and don't start either: `supabase`, `wrangler`, `convex`, `gcloud` or `firebase` in a project without an account of their kind, and, in any folder, OpenCode's own commands (`opencode serve`, `opencode mcp`, …) and AWS profiles under `[settings] shared_aws_profiles`. Three things still run as usual: sign-in commands, every other command in a folder that isn't registered, and anything run with `KEYFIT_DISABLE=1`.
 - **Turn it off:** `keyfit setup --remove` deletes the shims and PATH files and takes Keyfit's line out of your shell startup files. Open a new terminal afterwards. Your registry stays, so `keyfit setup --rc` turns everything back on.
 - **Delete its data too:** `keyfit setup --remove --purge` also deletes `~/.config/keyfit`: the registry, the check cache, and the Claude, Vercel, OpenCode and Gemini CLI login folders Keyfit made (with the logins in them). It asks first (`--yes` skips the question). Keys Keyfit stored in the Keychain are kept; it lists their names so you can delete them in Keychain Access.
 - **Uninstall:** run `keyfit setup --remove` first, then `pipx uninstall keyfit` or `brew uninstall keyfit`. Done the other way round, the thirteen tools stop with a note that names the line to remove.

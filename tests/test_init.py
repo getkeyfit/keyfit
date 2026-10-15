@@ -236,7 +236,7 @@ class GuidedInitTests(Machine):
         reg = self.registry()
         self.assertEqual(reg["projects"]["acme"]["vercel"], "acme")
         self.assertEqual(reg["accounts"]["vercel"]["acme"]["team_id"], "team_acme")
-        self.assertIn("  ✔ vercel    octocat → acme   login and team confirmed\n", out)
+        self.assertIn("  ✔ vercel     octocat → acme   login and team confirmed\n", out)
         self.assertNotIn(VERCEL_TOKEN, out + err + (self.config / "registry.toml").read_text())
 
     def test_declined_accounts_are_skipped(self):
@@ -323,9 +323,12 @@ class GuidedInitTests(Machine):
         self.assertIn("Vercel: not signed in (~/Library/Application Support/com.vercel.cli) — sign in (vercel login), "
                       "then: keyfit add vercel\n", out)
         self.assertEqual(self.asked, ["Add a Linear API key for acme? [y/N] "])
-        (self.bin / "vercel").unlink()
+        for name in ("vercel", "codex"):
+            (self.bin / name).unlink()
         code, out, err = self.init("n")
         self.assertIn("Vercel: vercel not found on PATH — skipped", out)
+        self.assertIn("Codex: codex not found on PATH — skipped", out)  # not "no clean ChatGPT login"
+        self.assertNotIn("codex login", out)
 
     def test_ctrl_c_stops_but_keeps_the_registration(self):
         code, out, _ = self.init("1", KeyboardInterrupt())
@@ -382,11 +385,11 @@ class MessagesTests(Machine):
                             '[accounts.github.octocat]\nlogin = "octocat"\n')
         code, out, err = self.run_main("status", "--offline")
         self.assertEqual((code, err), (1, ""))
-        self.assertIn("✘ github    octocta   no account [accounts.github.octocta]\n"
+        self.assertIn("✘ github     octocta   no account [accounts.github.octocta]\n"
                       "    → map it again: keyfit add github …", out)
         self.assertRegex(out, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, opencode, copilot, "
                               r"gemini, github, vercel, supabase, cloudflare, convex, google, gcloud, firebase\)")
-        self.assertIn("✘ aws       acme-dev → ?   the expected account must be a 12-digit AWS account ID", out)
+        self.assertIn("✘ aws        acme-dev → ?   the expected account must be a 12-digit AWS account ID", out)
         self.assertIn("  vercel won't start here until mapped: keyfit add vercel …\n", out)
         code, out, _ = self.run_main("which", "-v")
         self.assertEqual(code, 0)
@@ -491,9 +494,9 @@ class DoctorTests(Machine):
                           "vercel", "supabase", "wrangler", "convex", "gcloud", "firebase", "registry", "keychain", "project"])
         self.assertTrue(all(line.startswith("  ✔ ") for line in lines[:-1]), out)
         self.assertIn("first, before every real tool", out)
-        self.assertIn(f"✔ gh        {self.bin / 'gh'}\n", out)
-        self.assertIn(f"✔ vercel    {self.bin / 'vercel'}\n", out)
-        self.assertIn(f"✔ registry  {self.config / 'registry.toml'}   1 project\n", out)
+        self.assertIn(f"✔ gh         {self.bin / 'gh'}\n", out)
+        self.assertIn(f"✔ vercel     {self.bin / 'vercel'}\n", out)
+        self.assertIn(f"✔ registry   {self.config / 'registry.toml'}   1 project\n", out)
         self.assertRegex(out, r"✔ project\s+acme\s")
         self.assertEqual(lines[-1], "All good.")
         self.assertEqual((self.stub / "doctor-argv.log").read_text(), "list-keychains\n")  # never reads an item
@@ -506,7 +509,7 @@ class DoctorTests(Machine):
         code, out = self.doctor(superset, self.shims, self.bin)
         self.assertEqual(code, 0, out)
         self.assertIn("right after Superset's agent wrapper, before every real tool", out)
-        self.assertIn(f"✔ claude    {self.bin / 'claude'}\n", out)  # the wrapper is not the real tool
+        self.assertIn(f"✔ claude     {self.bin / 'claude'}\n", out)  # the wrapper is not the real tool
 
     def test_wrong_orders_fail_with_the_fix(self):
         self.setup_shims()
@@ -531,6 +534,10 @@ class DoctorTests(Machine):
             main(["setup", "--shell", "bash", "--rc"])
         code, out = self.doctor(self.bin)
         self.assertIn("→ open a new terminal (~/.bash_profile loads Keyfit)", out)
+        profile = self.home / ".bash_profile"  # the line as an earlier version wrote it counts too
+        profile.write_text(profile.read_text().replace("# keyfit: tool shims on PATH", cli.OLD_COMMENT))
+        code, out = self.doctor(self.bin)
+        self.assertIn("→ open a new terminal (~/.bash_profile loads Keyfit)", out)
         code, out = self.doctor(self.bin, self.shims)
         self.assertIn("→ make Keyfit's line (`…  # keyfit: …`) the last line of ~/.bash_profile", out)
 
@@ -549,10 +556,10 @@ class DoctorTests(Machine):
         (self.bin / "gh").unlink()
         code, out = self.doctor(self.shims, self.bin)
         self.assertEqual(code, 0, out)
-        self.assertIn("  ! gh        not found on PATH   needed only if you use it\n    → brew install gh\n", out)
+        self.assertIn("  ! gh         not found on PATH   needed only if you use it\n    → brew install gh\n", out)
         (self.bin / "vercel").unlink()
         code, out = self.doctor(self.shims, self.bin)
-        self.assertIn("  ! vercel    not found on PATH   needed only if you use it\n    → npm install -g vercel\n", out)
+        self.assertIn("  ! vercel     not found on PATH   needed only if you use it\n    → npm install -g vercel\n", out)
 
     def test_unreadable_registry_and_keychain_fail(self):
         self.setup_shims()
@@ -563,7 +570,7 @@ class DoctorTests(Machine):
         self.assertEqual(code, 1)
         self.assertRegex(out, r"✘ registry .* unreadable \(.*line 1.*\)\n")
         self.assertIn(f"    → fix that line in {self.config / 'registry.toml'}\n", out)
-        self.assertIn("✘ keychain  macOS Keychain   security: SecKeychainCopySearchList", out)
+        self.assertIn("✘ keychain   macOS Keychain   security: SecKeychainCopySearchList", out)
         self.assertNotIn("project", out)  # no registry, no project to resolve
         self.assertEqual(out.splitlines()[-1], "2 problems — the fix is under each ✘")
 
@@ -582,8 +589,8 @@ class DoctorTests(Machine):
         with mock.patch.object(sys, "platform", "linux"):
             code, out = self.doctor(self.shims, self.bin)
         self.assertEqual(code, 1)
-        self.assertIn("✘ macOS     linux   Keyfit runs on macOS only for now", out)
-        self.assertIn("✘ keychain  macOS Keychain   Keyfit stores keys in the macOS Keychain", out)
+        self.assertIn("✘ macOS      linux   Keyfit runs on macOS only for now", out)
+        self.assertIn("✘ keychain   macOS Keychain   Keyfit stores keys in the macOS Keychain", out)
 
     def test_never_prints_secret_values(self):
         self.setup_shims()
