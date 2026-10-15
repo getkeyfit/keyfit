@@ -34,6 +34,8 @@ PAGES = {
 LINKS = {
     f"{REPO}/docs/security.md": "/docs/security/",
     f"{REPO}/docs/troubleshooting.md": "/docs/troubleshooting/",
+    "docs/security.md": "/docs/security/",  # README's relative links
+    "docs/troubleshooting.md": "/docs/troubleshooting/",
     "../SECURITY.md": f"{REPO}/SECURITY.md",
     "security.md": "/docs/security/",
     "troubleshooting.md": "/docs/troubleshooting/",
