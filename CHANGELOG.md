@@ -213,6 +213,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of failing on `import tomllib`.
 - Shims whose Keyfit installation is gone (uninstalled before `keyfit setup --remove`, or moved) say
   what to do instead of sh's "No such file or directory". The tool still doesn't start.
+- `KEYFIT_DRY_RUN=1` started commands Keyfit lets through without checks: `supabase`, `wrangler`,
+  `convex`, `gcloud` and `firebase` in a project without an account of their kind
+  (`KEYFIT_DRY_RUN=1 wrangler deploy` deployed), OpenCode's own commands (`opencode serve`, …) and
+  AWS profiles under `shared_aws_profiles`. They are now printed with the reason, the command and
+  the names of the variables that would change, like a checked start. Sign-in commands, other
+  commands in a folder that isn't registered, and `KEYFIT_DISABLE=1` still run, as documented.
 
 ### Security
 
