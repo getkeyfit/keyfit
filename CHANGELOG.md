@@ -194,6 +194,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `init` come first in it, and every command's `--help` says what it does. After `keyfit setup --rc`,
   Keyfit says what to do next; with `--rc FILE` it prints the matching `--remove --rc FILE`.
   Running `keyfit setup` again (after an upgrade) says when your startup file already loads the shims.
+  The line it adds ends in `# keyfit: tool shims on PATH` instead of naming four of the tools; the
+  line of earlier versions still counts (`setup --rc` rewrites it in place, `setup --remove` and
+  `doctor` find it, and a shim whose Keyfit is gone names both).
 - **`keyfit init` refuses your home folder** (and any folder above it), and a `--root` that doesn't
   exist: every folder under it would have belonged to one project. Outside git, it says that every
   folder below belongs to the project. It also says when Keyfit isn't active in this terminal yet.
