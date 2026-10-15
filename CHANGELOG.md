@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Gmail, Drive and Calendar MCP servers on the project's Google account.** `keyfit add google-mcp
+  --server NAME` gives a project a Google Workspace MCP server that runs on the Mac with a login of its
+  own, signed in as the project's Google account (the work or the personal email of `keyfit add
+  google`); servers of one Google account are shared by its projects (`[accounts.google-mcp.NAME]`).
+  Four servers are known by the package they run, with where each keeps its login: Google Workspace MCP
+  (`workspace-mcp`, a folder of `<email>.json`), Gmail AutoAuth (`@gongrzhe/server-gmail-autoauth-mcp`),
+  Google Calendar MCP (`@cocal/google-calendar-mcp`) and Google Drive MCP
+  (`@piotr-agier/google-drive-mcp`); any other server works with `--login PATH`. The login path comes
+  from the server's own definition (`env`) in the five agents' configs, else the server's default.
+  Before an agent starts, every definition of the server (yours and the folder's, in every agent) must
+  read that login, and every account in it must be the project's Google account (by the email it names:
+  the file's name, `cached_email`, `email` or an `id_token`); while a saved token is still valid, Google
+  must name that account too (tokeninfo, Gmail's profile or the primary calendar). Tokens are never
+  renewed: a login that names no account (Gmail AutoAuth after the hour following its sign-in) is a
+  warning, `account not confirmed`, at every agent start, and a server not signed in yet is a warning
+  too. Another account blocks the start, with a fix that gives the server a login of its own (Keyfit
+  never removes the other one). The servers join the project's MCP ownership: every other project's
+  sessions don't see them, in all five agents, and a project with Google Workspace servers doesn't see
+  any other Gmail, Drive or Calendar server (Google's own remote servers included; `keyfit add mcp`
+  still gives one to a project). Sessions start without inherited `GMAIL_CREDENTIALS_PATH`,
+  `WORKSPACE_MCP_CREDENTIALS_DIR`, `GOOGLE_MCP_CREDENTIALS_DIR`, `GOOGLE_CALENDAR_MCP_TOKEN_PATH`,
+  `GOOGLE_DRIVE_MCP_TOKEN_PATH` and `USER_GOOGLE_EMAIL`, so each server reads the login Keyfit checked.
+  `keyfit init` offers the servers signed in as the project's account; `doctor` shows each server, its
+  login and the account it names. claude.ai's own Gmail, Google Drive and Google Calendar connectors
+  belong to the Claude account and stay outside Keyfit's reach (documented).
 - **Gemini CLI, the fifth agent (thirteenth tool), on the project's Google account.** `gemini` starts with
   the project's accounts, checked, like the other agents, and signed in as the project's Google account
   (the work or the personal email of `keyfit add google`). Gemini CLI keeps its settings, sessions and
