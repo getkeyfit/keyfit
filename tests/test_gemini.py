@@ -19,7 +19,7 @@ from unittest import mock
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
-from keyfit import cache, cli, environment, mcp, secrets  # noqa: E402
+from keyfit import cli, mcp, secrets  # noqa: E402
 from keyfit.adapters import ADAPTERS, gemini  # noqa: E402
 from keyfit.adapters.gemini import GeminiAdapter  # noqa: E402
 from keyfit.cli import main  # noqa: E402
@@ -237,6 +237,8 @@ class AdapterTests(unittest.TestCase):
         check = self.verify(conn)
         self.assertTrue(check.failed)
         self.assertEqual(check.detail, "Google does not accept the sign-in's token (signed out or revoked)")
+        # Gemini CLI signs in afresh when its sign-in no longer works: the sign-in alone fixes it, and is offered
+        self.assertEqual(sign_in_command(check.fix)[1], ["gemini", "--prompt-interactive", "/quit"])
 
     def test_google_not_answering_is_transient(self):
         sign_in(self.own, ACME, valid=True)
