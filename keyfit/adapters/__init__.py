@@ -3,6 +3,7 @@ from .claude import ClaudeAdapter
 from .cloudflare import CloudflareAdapter
 from .codex import CodexAdapter
 from .convex import ConvexAdapter
+from .firebase import FirebaseAdapter
 from .copilot import CopilotAdapter
 from .gcloud import GcloudAdapter
 from .github import GithubAdapter
@@ -26,4 +27,5 @@ ADAPTERS = {
     "convex": ConvexAdapter(),
     "google": GoogleAdapter(),
     "gcloud": GcloudAdapter(),
+    "firebase": FirebaseAdapter(),
 }
