@@ -1,5 +1,5 @@
-"""The shim in front of `claude`, `codex`, `opencode`, `copilot`, `aws`, `gh`, `vercel`, `supabase`, `wrangler` and
-`convex` (ambient mode).
+"""The shim in front of `claude`, `codex`, `opencode`, `copilot`, `aws`, `gh`, `vercel`, `supabase`, `wrangler`,
+`convex` and `gcloud` (ambient mode).
 
 Three outcomes only:
   folder not registered      → run the real tool unchanged
@@ -8,8 +8,8 @@ Three outcomes only:
                                is only a sign-in or binding a folder of the project to its wrangler profile,
                                offer to run it and then start the tool)
 
-Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel`, `supabase`, `wrangler` and
-`convex` stay on that session's project even after `cd` elsewhere; `claude`, `codex`, `opencode` and
+Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel`, `supabase`, `wrangler`,
+`convex` and `gcloud` stay on that session's project even after `cd` elsewhere; `claude`, `codex`, `opencode` and
 `copilot` re-resolve from the folder, since starting a new agent elsewhere is deliberate.
 Bypass once: KEYFIT_DISABLE=1 <tool> …
 """
@@ -22,33 +22,35 @@ import sys
 from pathlib import Path
 
 from . import cache, environment, mcp, secrets
-from .adapters import ADAPTERS, cloudflare, convex, copilot, opencode, supabase, vercel
+from .adapters import ADAPTERS, cloudflare, convex, copilot, gcloud, opencode, supabase, vercel
+from .adapters.google import same
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
 from .resolve import resolve
 
-TOOLS = ("claude", "codex", "opencode", "copilot", "aws", "gh", "vercel", "supabase", "wrangler", "convex")
+TOOLS = ("claude", "codex", "opencode", "copilot", "aws", "gh", "vercel", "supabase", "wrangler", "convex", "gcloud")
 INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "npm install -g @openai/codex",
            "opencode": "brew install opencode", "copilot": "npm install -g @github/copilot",
            "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel",
            "supabase": "brew install supabase/tap/supabase",
            "wrangler": "npm install -g wrangler   (projects that have it run their own: npx wrangler …)",
            "convex": "npm install -g convex   (projects that have it run their own: npx convex …)",
+           "gcloud": "brew install --cask gcloud-cli",
            "npx": "brew install node"}
 # How to map the one account `aws`, `gh` and `vercel` need inside a project before they start there.
 MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github --login <login>",
        "vercel": "keyfit add vercel"}
 RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",),
-            "wrangler": ("cloudflare",), "convex": ("convex",), "claude": None, "codex": None,
+            "wrangler": ("cloudflare",), "convex": ("convex",), "gcloud": ("gcloud",), "claude": None, "codex": None,
             "opencode": None, "copilot": None}
 # The agents: they start with all of the project's accounts, checked.
 AGENTS = ("claude", "codex", "opencode", "copilot")
 # Tools that run unchanged in a project without an account of their kind: Supabase is often used only locally
 # (supabase start), with no account at all, and so are wrangler (wrangler dev) and convex (an anonymous local
-# deployment).
-OPTIONAL = ("supabase", "wrangler", "convex")
-PINNED = ("aws", "gh", "vercel", "supabase", "wrangler", "convex")
+# deployment). gcloud keeps its own configurations, and many of its commands (components, emulators, config) need none.
+OPTIONAL = ("supabase", "wrangler", "convex", "gcloud")
+PINNED = ("aws", "gh", "vercel", "supabase", "wrangler", "convex", "gcloud")
 MAX_DEPTH = 6
 CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs",
                       "mcp", "plugin", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update", "help"}
@@ -85,16 +87,22 @@ LOGIN_COMMANDS = {
     "convex": (("login",), ("logout",)),  # not `login status`: it only reads the login
     "opencode": (("auth",),),
     "copilot": (("login",),),
+    # the fixes of a gcloud check (a configuration to create, its account or project to set) and what shows gcloud's
+    # sign-ins and configurations
+    "gcloud": (("auth", "login"), ("auth", "list"), ("config", "set"), ("config", "configurations", "create"),
+               ("config", "configurations", "list"), ("config", "configurations", "describe")),
 }
 LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",),
                "supabase": ("supabase",), "wrangler": ("cloudflare",), "convex": ("convex",), "npx": ("convex",),
-               "opencode": ("opencode",), "copilot": ("copilot",)}
+               "opencode": ("opencode",), "copilot": ("copilot",), "gcloud": ("gcloud",)}
 # Variables sign-in commands run without: gh must manage its own tokens, Copilot CLI its own login (`copilot login`
-# takes a token from the environment instead of signing in), and convex its own login (with the override set,
-# `convex login` would only say the injected token is valid). (`supabase login` runs only in a project without a
-# Supabase account, where Keyfit has removed the token it set for another project, and nothing else.)
+# takes a token from the environment instead of signing in), convex its own login (with the override set,
+# `convex login` would only say the injected token is valid), and gcloud's sign-in and `config set` write the
+# account and project into the project's configuration (CLOUDSDK_ACTIVE_CONFIG_NAME) rather than beside it.
+# (`supabase login` runs only in a project without a Supabase account, where Keyfit has removed the token it set for
+# another project, and nothing else.)
 LOGIN_SCRUB = {"gh": ("GH_TOKEN", "GITHUB_TOKEN"), "copilot": (copilot.TOKEN, "GH_TOKEN", "GITHUB_TOKEN"),
-               "convex": (convex.OVERRIDE,), "npx": (convex.OVERRIDE,)}
+               "convex": (convex.OVERRIDE,), "npx": (convex.OVERRIDE,), "gcloud": (gcloud.ACCOUNT, gcloud.PROJECT_VAR)}
 # Fixes that are nothing but a sign-in, which Keyfit offers to run when you start a tool yourself in a terminal
 # (None: one value such as a profile name). Every other fix, including gh's (it switches gh's active account), is
 # only printed. A variable a fix may set in front: Claude's and Codex's config folder of the account.
@@ -106,6 +114,7 @@ SIGN_INS = {
     "wrangler": (("auth", "create", None), ("login",)),
     "npx": (("convex", "login", "--force"),),  # a Convex account that is the convex CLI's own login
     "opencode": (("auth", "login", "--standalone"), ("auth", "login", None, "--standalone")),
+    "gcloud": (("auth", "login", None),),  # in the project's configuration, which it then uses
 }
 SIGN_IN_VARS = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "opencode": "OPENCODE_DB"}
 VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query", "--color", "--ca-bundle",
@@ -138,7 +147,7 @@ def positionals(args: list[str]) -> list[str]:
 
 
 def is_login_command(tool: str, args: list[str]) -> bool:
-    readers = {"supabase": supabase.words, "wrangler": cloudflare.words, "convex": convex.words}
+    readers = {"supabase": supabase.words, "wrangler": cloudflare.words, "convex": convex.words, "gcloud": gcloud.words}
     words = readers.get(tool, positionals)(args)
     if tool == "convex" and words[:2] == ["login", "status"]:
         return False
@@ -636,6 +645,68 @@ def convex_login_check(project: Project, args: list[str]) -> None:
                   f"  Bypass once: KEYFIT_DISABLE=1 convex …")
 
 
+def gcloud_options(project: Project, conn: dict, args: list[str]) -> None:
+    """Refuse what would leave the project's gcloud configuration, Google account or Google Cloud project (like
+    `aws --profile`): another --configuration, --account or --project, --access-token-file (a token instead of the
+    account) and --flags-file (options Keyfit cannot see)."""
+    refuse = (f"keyfit: this folder belongs to {project.name} (gcloud configuration {conn.get('configuration')}, Google "
+              f"account {conn.get('account') or 'not set'}, project {conn.get('project')}); refusing")
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 gcloud …"
+    for name, value in gcloud.options(args):
+        if name == "--access-token-file":
+            raise Refused(f"{refuse} --access-token-file: gcloud would use that token instead of {project.name}'s "
+                          f"Google account and its check.{bypass}")
+        if name == "--flags-file":
+            raise Refused(f"{refuse} --flags-file: Keyfit cannot see the --account or --project it may hold.{bypass}")
+        if value is None:
+            continue
+        if (name == "--configuration" and value != conn.get("configuration")) or \
+                (name == "--account" and not same(value, conn.get("account"))) or \
+                (name == "--project" and value != conn.get("project")):
+            raise Refused(f"{refuse} {name} {printable(value)}.{bypass}")
+
+
+def gcloud_guard(project: Project, args: list[str], registry: Registry, env: dict) -> None:
+    """Inside a registered project: refuse the options that leave the project's gcloud account (gcloud_options),
+    `gcloud auth login` as another person (it would write that account into the project's configuration), and what
+    would change a configuration a registered project uses away from that project's account or project:
+    `config set|unset account|project` and `config configurations delete|rename`."""
+    conn = project.connections.get("gcloud")
+    own = conn if isinstance(conn, dict) else None
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 gcloud …"
+    if own:
+        gcloud_options(project, own, args)
+    words = gcloud.words(args)
+    if own and own.get("account") and words[:2] == ["auth", "login"] and len(words) > 2 \
+            and not same(words[2], own["account"]):
+        raise Refused(f"keyfit: this folder belongs to {project.name}, whose Google account is {own['account']}; "
+                      f"refusing `gcloud auth login {printable(words[2])}`: gcloud would make configuration "
+                      f"{own.get('configuration')} use that account.{bypass}")
+    users: dict[str, list[tuple[str, dict]]] = {}  # configuration → (project, its gcloud account) of those using it
+    for other in registry.projects().values():
+        theirs = other.connections.get("gcloud")
+        if isinstance(theirs, dict) and isinstance(theirs.get("configuration"), str):
+            users.setdefault(theirs["configuration"], []).append((other.name, theirs))
+    if words[:2] in (["config", "set"], ["config", "unset"]) and len(words) > 2 \
+            and words[2].removeprefix("core/") in ("account", "project"):
+        setting = words[2].removeprefix("core/")
+        named = [value for name, value in gcloud.options(args) if name == "--configuration" and value]
+        target = named[-1] if named else own.get("configuration") if own else gcloud.active(env)
+        value = words[3] if words[1] == "set" and len(words) > 3 else None
+        for name, theirs in users.get(target, []):
+            wanted = theirs.get(setting)  # the project's Google account, or its Google Cloud project
+            if wanted and not (value and (same(value, wanted) if setting == "account" else value == wanted)):
+                shown = " ".join(printable(w) for w in words[:4])
+                raise Refused(f"keyfit: refusing `gcloud {shown}` for configuration {target}: {name} uses it with "
+                              f"{setting} {wanted}.\n  Map {name} to another one first: keyfit add "
+                              f"{'google --email' if setting == 'account' else 'gcloud --project-id'} …{bypass}")
+    if words[:3] in (["config", "configurations", "delete"], ["config", "configurations", "rename"]):
+        for target in words[3:] if words[2] == "delete" else words[3:4]:
+            if users.get(target):
+                raise Refused(f"keyfit: refusing `gcloud config configurations {words[2]} {printable(target)}`: "
+                              f"{', '.join(name for name, _ in users[target])} uses that configuration.{bypass}")
+
+
 def login_environment(tool: str, project: Project, env: dict) -> dict:
     """The environment a sign-in command runs with: the project's (so it signs in to the project's account), without
     the variables that would make the tool skip its own login."""
@@ -840,6 +911,8 @@ def main(argv: list[str]) -> int:
             folder_check(tool, opencode_folder(args) if tool == "opencode" else copilot_folder(args), registry, project)
         if project is None:  # not a registered project: exactly as before Keyfit
             os.execve(real, [tool, *(opencode_private(args, env) if tool == "opencode" else args)], env)
+        if tool == "gcloud":  # before sign-in commands too: they write into configurations
+            gcloud_guard(project, args, registry, env)
 
         relevant = RELEVANT.get(tool)
         if is_login_command(tool, args):

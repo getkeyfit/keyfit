@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Google Cloud, the eleventh tool, and the project's Google account.** A project now says once which
+  Google account it uses, the work or the personal email (`keyfit add google --email`, or picked from
+  gcloud's sign-ins); every Google tool is checked against it: `gcloud` now, the firebase CLI and
+  Gemini CLI next. `gcloud` uses the project's gcloud configuration (`keyfit add gcloud`: the one
+  signed in as that account, and its Google Cloud project, `--project-id` for another). gcloud
+  already keeps named configurations, so Keyfit keeps no Google token: sessions and `gcloud` get
+  `CLOUDSDK_ACTIVE_CONFIG_NAME` (for that process only; the configuration active everywhere else is
+  untouched), `CLOUDSDK_CORE_ACCOUNT` and `CLOUDSDK_CORE_PROJECT`, so `bq` and `gsutil` in a session
+  use them too, and inherited `CLOUDSDK_…` variables that pick another configuration, account,
+  project, credentials or endpoint are removed, with `GOOGLE_APPLICATION_CREDENTIALS`. Before a
+  start, the configuration must exist, its account must be the project's Google account and its
+  project the expected one, it must take no credentials from a file, and gcloud must hold a sign-in
+  for the account (read from the account column of `credentials.db`, never a credential); then the
+  token `gcloud auth print-access-token` prints must belong to the account (Google's tokeninfo, the
+  token in the request body) and see the project (Cloud Resource Manager). Inside a project, `gcloud`
+  refuses another `--configuration`, `--account` or `--project`, `--access-token-file` and
+  `--flags-file`; `gcloud auth login`, `auth list`, `config set` and `config configurations create`,
+  `list` and `describe` run without checks in the project's configuration, except a sign-in as
+  someone else and a `config set`/`unset`, `configurations delete` or `rename` that would move a
+  registered project's configuration off its account or project. `Sign in now?` runs
+  `gcloud auth login EMAIL`. A project without a Google Cloud account runs `gcloud` as before.
+  `keyfit init` offers both after Convex; `doctor` shows the configuration and gcloud's folder.
+  Verified with gcloud 580.0.0.
 - **`Bind this folder now? [Y/n]`.** When you start a tool yourself in a terminal and a Cloudflare check
   fails only because the project's folder isn't bound to its wrangler profile (a new worktree, say),
   Keyfit offers to run `wrangler auth activate NAME FOLDER` with the project's wrangler, checks again
@@ -38,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused, and so is `copilot login` where the project has a Copilot account (it would change only
   Copilot's own login). The fixes are gh's sign-ins, which Keyfit prints and never runs. `keyfit init`
   offers Copilot CLI right after OpenCode when the project has a GitHub account; `doctor` shows the
-  account and Copilot's folder; `setup` writes ten shims. Verified with Copilot CLI 1.0.97.
+  account and Copilot's folder. Verified with Copilot CLI 1.0.97.
 - **OpenCode, the third agent (ninth tool).** `opencode` starts with the project's accounts, checked,
   like `claude` and `codex`. OpenCode 2 keeps every sign-in in its SQLite database, which
   `OPENCODE_DB` moves, so an OpenCode account is a database: `keyfit add opencode` records OpenCode's
@@ -57,8 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OPENCODE_API_KEY` (Claude and Codex sessions keep them), and other projects' MCP servers are
   switched off in `OPENCODE_CONFIG_CONTENT` for the folder OpenCode opens (your own content is kept). `--server`, `acp --login` and `opencode DIR` with a
   folder of another project are refused. `Sign in now?` runs `opencode auth login PROVIDER --standalone`;
-  `keyfit init` offers OpenCode's sign-ins; `doctor` shows the project's database; `setup` writes
-  nine shims. Verified with OpenCode 2.0.25.
+  `keyfit init` offers OpenCode's sign-ins; `doctor` shows the project's database. Verified with
+  OpenCode 2.0.25.
 - **Convex, the eighth tool.** `convex` and `npx convex` use the project's Convex account. The convex
   CLI keeps one login per Mac (`~/.convex/config.json`) and has no account switch, so Keyfit hands each
   session the project's token in `CONVEX_OVERRIDE_ACCESS_TOKEN`, which the CLI takes before its own
@@ -73,8 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   another team's deployment named with `--deployment`, `--deployment-name` or `--env-file`;
   `convex login` and `logout` are refused where Keyfit keeps the project's token. When the account is
   the CLI's own login and it expired, `Sign in now?` runs `npx convex login --force`. A project without
-  a Convex account runs `convex` as before. `keyfit init` offers the CLI's login; `setup` writes eight
-  shims and `doctor` checks eight tools (a convex used only through npx is fine).
+  a Convex account runs `convex` as before. `keyfit init` offers the CLI's login; `doctor` accepts a
+  convex used only through npx.
 - **Cloudflare, the seventh tool.** `wrangler` uses the project's Cloudflare account. wrangler keeps
   named sign-ins bound to folders since 4.106 (`wrangler auth create NAME`, `wrangler auth activate
   NAME DIR`), so Keyfit keeps no Cloudflare token: an account is a wrangler profile plus the expected
@@ -90,8 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the default sign-in) and `wrangler auth activate`/`deactivate`/`create`/`delete` that would move a
   registered folder off its project's profile are refused. A project without a Cloudflare account runs
   `wrangler` as before. `Sign in now?` runs `wrangler auth create NAME`; `keyfit init` offers the
-  profile bound to the folder; `doctor` shows the profile, its binding and the account; `setup` writes
-  seven shims.
+  profile bound to the folder; `doctor` shows the profile, its binding and the account.
 - **Supabase, the sixth tool.** `supabase` uses the project's Supabase account: a personal access token
   Keyfit keeps in the Keychain (`keyfit add supabase` checks it with Supabase and records its
   organization; `--cli` copies the token of the supabase CLI's current login; `--token env:VAR` names
@@ -104,7 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   project are refused, and so are `--org-id` of another organization and another `--profile`.
   `supabase login` and `logout` are refused there too, since they change only the CLI's own login.
   A project without a Supabase account runs `supabase` as before (it is often used only locally).
-  `keyfit init` offers the CLI's login; `setup` writes six shims and `doctor` checks six tools.
+  `keyfit init` offers the CLI's login.
 - **`Sign in now? [Y/n]`.** When you start a tool yourself in a terminal and every failed check is fixed
   by a plain sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `vercel login`,
   `wrangler auth create NAME`, `npx convex login --force`),
