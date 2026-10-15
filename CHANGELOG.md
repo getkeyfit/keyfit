@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Google Cloud, the eleventh tool, and the project's Google account.** A project now says once which
+  Google account it uses, the work or the personal email (`keyfit add google --email`, or picked from
+  gcloud's sign-ins); every Google tool is checked against it: `gcloud` now, the firebase CLI and
+  Gemini CLI next. `gcloud` uses the project's gcloud configuration (`keyfit add gcloud`: the one
+  signed in as that account, and its Google Cloud project, `--project-id` for another). gcloud
+  already keeps named configurations, so Keyfit keeps no Google token: sessions and `gcloud` get
+  `CLOUDSDK_ACTIVE_CONFIG_NAME` (for that process only; the configuration active everywhere else is
+  untouched), `CLOUDSDK_CORE_ACCOUNT` and `CLOUDSDK_CORE_PROJECT`, so `bq` and `gsutil` in a session
+  use them too, and inherited `CLOUDSDK_…` variables that pick another configuration, account,
+  project, credentials or endpoint are removed, with `GOOGLE_APPLICATION_CREDENTIALS`. Before a
+  start, the configuration must exist, its account must be the project's Google account and its
+  project the expected one, it must take no credentials from a file, and gcloud must hold a sign-in
+  for the account (read from the account column of `credentials.db`, never a credential); then the
+  token `gcloud auth print-access-token` prints must belong to the account (Google's tokeninfo, the
+  token in the request body) and see the project (Cloud Resource Manager). Inside a project, `gcloud`
+  refuses another `--configuration`, `--account` or `--project`, `--access-token-file` and
+  `--flags-file`; `gcloud auth login`, `auth list`, `config set` and `config configurations create`,
+  `list` and `describe` run without checks in the project's configuration, except a sign-in as
+  someone else and a `config set`/`unset`, `configurations delete` or `rename` that would move a
+  registered project's configuration off its account or project. `Sign in now?` runs
+  `gcloud auth login EMAIL`. A project without a Google Cloud account runs `gcloud` as before.
+  `keyfit init` offers both after Convex; `doctor` shows the configuration and gcloud's folder.
+  Verified with gcloud 580.0.0.
 - **`Bind this folder now? [Y/n]`.** When you start a tool yourself in a terminal and a Cloudflare check
   fails only because the project's folder isn't bound to its wrangler profile (a new worktree, say),
   Keyfit offers to run `wrangler auth activate NAME FOLDER` with the project's wrangler, checks again
@@ -38,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused, and so is `copilot login` where the project has a Copilot account (it would change only
   Copilot's own login). The fixes are gh's sign-ins, which Keyfit prints and never runs. `keyfit init`
   offers Copilot CLI right after OpenCode when the project has a GitHub account; `doctor` shows the
-  account and Copilot's folder; `setup` writes ten shims. Verified with Copilot CLI 1.0.97.
+  account and Copilot's folder. Verified with Copilot CLI 1.0.97.
 - **OpenCode, the third agent (ninth tool).** `opencode` starts with the project's accounts, checked,
   like `claude` and `codex`. OpenCode 2 keeps every sign-in in its SQLite database, which
   `OPENCODE_DB` moves, so an OpenCode account is a database: `keyfit add opencode` records OpenCode's
