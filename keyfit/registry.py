@@ -45,8 +45,8 @@ from . import tomlwrite
 # never injected or checked, only mentioned by `keyfit status` so they can be removed from registry.toml.
 LEGACY_KINDS = ("workos", "bitwarden")
 # Connections checked against the project's one Google account (`google = "work"`, its email): each gets the email as
-# `account`, None while the project has none. The firebase CLI and Gemini CLI join later.
-GOOGLE_TOOLS = ("gcloud",)
+# `account`, None while the project has none. Gemini CLI joins later.
+GOOGLE_TOOLS = ("gcloud", "firebase")
 
 
 class RegistryError(ValueError):
