@@ -355,6 +355,13 @@ class ShimTests(SupabaseCase):
         self.assertEqual(env["SUPABASE_ACCESS_TOKEN"], GLOBEX)  # the user's own variable stays
         self.assertEqual(self.stderr, "")
 
+    def test_dry_run_prints_a_project_without_supabase_instead_of_running_it(self):
+        code, argv, _ = self.run_shim("db", "push", cwd=self.repos["plain"], KEYFIT_DRY_RUN="1")
+        self.assertEqual((code, argv), (0, None), self.stderr)  # never started
+        self.assertIn("keyfit: project plain has no supabase account mapped: supabase runs without checks, as before "
+                      "Keyfit\n  would run: ", self.stderr)
+        self.assertIn("supabase db push\n  environment changes (names only): ", self.stderr)
+
     def test_unregistered_folder_passes_through(self):
         code, argv, env = self.run_shim("--profile", "staging", "link", "--project-ref", GLOBEX_REF, cwd=self.outside,
                                         SUPABASE_ACCESS_TOKEN=GLOBEX)
