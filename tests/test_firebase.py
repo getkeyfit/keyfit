@@ -436,6 +436,11 @@ class AdapterTests(FirebaseCase):
         self.assertEqual(firebase.words(["use", "staging", "--alias", "x", "--json"]), ["use", "staging"])
         self.assertEqual(firebase.words(["--some-option", "login:use", ACME]), [])  # unclear: never a sign-in command
         self.assertEqual(firebase.words(["login", "--reauth", "--no-localhost"]), ["login"])
+        self.assertEqual(firebase.options(["-jP", "x", "deploy", "-ic", "y.json", "-P=z"]),
+                         [("--project", "x"), ("--config", "y.json"), ("--project", "=z")])  # as commander groups them
+        self.assertEqual(firebase.words(["-jP", "x", "use", "y"]), ["use", "y"])
+        self.assertEqual(firebase.words(["-ji", "use", "y"]), ["use", "y"])
+        self.assertEqual(firebase.words(["-m", "a message", "use", "y"]), [])  # an option Keyfit does not know
 
     def test_access_token_of_a_real_process(self):
         self.expire(ACME)
@@ -517,6 +522,7 @@ class ShimTests(FirebaseCase):
                             (["deploy", "-P", "staging"], "refusing --project staging"),  # an alias of another project
                             (["deploy", "--project=side-project-1"], "refusing --project side-project-1"),
                             (["-Pglobex-app", "deploy"], "refusing --project globex-app"),
+                            (["-jP", "globex-app", "deploy"], "refusing --project globex-app"),
                             (["--account", GLOBEX, "deploy"], f"refusing --account {GLOBEX}"),
                             (["deploy", "--token", "1//x"], "refusing --token")):
             code, argv, _ = self.run_shim(*args)
