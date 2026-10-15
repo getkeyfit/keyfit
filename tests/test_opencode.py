@@ -70,7 +70,8 @@ if args == ["auth", "list", "--standalone", "--format", "json"]:
         for provider, label in sqlite3.connect(db).execute("SELECT integration_id, label FROM credential"):
             found.setdefault(provider, []).append({"type": "credential", "id": "x", "label": label, "method": "key"})
     for var, provider in (("ANTHROPIC_API_KEY", "anthropic"), ("OPENAI_API_KEY", "openai"),
-                          ("OPENROUTER_API_KEY", "openrouter"), ("CLOUDFLARE_ACCOUNT_ID", "cloudflare-ai-gateway")):
+                          ("OPENROUTER_API_KEY", "openrouter"), ("GROQ_API_KEY", "groq"),
+                          ("AWS_BEARER_TOKEN_BEDROCK", "amazon-bedrock"), ("CLOUDFLARE_ACCOUNT_ID", "cloudflare-ai-gateway")):
         if os.environ.get(var):
             found.setdefault(provider, []).append({"type": "env", "name": var})
     print(json.dumps([{"id": p, "name": p.title(), "connections": c} for p, c in sorted(found.items())]))
@@ -84,7 +85,7 @@ if args[:2] == ["auth", "login"] and args[-1] == "--standalone":
     sys.exit(0)
 print(json.dumps({"argv": args, "env": {k: os.environ.get(k) for k in (
     "OPENCODE_DB", "OPENCODE_CONFIG_CONTENT", "KEYFIT_OPENCODE_CONFIG", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY",
-    "GITHUB_TOKEN", "AWS_PROFILE", "KEYFIT_PROJECT")}}))
+    "GROQ_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "GITHUB_TOKEN", "AWS_PROFILE", "KEYFIT_PROJECT")}}))
 """
 
 LINEAR = {"type": "remote", "url": "https://mcp.linear.app/mcp"}
@@ -125,7 +126,9 @@ class AdapterTests(unittest.TestCase):
         self.assertLessEqual(keys.items(), env.items())  # Claude and Codex sessions of the project keep them
         scrub(env)  # where OpenCode starts
         self.assertFalse(set(keys) & set(env))
-        self.assertEqual(env["OPENROUTER_API_KEY"], "kept")  # not one of the providers Keyfit scrubs
+        self.assertEqual(env["OPENROUTER_API_KEY"], "kept")  # not one of the fixed ones: only once the check saw it
+        scrub(env, ["OPENROUTER_API_KEY"])
+        self.assertNotIn("OPENROUTER_API_KEY", env)
 
     def test_other_agents_sessions_keep_provider_keys(self):
         project = Project("demo", [str(self.tmp)], {"opencode": self.conn})
@@ -188,19 +191,43 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(check.fix, "opencode auth login openai --standalone")
         self.assertFalse(db.exists())
 
-    def test_shell_key_next_to_the_sign_in_fails(self):
-        database(self.db, ("anthropic", "Anthropic"), ("openrouter", "OpenRouter"))
-        # Keyfit scrubs the providers that matter; another provider's key from the shell competes with its sign-in
-        _, check = self.verify(OPENROUTER_API_KEY="sk-or")
-        self.assertTrue(check.failed)
-        self.assertEqual(check.detail, "OPENROUTER_API_KEY from your shell would compete with the project's "
-                                       "Openrouter sign-in")
-        self.assertEqual(check.fix, "unset OPENROUTER_API_KEY (or remove it from your shell startup file)")
-
-    def test_variables_of_providers_without_a_sign_in_are_left_alone(self):
+    def test_shell_keys_opencode_reports_are_named_and_left_out(self):
         database(self.db, ("anthropic", "Anthropic"))
+        # providers outside the account: OpenCode would offer them, billed to the keys in your shell
+        _, check = self.verify(GROQ_API_KEY="gsk-never-shown", AWS_BEARER_TOKEN_BEDROCK="bedrock-never-shown")
+        self.assertEqual(check.status, "warn")
+        self.assertEqual(check.detail, "anthropic signed in · confirmed by OpenCode · AWS_BEARER_TOKEN_BEDROCK, "
+                                       "GROQ_API_KEY from your shell, not the project's account: left out of "
+                                       "OpenCode sessions")
+        self.assertEqual(check.scrub, ("AWS_BEARER_TOKEN_BEDROCK", "GROQ_API_KEY"))
+        self.assertNotIn("never-shown", json.dumps(check.__dict__))  # names, never values
+
+    def test_shell_key_next_to_the_sign_in_is_left_out_too(self):
+        database(self.db, ("anthropic", "Anthropic"), ("openrouter", "OpenRouter"))
+        _, check = self.verify(OPENROUTER_API_KEY="sk-or")
+        self.assertEqual(check.status, "warn")  # it no longer competes: the session starts without it
+        self.assertEqual(check.scrub, ("OPENROUTER_API_KEY",))
+        self.assertIn("OPENROUTER_API_KEY from your shell, not the project's account", check.detail)
+
+    def test_settings_that_are_not_keys_are_left_alone(self):
+        database(self.db, ("anthropic", "Anthropic"))
+        # OpenCode lists CLOUDFLARE_ACCOUNT_ID (Cloudflare AI Gateway), which Keyfit sets for a Cloudflare account
         _, check = self.verify(CLOUDFLARE_ACCOUNT_ID="0" * 32, ANTHROPIC_API_KEY="sk-a")
-        self.assertEqual(check.status, "ok", check.detail)
+        self.assertEqual((check.status, check.scrub), ("ok", ()), check.detail)
+
+    def test_a_cached_check_keeps_the_names_it_saw(self):
+        database(self.db, ("anthropic", "Anthropic"))
+        project = Project("demo", [str(self.tmp)], {"opencode": self.conn})
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.tmp / "keyfit")}):
+            env = environment.build(project, self.env(GROQ_API_KEY="gsk-shell"))
+            first, = environment.verify(project, env, use_cache=True)
+            executable(self.bin / "opencode", "#!/bin/sh\necho 'Error: not asked again' >&2\nexit 1\n")
+            again, = environment.verify(project, env, use_cache=True)  # from the cache: opencode is not run
+            self.assertEqual((again.status, again.scrub, again.detail), (first.status, ("GROQ_API_KEY",), first.detail))
+            renewed, = environment.verify(project, {**env, "OPENROUTER_API_KEY": "sk-or"}, use_cache=True)
+            self.assertEqual(renewed.detail, "Error: not asked again")  # a new key: checked again
+            cached = json.loads((self.tmp / "keyfit" / "cache" / "checks.json").read_text())
+            self.assertNotIn("gsk-shell", json.dumps(cached))
 
     def test_opencode_must_see_the_sign_ins(self):
         database(self.db, ("anthropic", "Anthropic"))
@@ -248,6 +275,10 @@ class AdapterTests(unittest.TestCase):
         third = self.adapter.fingerprint(self.conn, {**env, "OPENROUTER_API_KEY": "x"})
         self.assertNotEqual(second, third)
         self.assertEqual(third, self.adapter.fingerprint(self.conn, {**env, "OPENROUTER_API_KEY": "y"}))  # names only
+        # every name OpenCode could report as a key, not only *_API_KEY and *_TOKEN; Keyfit's own variables are not
+        self.assertNotEqual(second, self.adapter.fingerprint(self.conn, {**env, "AWS_BEARER_TOKEN_BEDROCK": "x"}))
+        self.assertEqual(second, self.adapter.fingerprint(self.conn, {**env, "KEYFIT_SHIM_DEPTH": "1",
+                                                                       "CLOUDFLARE_ACCOUNT_ID": "0" * 32}))
 
 
 class McpTests(unittest.TestCase):
@@ -397,6 +428,22 @@ class ShimTests(unittest.TestCase):
         self.assertEqual((env["OPENCODE_DB"], env["KEYFIT_PROJECT"], env["AWS_PROFILE"]), (str(self.db), "demo", "iam"))
         self.assertIsNone(env["ANTHROPIC_API_KEY"])
         self.assertEqual(sorted(json.loads(env["OPENCODE_CONFIG_CONTENT"])["mcp"]), ["globex_cloud_eu"])
+
+    def test_shell_keys_opencode_reports_are_left_out_also_on_a_cached_start(self):
+        database(self.db, ("anthropic", "Anthropic"))
+        keys = {"GROQ_API_KEY": "gsk-shell", "OPENROUTER_API_KEY": "sk-or-shell", "CLOUDFLARE_ACCOUNT_ID": "0" * 32}
+        out = self.run_tool(**keys)
+        env = self.started(out)["env"]
+        self.assertEqual((env["GROQ_API_KEY"], env["OPENROUTER_API_KEY"]), (None, None))
+        self.assertEqual(env["CLOUDFLARE_ACCOUNT_ID"], "0" * 32)  # not a key
+        self.assertIn("keyfit: ! opencode   work   anthropic signed in · confirmed by OpenCode · GROQ_API_KEY, "
+                      "OPENROUTER_API_KEY from your shell, not the project's account: left out of OpenCode sessions",
+                      out.stderr)
+        log = self.home / "opencode-calls.log"
+        log.unlink()
+        env = self.started(self.run_tool(**keys))["env"]  # the cached check: OpenCode is not asked again
+        self.assertEqual((env["GROQ_API_KEY"], env["OPENROUTER_API_KEY"]), (None, None))
+        self.assertEqual([call["argv"] for call in map(json.loads, log.read_text().splitlines())], [["--standalone"]])
 
     def test_run_and_its_message(self):
         database(self.db, ("anthropic", "Anthropic"))
