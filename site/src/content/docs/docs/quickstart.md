@@ -28,7 +28,7 @@ The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkou
 ## Quickstart
 
 ```bash
-keyfit setup --rc     # shims for claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler and convex, plus one line in your shell startup file
+keyfit setup --rc     # shims for claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler, convex and gcloud, plus one line in your shell startup file
 ```
 
 Open a new terminal, then go to a repository of one of your clients (a repository, not your home folder: everything under the folder you register belongs to that project):
@@ -50,9 +50,11 @@ claude                # starts with this project's accounts, checked
 - **Supabase:** whether to use the login the `supabase` CLI has now. Keyfit keeps a copy of its token in the macOS Keychain (macOS may ask once to allow that).
 - **Cloudflare:** the wrangler sign-in (auth profile) bound to the repository's folder, and the Cloudflare account it deploys to. Keyfit keeps no Cloudflare token: wrangler keeps the sign-in, Keyfit checks it.
 - **Convex:** whether to use the login the `convex` CLI has now (`npx convex login`). Keyfit records the team the project's deployment belongs to.
+- **Google:** the project's one Google account, the work or the personal email, picked from the accounts `gcloud` is signed in to. Every Google tool of the project is checked against it: `gcloud` now, the firebase CLI and Gemini CLI later.
+- **Google Cloud:** a gcloud configuration signed in as that account, and the Google Cloud project it works on. Keyfit keeps no Google token: gcloud keeps the sign-in, Keyfit checks it.
 - **Linear:** a personal API key, typed at a hidden prompt. Keyfit checks it with Linear, then stores it in the macOS Keychain.
 
-Skipped accounts are simply not checked, with one catch: inside the project, `aws`, `gh` and `vercel` start only once it has an AWS, GitHub or Vercel account. Skip GitHub, and `gh` waits in that repository until you run `keyfit add github --login <login>`. `keyfit status` lists what is still unmapped. `supabase`, `wrangler` and `convex` are the exceptions: many projects use them only locally (`supabase start`, `wrangler dev`, an anonymous local Convex deployment), so without a Supabase, Cloudflare or Convex account they run as before.
+Skipped accounts are simply not checked, with one catch: inside the project, `aws`, `gh` and `vercel` start only once it has an AWS, GitHub or Vercel account. Skip GitHub, and `gh` waits in that repository until you run `keyfit add github --login <login>`. `keyfit status` lists what is still unmapped. `supabase`, `wrangler`, `convex` and `gcloud` are the exceptions: many projects use them only locally (`supabase start`, `wrangler dev`, an anonymous local Convex deployment, `gcloud components`), so without a Supabase, Cloudflare, Convex or Google Cloud account they run as before.
 
 It ends with `keyfit status`:
 
@@ -65,6 +67,8 @@ acme-api
   ✔ supabase  Acme   token, organization and linked project abcdefghijklmnopqrst confirmed
   ✔ cloudflare acme → Acme   bound at ~/code/acme-api · profile and account confirmed
   ✔ convex    Acme   login, team and deployment happy-animal-123 (acme-web) confirmed
+  ✔ google    me@acme.com
+  ✔ gcloud    acme → acme-prod   me@acme.com · account and project confirmed
   ✔ claude    Acme   Acme (team) confirmed
   ✔ codex     ChatGPT pro   subscription login, no API key
   ✔ opencode  default   anthropic, openai signed in · confirmed by OpenCode
