@@ -704,9 +704,9 @@ class AddTests(unittest.TestCase):
         self.assertIn("--key takes where the key lives", err)
         self.assertNotIn(KEY, err)
 
-    def test_init_offers_gemini_after_google_cloud(self):
+    def test_init_offers_gemini_after_the_other_google_tools(self):
         kinds = [kind for kind, _, _ in cli.GUIDED]
-        self.assertEqual(kinds.index("gemini"), kinds.index("gcloud") + 1)
+        self.assertEqual(kinds.index("gemini"), kinds.index("firebase") + 1)
         base = {"registry": None, "project": "acme"}
         with mock.patch.object(cli, "_ask") as ask, contextlib.redirect_stdout(io.StringIO()) as out:
             cli._offer_gemini("acme", base)
