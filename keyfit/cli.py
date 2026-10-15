@@ -1667,7 +1667,7 @@ def cmd_add_google_mcp(args) -> int:
     reg.set_connection(project.name, "google-mcp", account)
     reg.save()
     print(f"{project.name}: google-mcp '{account}' → {name} ({google_mcp_adapter.TYPES[kind].title}, {tilde(login)}), "
-          f"signed in as {email}; hidden in every other project")
+          f"checked against {email}; hidden in every other project")
     others = sorted(p for p, b in reg.data["projects"].items() if p != project.name and b.get("google-mcp") == account)
     if others:
         print(f"  account '{account}' is shared: {', '.join(others)} take{'s' if len(others) == 1 else ''} {name} too")
