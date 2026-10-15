@@ -12,20 +12,25 @@ The servers (their packages were read at the versions named; none was run):
                        GOOGLE_MCP_CREDENTIALS_DIR, else ~/.google_workspace_mcp/credentials), with one <email>.json per
                        account, named after the email Google gave at sign-in. A call may name any of them
                        (user_google_email), so the folder must hold the project's account only. Its tokens carry
-                       userinfo.email: tokeninfo names the account.
+                       userinfo.email: tokeninfo names the account. Each file holds its OAuth client too.
   gmail-autoauth       npm @gongrzhe/server-gmail-autoauth-mcp 1.1.11: GMAIL_CREDENTIALS_PATH (else
                        ~/.gmail-mcp/credentials.json): tokens with Gmail scopes only and no email. Gmail's profile names
                        the account while the saved token is valid, and the server never saves a renewed one: that is
-                       the hour after its sign-in. After it, Keyfit cannot tell whose login it is, and says so.
+                       the hour after its sign-in. Its OAuth client: GMAIL_OAUTH_PATH, else
+                       ~/.gmail-mcp/gcp-oauth.keys.json ("installed" or "web").
   google-calendar-mcp  npm @cocal/google-calendar-mcp 2.7.0: GOOGLE_CALENDAR_MCP_TOKEN_PATH (else
                        $XDG_CONFIG_HOME/google-calendar-mcp/tokens.json): accounts by nickname, all usable by a call,
                        each with the email the server noted once it used it (cached_email). The primary calendar's ID
-                       names the account.
+                       names the account. Its OAuth client: GOOGLE_OAUTH_CREDENTIALS (else a file inside the
+                       package, which Keyfit does not look for).
   google-drive-mcp     npm @piotr-agier/google-drive-mcp 2.13.0: GOOGLE_DRIVE_MCP_TOKEN_PATH (else
                        $XDG_CONFIG_HOME/google-drive-mcp/tokens.json): {version: 2, accounts: {alias: {email, …}}}, all
-                       usable by a call. Its tokens carry userinfo.email: tokeninfo names the account.
+                       usable by a call. Its tokens carry userinfo.email: tokeninfo names the account. Its OAuth
+                       client: GOOGLE_DRIVE_OAUTH_CREDENTIALS, else gcp-oauth.keys.json in
+                       $XDG_CONFIG_HOME/google-drive-mcp.
   other                any other server: one JSON token file, given with --login; the email from its id_token (or an
-                       email field), and online from tokeninfo when its scopes include the email.
+                       email field), and online from tokeninfo when its scopes include the email. Its OAuth client
+                       only if the file holds one (client_id and client_secret).
 
 inject  — removes inherited variables that would point a server at another login (TYPES' path variables and
           USER_GOOGLE_EMAIL), so each server reads what its definition says, which is what Keyfit checked.
@@ -33,10 +38,14 @@ local   — every definition of a claimed server in the five agents' configs (yo
           reads the recorded login, and every account in that login is the project's Google account. Only labels are
           read (file names and emails), never a token. Not signed in yet is a warning, not a block: no account can be
           wrong.
-remote  — while a saved access token is still valid, Google (tokeninfo with the token in the request body, else Gmail's
-          profile or the primary calendar with it in a header) must name the project's account. An expired token is
-          not renewed (that would take the refresh token and the server's OAuth client): the local check decides, and
-          a login that names no account is reported as not confirmed — a warning, shown when an agent starts.
+remote  — Google (tokeninfo with the token in the request body, else Gmail's profile or the primary calendar with it in a
+          header) must name the project's account: asked with the saved access token while it is valid, else with a
+          fresh one renewed as the server itself would (TOKEN, pinned: a token_uri in a file is never followed; the
+          refresh token and the server's own OAuth client in the request body). The fresh token is used for that one
+          question and dropped; nothing is written to the login, and the refresh token, client secret and fresh token
+          are never kept, shown or cached. The only place Keyfit uses a refresh token. Without a refresh token or
+          client, the local check decides, and a login that names no account is reported as not confirmed — a
+          warning, shown when an agent starts.
 mcp     — the claimed servers belong to the project (Project.mcp_claims), so every other project's sessions do not see
           them; in a project with this connection every other Google Workspace server is hidden (mcp.hidden).
 """
@@ -62,10 +71,14 @@ from .gemini import _claims
 from .google import EMAIL, same
 
 KIND = "google-mcp"
+TOKEN = "https://oauth2.googleapis.com/token"  # where every one of the servers renews its token (google-auth)
 GMAIL_PROFILE = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
 PRIMARY_CALENDAR = "https://www.googleapis.com/calendar/v3/calendars/primary"
 NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")  # every agent can hide it (Codex: no dot or "="; Gemini CLI: no comma)
 EXPIRY_MARGIN = 60  # seconds: a token about to expire is treated as expired
+NO_REFRESH = "its saved token has expired, with no refresh token to renew it"
+NO_CLIENT = "its saved token has expired, with no OAuth client found to renew it"
+ERROR = re.compile(r"[a-z_]{1,40}")  # an OAuth error code, safe to show
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}"  # ${VAR}, ${VAR:-default}, $VAR, {env:VAR}
                  r"|\$([A-Za-z_][A-Za-z0-9_]*)|\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -80,6 +93,8 @@ class Type:
     whoami: str = TOKENINFO  # what names the account of a valid token, and in which field
     field: str = "email"
     sign_in: str = ""  # its own sign-in command
+    client: tuple[str, ...] = ()  # the variables naming its OAuth client file; without them, the login holds the client
+    client_default: tuple[str, ...] = ()  # the client file's place without them (under home, or XDG_CONFIG_HOME: config)
 
 
 TYPES = {
@@ -87,12 +102,16 @@ TYPES = {
                           (".google_workspace_mcp", "credentials"), folder=True),
     "gmail-autoauth": Type("Gmail AutoAuth MCP", ("GMAIL_CREDENTIALS_PATH",), (".gmail-mcp", "credentials.json"),
                            whoami=GMAIL_PROFILE, field="emailAddress",
-                           sign_in="npx @gongrzhe/server-gmail-autoauth-mcp auth"),
+                           sign_in="npx @gongrzhe/server-gmail-autoauth-mcp auth", client=("GMAIL_OAUTH_PATH",),
+                           client_default=(".gmail-mcp", "gcp-oauth.keys.json")),
     "google-calendar-mcp": Type("Google Calendar MCP", ("GOOGLE_CALENDAR_MCP_TOKEN_PATH",),
                                 ("google-calendar-mcp", "tokens.json"), config=True, whoami=PRIMARY_CALENDAR,
-                                field="id", sign_in="npx @cocal/google-calendar-mcp auth"),
+                                field="id", sign_in="npx @cocal/google-calendar-mcp auth",
+                                client=("GOOGLE_OAUTH_CREDENTIALS",)),
     "google-drive-mcp": Type("Google Drive MCP", ("GOOGLE_DRIVE_MCP_TOKEN_PATH",), ("google-drive-mcp", "tokens.json"),
-                             config=True, sign_in="npx @piotr-agier/google-drive-mcp auth"),
+                             config=True, sign_in="npx @piotr-agier/google-drive-mcp auth",
+                             client=("GOOGLE_DRIVE_OAUTH_CREDENTIALS",),
+                             client_default=("google-drive-mcp", "gcp-oauth.keys.json")),
     "other": Type("a Google server"),
 }
 SCRUB = ("USER_GOOGLE_EMAIL", *(var for kind in TYPES.values() for var in kind.variables))
@@ -113,14 +132,17 @@ def _path(value: str, env: dict, cwd: Path) -> Path:
     return canonical(path if path.is_absolute() else cwd / path)
 
 
-def default_login(kind: str, env: dict) -> Path | None:
-    """Where a server of *kind* keeps its login when its definition names none."""
-    t = TYPES[kind]
-    if not t.default:
+def _default(kind: str, parts: tuple[str, ...], env: dict) -> Path | None:
+    if not parts:
         return None
     home = Path(env.get("HOME") or Path.home())
-    base = Path(env.get("XDG_CONFIG_HOME") or home / ".config") if t.config else home
-    return canonical(base.joinpath(*t.default))
+    base = Path(env.get("XDG_CONFIG_HOME") or home / ".config") if TYPES[kind].config else home
+    return canonical(base.joinpath(*parts))
+
+
+def default_login(kind: str, env: dict) -> Path | None:
+    """Where a server of *kind* keeps its login when its definition names none."""
+    return _default(kind, TYPES[kind].default, env)
 
 
 def login_of(kind: str, spec: dict, env: dict, cwd: Path) -> Path | None:
@@ -166,15 +188,19 @@ def _first(data: dict, *keys) -> str | None:
 
 def _record(data: dict, email: str | None = None) -> dict | None:
     """One sign-in, from a token record in any of the shapes these servers write: {"email" (None when the record names
-    no account), "token" (the access token, for the remote check only), "expiry"}; None when it holds no token."""
-    token = _first(data, "access_token", "token", "accessToken")
-    if token is None and _first(data, "refresh_token", "refreshToken") is None:
+    no account), "token" (the access token), "expiry", "refresh" (the refresh token) and "client" (the OAuth client
+    the record holds: workspace-mcp's, (ID, secret) or None)}; None when it holds no token. The tokens and the client
+    are for the remote check only, held in memory while it runs."""
+    token, refresh = _first(data, "access_token", "token", "accessToken"), _first(data, "refresh_token", "refreshToken")
+    if token is None and refresh is None:
         return None
     if email is None:
         named = (data.get("email"), data.get("cached_email"), _claims(data.get("id_token")).get("email"))
         email = next((e for e in named if isinstance(e, str) and EMAIL.fullmatch(e)), None)
     expiry = next((data[k] for k in ("expiry_date", "expiryDate", "expiry") if data.get(k) is not None), None)
-    return {"email": email if email and EMAIL.fullmatch(email) else None, "token": token, "expiry": _when(expiry)}
+    client = _first(data, "client_id"), _first(data, "client_secret")
+    return {"email": email if email and EMAIL.fullmatch(email) else None, "token": token, "expiry": _when(expiry),
+            "refresh": refresh, "client": client if all(client) else None}
 
 
 def read(kind: str, login: Path) -> tuple[list[dict] | None, str]:
@@ -252,17 +278,69 @@ def own_login(name: str, kind: str, account: str) -> str:
     return f"give {name} a login of its own for {account} (set {where}), sign in there, then: {add}"
 
 
+def client_file(path: Path) -> tuple[str, str] | None:
+    """The OAuth client (ID, secret) in a gcp-oauth.keys.json, as the servers read it: under "installed", else "web",
+    else at the top."""
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    part = next((data[k] for k in ("installed", "web") if k in data), data)
+    client = (_first(part, "client_id"), _first(part, "client_secret")) if isinstance(part, dict) else (None, None)
+    return client if all(client) else None
+
+
+def client_of(name: str, kind: str, env: dict, cwd: Path) -> tuple[str, str] | None:
+    """The OAuth client a server of *kind* renews its token with: the file its variable names (in a definition of
+    *name*, else in the session's environment), else the server's default file."""
+    t = TYPES[kind]
+    for _, defined, spec in mcp.definitions(env, cwd):
+        own = mcp.spec_env(spec) if defined == name else {}
+        var = next((v for v in t.client if own.get(v)), None)
+        if var:
+            return client_file(_path(own[var], env, cwd))
+    var = next((v for v in t.client if env.get(v)), None)
+    path = _path(env[var], env, cwd) if var else _default(kind, t.client_default, env)
+    return client_file(path) if path else None
+
+
 def _fetch(url: str, token: str, timeout: float) -> tuple[int, object]:
     from .gcloud import _fetch as fetch  # tokeninfo gets the token in the body, the others in a header
 
     return fetch(url, token, timeout)
 
 
+def _renew(refresh: str, client: tuple[str, str], timeout: float) -> tuple[int, object]:
+    """Google's answer to the request each of the servers makes to renew its token (google-auth's refresh grant): the
+    refresh token and the client in the body of a POST to TOKEN, which is pinned. Its error answers are read too
+    ({"error": "invalid_grant"} when the sign-in was signed out or revoked)."""
+    import urllib.error  # only when a check goes online
+    import urllib.request
+
+    from .. import http
+
+    body = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": refresh, "client_id": client[0],
+                                   "client_secret": client[1]}).encode()
+    req = urllib.request.Request(TOKEN, data=body, method="POST", headers={
+        "User-Agent": "keyfit", "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with http.urlopen(req, timeout) as resp:
+            return resp.status, json.loads(resp.read() or b"null")
+    except urllib.error.HTTPError as err:
+        try:
+            return err.code, json.loads(err.read() or b"null")
+        except (OSError, ValueError):
+            return err.code, None
+
+
 class GoogleMcpAdapter(Adapter):
     kind = KIND
 
-    def __init__(self, fetch=_fetch, timeout: float = 15):
+    def __init__(self, fetch=_fetch, renew=_renew, timeout: float = 15):
         self.fetch = fetch
+        self.renew = renew
         self.timeout = timeout
 
     def label(self, conn) -> str:
@@ -372,6 +450,9 @@ class GoogleMcpAdapter(Adapter):
         return None
 
     def remote(self, conn, env: dict) -> Check:
+        return self.check_remote(conn, env, Path.cwd())
+
+    def check_remote(self, conn, env: dict, cwd: Path) -> Check:
         label, account = self.label(conn), conn["account"]
         table = servers(conn)
         notes, fixes, status = [], [], "ok"
@@ -380,7 +461,7 @@ class GoogleMcpAdapter(Adapter):
             entries, _ = read(kind, login)
             if not entries:
                 continue  # the local check said why
-            result = self._confirm(name, kind, login, entries, account, env)
+            result = self._confirm(name, kind, login, entries, account, env, cwd)
             if result.failed:
                 result.label = label
                 result.detail = f"{name}: {result.detail}" if len(table) > 1 else result.detail
@@ -394,22 +475,27 @@ class GoogleMcpAdapter(Adapter):
         detail = "; ".join(f"{n}: {note}" if len(notes) > 1 else note for n, note in notes)
         return Check(KIND, status, label, detail, fixes[0] if fixes else "")
 
-    def _confirm(self, name: str, kind: str, login: Path, entries: list[dict], account: str, env: dict) -> Check:
-        """Ask Google about every sign-in of one login whose saved token is still valid."""
+    def _confirm(self, name: str, kind: str, login: Path, entries: list[dict], account: str, env: dict,
+                 cwd: Path) -> Check:
+        """Ask Google about every sign-in of one login: with its saved token while that is valid, else with a fresh
+        one renewed from its refresh token (used for this one question, then dropped)."""
         t = TYPES[kind]
-        expired = "the token has expired; the server renews it"
         unconfirmed, unknown = "", ""  # why Google named no account: for a sign-in the login names, for one it does not
+        client, looked = None, not t.client  # the server's OAuth client file, read once and only when one is needed
         for entry in entries:
             token = _valid(entry)
-            if token is None:  # renewing it would take the server's own OAuth client: the server does when it runs
-                why = expired
-            else:
+            if token is None:
+                if not looked:
+                    client, looked = client_of(name, kind, env, cwd), True
+                token, why, failed = self._fresh(name, kind, login, entry, client if t.client else entry["client"],
+                                                 account, env)
+                if failed:
+                    return failed
+            if token is not None:
                 try:
                     code, body = self.fetch(t.whoami, token, self.timeout)
                 except (OSError, ValueError) as err:
-                    return Check(KIND, "fail", name,
-                                 f"Google did not answer ({getattr(err, 'reason', None) or type(err).__name__})",
-                                 "check the network and retry", transient=True)
+                    return _offline(name, err)
                 if code in (400, 401):
                     return Check(KIND, "fail", name, f"Google does not accept the token in {tilde(login)} (signed out "
                                                      f"or revoked)", sign_in(name, kind, login, account, env))
@@ -432,11 +518,44 @@ class GoogleMcpAdapter(Adapter):
                 unknown = unknown or why
         if unknown:
             fix = sign_in(name, kind, login, account, env)
-            if unknown == expired:
-                unknown = "its saved token has expired"
+            if unknown == NO_CLIENT and t.client:
+                fix = f"set {t.client[0]} in {name}'s env in your agents' MCP configs to its OAuth client file"
+            elif unknown in (NO_CLIENT, NO_REFRESH):
                 fix = f"sign in again, then start the agent within the hour: {fix}"
             return Check(KIND, "warn", name, f"account not confirmed: {tilde(login)} names no account, and {unknown}",
                          fix)
         if unconfirmed:
             return Check(KIND, "ok", name, f"not confirmed online ({unconfirmed})")
         return Check(KIND, "ok", name, "confirmed by Google")
+
+    def _fresh(self, name: str, kind: str, login: Path, entry: dict, client: tuple[str, str] | None, account: str,
+               env: dict) -> tuple[str | None, str, Check | None]:
+        """A fresh access token for a sign-in whose saved one has expired: (token, "", None); (None, why not, None) when
+        it can't be renewed and the local check decides; or (None, "", the failed check)."""
+        if not entry["refresh"]:
+            return None, NO_REFRESH, None
+        if client is None:
+            return None, NO_CLIENT, None
+        try:
+            code, body = self.renew(entry["refresh"], client, self.timeout)
+        except (OSError, ValueError) as err:
+            return None, "", _offline(name, err)
+        body = body if isinstance(body, dict) else {}
+        token, error = body.get("access_token"), body.get("error")
+        if code == 200 and isinstance(token, str) and token:
+            return token, "", None
+        if error == "invalid_grant":  # signed out, revoked, or a password change: the server can't renew it either
+            return None, "", Check(KIND, "fail", name, f"Google does not accept the sign-in in {tilde(login)} (signed "
+                                                       f"out or revoked)", sign_in(name, kind, login, account, env))
+        if code >= 500 or code == 429:
+            return None, "", Check(KIND, "fail", name, f"Google answered {code}", "check the network and retry",
+                                   transient=True)
+        if code in (200, 400, 401):  # e.g. invalid_client: not the client this sign-in was made with
+            said = error if isinstance(error, str) and ERROR.fullmatch(error) else str(code)
+            return None, f"Google did not renew its token: {said}", None
+        return None, "", Check(KIND, "fail", name, f"Google answered {code}", "check the network and retry")
+
+
+def _offline(name: str, err: Exception) -> Check:
+    return Check(KIND, "fail", name, f"Google did not answer ({getattr(err, 'reason', None) or type(err).__name__})",
+                 "check the network and retry", transient=True)
