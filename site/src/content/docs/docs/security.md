@@ -117,7 +117,7 @@ Keyfit's own requests use HTTPS with certificate and hostname checks (Python's d
 
 ## How to audit it
 
-- `KEYFIT_DRY_RUN=1 claude` in a project runs the checks and prints the real binary, the arguments Keyfit adds (including the `--settings` JSON with the hidden MCP servers) and the names of the variables it changes. It starts nothing.
+- `KEYFIT_DRY_RUN=1 claude` in a project runs the checks and prints the real binary, the arguments Keyfit adds (including the `--settings` JSON with the hidden MCP servers) and the names of the variables it changes, without starting the tool. Commands that would run without checks are printed with the reason and don't start either: `supabase`, `wrangler`, `convex`, `gcloud` or `firebase` in a project without an account of their kind, and, in any folder, OpenCode's own commands (`opencode serve`, `opencode mcp`, …) and AWS profiles under `[settings] shared_aws_profiles`. Three things still start: sign-in commands, every other command in a folder that isn't registered, and anything run with `KEYFIT_DISABLE=1`.
 - `keyfit which -v` shows which project a folder belongs to, and why. `keyfit status` runs every check online.
 - `cat ~/.config/keyfit/registry.toml`, `cat ~/.config/keyfit/cache/checks.json` and `cat ~/.config/keyfit/bin/claude` show plain files with nothing secret in them.
 - `keyfit secret list`, or Keychain Access (search for "keyfit"), shows the items Keyfit stored.
