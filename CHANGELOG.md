@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Firebase, the twelfth tool.** `firebase` and every agent session are checked against the
+  project's Google account (the one `gcloud` uses too) and its Firebase project (`keyfit add
+  firebase`: the project the CLI uses in the folder, `--project-id` for another; `keyfit add google`
+  and `keyfit init` now also offer the firebase CLI's sign-ins). The firebase CLI already keeps
+  several sign-ins and binds one to each project folder (`firebase login:use`), so Keyfit keeps no
+  Google token: it reads the CLI's configstore and `.firebaserc`, and removes `FIREBASE_TOKEN` and
+  `GOOGLE_APPLICATION_CREDENTIALS`, which would act instead of the sign-in; `npx firebase-tools` in a
+  session uses the folder's binding. Before a start, the CLI must be signed in as the project's
+  Google account, its project folder (the nearest with a `firebase.json`) must use that account and
+  pick the expected Firebase project (`firebase use`, else `.firebaserc`); then Google's tokeninfo
+  must name the account for the access token the CLI keeps for it (the CLI renews an expired one
+  first, with `firebase projects:list`), and the Firebase Management API must show the project.
+  Outside every Firebase folder the CLI uses its default login: `firebase` then gets `--account`, and
+  agents a warning. Inside a project, `firebase` refuses another `--account` or `--project` (aliases
+  are resolved, `-jP` read like commander), `--token`, a `--config` folder bound to another account,
+  `firebase use` of another project, a `login:use` that would bind a registered project's folder to
+  another account (or change the default login), and a `login --reauth` that would replace the
+  default login. `login`, `login:add`, `login:use`, `login:list`, `logout` and `use` run without
+  checks. `Sign in now?` runs `firebase login:add` (or `login --reauth` for the default login), and
+  `Bind this folder now?` runs `firebase login:use EMAIL`. A project without a Firebase account runs
+  `firebase` as before. `keyfit init` offers it after Google Cloud; `doctor` shows the sign-in and
+  project the CLI uses here. Verified with firebase-tools 15.26.0.
 - **Google Cloud, the eleventh tool, and the project's Google account.** A project now says once which
   Google account it uses, the work or the personal email (`keyfit add google --email`, or picked from
   gcloud's sign-ins); every Google tool is checked against it: `gcloud` now, the firebase CLI and
