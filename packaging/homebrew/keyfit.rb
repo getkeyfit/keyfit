@@ -21,7 +21,7 @@ class Keyfit < Formula
 
   def caveats
     <<~EOS
-      Put Keyfit in front of claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler, convex, gcloud and firebase (new terminals pick it up):
+      Put Keyfit in front of claude, codex, opencode, copilot, gemini, aws, gh, vercel, supabase, wrangler, convex, gcloud and firebase (new terminals pick it up):
         keyfit setup --rc
       The shims run #{opt_libexec}/bin/python, so they survive `brew upgrade`.
       Run `keyfit setup` again if this formula ever moves to another Python version.
