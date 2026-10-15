@@ -113,7 +113,7 @@ class Machine(unittest.TestCase):
                            ("vercel", "#!/bin/sh\nexit 97\n"), ("supabase", "#!/bin/sh\nexit 97\n"),
                            ("wrangler", "#!/bin/sh\nexit 97\n"), ("convex", "#!/bin/sh\nexit 97\n"),
                            ("opencode", "#!/bin/sh\nexit 97\n"), ("copilot", "#!/bin/sh\nexit 97\n"),
-                           ("gcloud", "#!/bin/sh\nexit 97\n")):
+                           ("gcloud", "#!/bin/sh\nexit 97\n"), ("firebase", "#!/bin/sh\nexit 97\n")):
             executable(self.bin / name, text)
         self.stub = self.tmp / "stub"
         self.stub.mkdir()
@@ -487,7 +487,7 @@ class DoctorTests(Machine):
         lines = out.splitlines()
         self.assertEqual([line.split()[1] for line in lines[:-1]],
                          ["macOS", "python", "shims", "PATH", "claude", "codex", "opencode", "copilot", "aws", "gh", "vercel",
-                          "supabase", "wrangler", "convex", "gcloud", "registry", "keychain", "project"])
+                          "supabase", "wrangler", "convex", "gcloud", "firebase", "registry", "keychain", "project"])
         self.assertTrue(all(line.startswith("  ✔ ") for line in lines[:-1]), out)
         self.assertIn("first, before every real tool", out)
         self.assertIn(f"✔ gh        {self.bin / 'gh'}\n", out)
@@ -513,7 +513,7 @@ class DoctorTests(Machine):
         superset.mkdir(parents=True)
         code, out = self.doctor(self.bin, self.shims)
         self.assertEqual(code, 1)
-        self.assertIn(f"{self.bin} comes first: claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler, convex, gcloud would run without Keyfit", out)
+        self.assertIn(f"{self.bin} comes first: claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler, convex, gcloud, firebase would run without Keyfit", out)
         self.assertIn("→ make Keyfit's line (`…  # keyfit: …`) the last line of your shell startup file, "
                       "then open a new terminal", out)
         code, out = self.doctor(self.shims, superset, self.bin)

@@ -1,16 +1,16 @@
 """The shim in front of `claude`, `codex`, `opencode`, `copilot`, `aws`, `gh`, `vercel`, `supabase`, `wrangler`,
-`convex` and `gcloud` (ambient mode).
+`convex`, `gcloud` and `firebase` (ambient mode).
 
 Three outcomes only:
   folder not registered      → run the real tool unchanged
   registered, all checks ok  → run it with the project's environment (silently)
   a check fails              → do not run it; print what is wrong and the fix (in a terminal, when the fix
-                               is only a sign-in or binding a folder of the project to its wrangler profile,
-                               offer to run it and then start the tool)
+                               is only a sign-in or binding a folder of the project to its wrangler profile or
+                               firebase sign-in, offer to run it and then start the tool)
 
 Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel`, `supabase`, `wrangler`,
-`convex` and `gcloud` stay on that session's project even after `cd` elsewhere; `claude`, `codex`, `opencode` and
-`copilot` re-resolve from the folder, since starting a new agent elsewhere is deliberate.
+`convex`, `gcloud` and `firebase` stay on that session's project even after `cd` elsewhere; `claude`, `codex`,
+`opencode` and `copilot` re-resolve from the folder, since starting a new agent elsewhere is deliberate.
 Bypass once: KEYFIT_DISABLE=1 <tool> …
 """
 
@@ -22,14 +22,15 @@ import sys
 from pathlib import Path
 
 from . import cache, environment, mcp, secrets
-from .adapters import ADAPTERS, cloudflare, convex, copilot, gcloud, opencode, supabase, vercel
+from .adapters import ADAPTERS, cloudflare, convex, copilot, firebase, gcloud, opencode, supabase, vercel
 from .adapters.google import same
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
 from .resolve import resolve
 
-TOOLS = ("claude", "codex", "opencode", "copilot", "aws", "gh", "vercel", "supabase", "wrangler", "convex", "gcloud")
+TOOLS = ("claude", "codex", "opencode", "copilot", "aws", "gh", "vercel", "supabase", "wrangler", "convex", "gcloud",
+         "firebase")
 INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "npm install -g @openai/codex",
            "opencode": "brew install opencode", "copilot": "npm install -g @github/copilot",
            "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel",
@@ -37,20 +38,22 @@ INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": 
            "wrangler": "npm install -g wrangler   (projects that have it run their own: npx wrangler …)",
            "convex": "npm install -g convex   (projects that have it run their own: npx convex …)",
            "gcloud": "brew install --cask gcloud-cli",
+           "firebase": "npm install -g firebase-tools   (projects that have it run their own: npx firebase-tools …)",
            "npx": "brew install node"}
 # How to map the one account `aws`, `gh` and `vercel` need inside a project before they start there.
 MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github --login <login>",
        "vercel": "keyfit add vercel"}
 RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",),
-            "wrangler": ("cloudflare",), "convex": ("convex",), "gcloud": ("gcloud",), "claude": None, "codex": None,
-            "opencode": None, "copilot": None}
+            "wrangler": ("cloudflare",), "convex": ("convex",), "gcloud": ("gcloud",), "firebase": ("firebase",),
+            "claude": None, "codex": None, "opencode": None, "copilot": None}
 # The agents: they start with all of the project's accounts, checked.
 AGENTS = ("claude", "codex", "opencode", "copilot")
 # Tools that run unchanged in a project without an account of their kind: Supabase is often used only locally
 # (supabase start), with no account at all, and so are wrangler (wrangler dev) and convex (an anonymous local
-# deployment). gcloud keeps its own configurations, and many of its commands (components, emulators, config) need none.
-OPTIONAL = ("supabase", "wrangler", "convex", "gcloud")
-PINNED = ("aws", "gh", "vercel", "supabase", "wrangler", "convex", "gcloud")
+# deployment). gcloud keeps its own configurations, and many of its commands (components, emulators, config) need none;
+# the firebase CLI keeps its own sign-ins, and its emulators need none.
+OPTIONAL = ("supabase", "wrangler", "convex", "gcloud", "firebase")
+PINNED = ("aws", "gh", "vercel", "supabase", "wrangler", "convex", "gcloud", "firebase")
 MAX_DEPTH = 6
 CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs",
                       "mcp", "plugin", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update", "help"}
@@ -91,10 +94,12 @@ LOGIN_COMMANDS = {
     # sign-ins and configurations
     "gcloud": (("auth", "login"), ("auth", "list"), ("config", "set"), ("config", "configurations", "create"),
                ("config", "configurations", "list"), ("config", "configurations", "describe")),
+    # the fixes of a firebase check (a sign-in, binding the folder to it, the project to use) and what shows them
+    "firebase": (("login",), ("login:add",), ("login:use",), ("login:list",), ("logout",), ("use",)),
 }
 LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",),
                "supabase": ("supabase",), "wrangler": ("cloudflare",), "convex": ("convex",), "npx": ("convex",),
-               "opencode": ("opencode",), "copilot": ("copilot",), "gcloud": ("gcloud",)}
+               "opencode": ("opencode",), "copilot": ("copilot",), "gcloud": ("gcloud",), "firebase": ("firebase",)}
 # Variables sign-in commands run without: gh must manage its own tokens, Copilot CLI its own login (`copilot login`
 # takes a token from the environment instead of signing in), convex its own login (with the override set,
 # `convex login` would only say the injected token is valid), and gcloud's sign-in and `config set` write the
@@ -115,6 +120,8 @@ SIGN_INS = {
     "npx": (("convex", "login", "--force"),),  # a Convex account that is the convex CLI's own login
     "opencode": (("auth", "login", "--standalone"), ("auth", "login", None, "--standalone")),
     "gcloud": (("auth", "login", None),),  # in the project's configuration, which it then uses
+    # a first sign-in, another account, a renewed one; and binding the folder to the account (asked as a binding)
+    "firebase": (("login",), ("login", "--reauth"), ("login:add",), ("login:add", None), ("login:use", None)),
 }
 SIGN_IN_VARS = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "opencode": "OPENCODE_DB"}
 VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query", "--color", "--ca-bundle",
@@ -147,7 +154,8 @@ def positionals(args: list[str]) -> list[str]:
 
 
 def is_login_command(tool: str, args: list[str]) -> bool:
-    readers = {"supabase": supabase.words, "wrangler": cloudflare.words, "convex": convex.words, "gcloud": gcloud.words}
+    readers = {"supabase": supabase.words, "wrangler": cloudflare.words, "convex": convex.words, "gcloud": gcloud.words,
+               "firebase": firebase.words}
     words = readers.get(tool, positionals)(args)
     if tool == "convex" and words[:2] == ["login", "status"]:
         return False
@@ -197,6 +205,8 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         return wrangler_args(project, args, env, cwd)
     if tool == "convex":
         return convex_args(project, args, env, cwd)
+    if tool == "firebase":
+        return firebase_args(project, args, env, cwd)
     if tool == "claude":
         if subcommand(args, CLAUDE_SUBCOMMANDS):
             return args
@@ -726,6 +736,86 @@ def gcloud_guard(project: Project, args: list[str], registry: Registry, env: dic
                               f"{', '.join(name for name, _ in users[target])} uses that configuration.{bypass}")
 
 
+def firebase_options(project: Project, conn: dict, args: list[str]) -> None:
+    """Refuse what would leave the project's Google account or Firebase project (like `aws --profile`): another
+    --account, another --project (an alias counts as the project .firebaserc names) and --token (a token instead of
+    the account)."""
+    refuse = (f"keyfit: this folder belongs to {project.name} (Google account {conn.get('account') or 'not set'}, "
+              f"Firebase project {conn.get('project')}); refusing")
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 firebase …"
+    given = firebase.options(args)
+    configs = [value for name, value in given if name == "--config" and value]
+    names = firebase.aliases(firebase.project_root(os.getcwd(), configs[-1] if configs else None) or os.getcwd())
+    for name, value in given:
+        if name == "--token":
+            raise Refused(f"{refuse} --token: the firebase CLI would use that token instead of {project.name}'s Google "
+                          f"account and its check.{bypass}")
+        if value is None:
+            continue
+        if (name == "--account" and not same(value, conn.get("account"))) or \
+                (name == "--project" and names.get(value, value) != conn.get("project")):
+            raise Refused(f"{refuse} {name} {printable(value)}.{bypass}")
+
+
+def firebase_guard(project: Project, args: list[str], registry: Registry, env: dict) -> None:
+    """Inside a registered project: refuse the options that leave the project's Google account or Firebase project
+    (firebase_options), `firebase use` of another project, a `firebase login:use` that would bind a registered
+    project's folder to another account (outside every Firebase folder it would change the default login instead),
+    and a `firebase login --reauth` that would replace the default login (another account) with the project's."""
+    conn = project.connections.get("firebase")
+    own = conn if isinstance(conn, dict) else None
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 firebase …"
+    if own:
+        firebase_options(project, own, args)
+    words = firebase.words(args)
+    configs = [value for name, value in firebase.options(args) if name == "--config" and value]
+    root = firebase.project_root(os.getcwd(), configs[-1] if configs else None)
+    if words[:1] == ["login:use"] and len(words) > 1:
+        if root is None and own:
+            raise Refused(f"keyfit: this folder belongs to {project.name} and has no firebase.json (nor any folder "
+                          f"above it): `firebase login:use` would change the firebase CLI's default login, which every "
+                          f"folder without its own account uses.\n  Run it in the project's Firebase folder (where "
+                          f"firebase.json is).{bypass}")
+        owner = resolve(root, registry).project if root else None
+        for who in {p.name: p for p in (project, owner) if p is not None}.values():
+            theirs = who.connections.get("firebase")
+            if isinstance(theirs, dict) and theirs.get("account") and not same(words[1], theirs["account"]):
+                raise Refused(f"keyfit: refusing `firebase login:use {printable(words[1])}` for {tilde(root)}: "
+                              f"{who.name} uses Google account {theirs['account']} there.{bypass}")
+    if own and words[:1] == ["use"] and len(words) > 1:
+        names = firebase.aliases(root or os.getcwd())
+        if names.get(words[1], words[1]) != own.get("project"):
+            raise Refused(f"keyfit: this folder belongs to {project.name}, whose Firebase project is "
+                          f"{own.get('project')}; refusing `firebase use {printable(words[1])}`.{bypass}")
+    before = args[:args.index("--")] if "--" in args else args
+    if own and own.get("account") and words[:1] == ["login"] and "--reauth" in before:
+        default = firebase.default_login(firebase.read_store(env) or {})
+        if default and not same(default, own["account"]):
+            raise Refused(f"keyfit: refusing `firebase login --reauth`: it would replace the firebase CLI's default "
+                          f"login ({printable(default)}), which folders without their own account use, with "
+                          f"{own['account']}.\n  Renew {own['account']}'s sign-in instead: firebase login:add   "
+                          f"(choose {own['account']}){bypass}")
+
+
+def firebase_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
+    """With --config the CLI's folder is that file's: it is checked like the folder you are in. Outside every Firebase
+    folder the CLI uses its default login: when that is another account, the project's is named with --account."""
+    conn = project.connections["firebase"]
+    given = firebase.options(args)
+    configs = [value for name, value in given if name == "--config" and value]
+    if configs:
+        check = ADAPTERS["firebase"].at(conn, env, str(cwd), configs[-1])
+        if check.failed:
+            raise Refused("\n".join([f"keyfit: firebase not started, {project.name} needs attention", *check.lines(),
+                                     "  (bypass once: KEYFIT_DISABLE=1 firebase …)"]))
+    store = firebase.read_store(env) or {}
+    used, _ = firebase.bound(store, firebase.project_root(cwd, configs[-1] if configs else None))
+    account = firebase.account_of(store, str(conn.get("account")))
+    if account and not same(used, conn.get("account")) and not any(name == "--account" for name, _ in given):
+        return ["--account", account["user"]["email"], *args]
+    return args
+
+
 def login_environment(tool: str, project: Project, env: dict) -> dict:
     """The environment a sign-in command runs with: the project's (so it signs in to the project's account), without
     the variables that would make the tool skip its own login."""
@@ -859,13 +949,15 @@ def offer_fixes(failed: list, project: Project, env: dict, registry: Registry, t
     tried.update(check.fix for check in failed)
     done = []
     if sign_ins:
-        if not _confirm("Sign in now?"):
+        binding = all(tuple(words[:2]) == ("firebase", "login:use") for _, words in sign_ins)
+        if not _confirm("Bind this folder now?" if binding else "Sign in now?"):
             return None
         import subprocess
 
         for assignments, words in {(tuple(a.items()), tuple(w)): None for a, w in sign_ins}:
             name = words[0]
             real = cloudflare.wrangler_bin(env, os.getcwd()) if name == "wrangler" else \
+                firebase.firebase_bin(env, os.getcwd()) if name == "firebase" else \
                 find_real(name, env, skip_wrappers=True)
             if real is None:
                 _say([f"keyfit: {name} is not installed. Install it: {INSTALL[name]}"])
@@ -873,9 +965,9 @@ def offer_fixes(failed: list, project: Project, env: dict, registry: Registry, t
             login_env = login_environment(name, project, env)  # as when you type the sign-in
             login_env.update(assignments)
             if subprocess.run(list(words), executable=real, env=login_env).returncode != 0:
-                _say([f"keyfit: {name} sign-in did not finish"])
+                _say([f"keyfit: {name} {'login:use' if binding else 'sign-in'} did not finish"])
                 return False
-        done.append("signed in")
+        done.append("bound this folder" if binding else "signed in")
     for profile, folder in binds:
         wider = superset_folder(profile, folder, project, registry, env)
         if not _confirm(f"Bind {tilde(wider)} now, for every Superset worktree of {project.name}?" if wider
@@ -932,6 +1024,8 @@ def main(argv: list[str]) -> int:
             os.execve(real, [tool, *(opencode_private(args, env) if tool == "opencode" else args)], env)
         if tool == "gcloud":  # before sign-in commands too: they write into configurations
             gcloud_guard(project, args, registry, env)
+        if tool == "firebase":  # before sign-in commands too: login:use and use bind folders
+            firebase_guard(project, args, registry, env)
 
         relevant = RELEVANT.get(tool)
         if is_login_command(tool, args):
