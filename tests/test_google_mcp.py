@@ -1,7 +1,8 @@
 """Google Workspace MCP servers (google-mcp): which servers are Google's, the logins they read, the adapter's checks,
-which servers each project's sessions see, and an agent started through its shim. Every login is a stand-in file in a
-temporary folder, Google is a stand-in function, and the shims run with HTTPS_PROXY on a closed local port: no real
-login, agent config, Keychain item or network is ever touched."""
+which servers each project's sessions see, and an agent started through its shim. Every login and OAuth client is a
+stand-in file in a temporary folder, Google (its token endpoint too) is a stand-in function, Keyfit's HTTPS opener is
+refused, and the shims run with HTTPS_PROXY on a closed local port: no real login, agent config, Keychain item or
+network is ever touched."""
 
 import base64
 import contextlib
@@ -21,7 +22,7 @@ os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the re
 
 from keyfit import cli, mcp  # noqa: E402
 from keyfit.adapters import ADAPTERS, gemini, google_mcp  # noqa: E402
-from keyfit.adapters.google_mcp import GMAIL_PROFILE, PRIMARY_CALENDAR, TOKENINFO, GoogleMcpAdapter  # noqa: E402
+from keyfit.adapters.google_mcp import GMAIL_PROFILE, PRIMARY_CALENDAR, TOKEN, TOKENINFO, GoogleMcpAdapter  # noqa: E402
 from keyfit.cli import main  # noqa: E402
 from keyfit.registry import Registry  # noqa: E402
 from test_vercel import executable  # noqa: E402
@@ -33,6 +34,7 @@ CALENDAR = {"command": "npx", "args": ["@cocal/google-calendar-mcp@latest"]}
 DRIVE = {"command": "npx", "args": ["-y", "@piotr-agier/google-drive-mcp"]}
 WORKSPACE = {"command": "uvx", "args": ["workspace-mcp", "--single-user"]}
 REMOTE = {"type": "http", "url": "https://gmailmcp.googleapis.com/mcp/v1"}
+CLIENT = ("fake-client.apps.googleusercontent.com", "fake-client-secret")  # the servers' OAuth client, a stand-in
 
 
 def expiry(valid: bool) -> int:
@@ -41,9 +43,17 @@ def expiry(valid: bool) -> int:
 
 
 def tokens(email: str | None, valid: bool = False, **extra) -> dict:
-    """A google-auth-library token record; its access token names its account (ya29.EMAIL) for the stand-in Google."""
-    return {"access_token": f"ya29.{email or 'nobody'}", "refresh_token": "1//fake", "token_type": "Bearer",
-            "expiry_date": expiry(valid), **extra}
+    """A google-auth-library token record; its access token (ya29.EMAIL) and refresh token (1//EMAIL) name its account
+    for the stand-in Google."""
+    return {"access_token": f"ya29.{email or 'nobody'}", "refresh_token": f"1//{email or 'nobody'}",
+            "token_type": "Bearer", "expiry_date": expiry(valid), **extra}
+
+
+def oauth_client(path: Path, client=CLIENT, form: str = "installed") -> Path:
+    """A gcp-oauth.keys.json as Google Cloud's console downloads it; its token_uri is never followed."""
+    data = {"client_id": client[0], "client_secret": client[1], "token_uri": "https://example.com/token",
+            "redirect_uris": ["http://localhost"]}
+    return write(path, {form: data} if form else data)
 
 
 def write(path: Path, data) -> Path:
@@ -57,9 +67,9 @@ def workspace(folder: Path, *emails: str, valid: bool = False) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     when = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=3000 if valid else -3000)
     for email in emails:
-        write(folder / f"{email}.json", {"token": f"ya29.{email}", "refresh_token": "1//fake",
-                                         "token_uri": "https://oauth2.googleapis.com/token",
-                                         "client_id": "fake.apps.googleusercontent.com", "client_secret": "fake",
+        write(folder / f"{email}.json", {"token": f"ya29.{email}", "refresh_token": f"1//{email}",
+                                         "token_uri": "https://example.com/token",
+                                         "client_id": CLIENT[0], "client_secret": CLIENT[1],
                                          "scopes": ["https://www.googleapis.com/auth/userinfo.email"],
                                          "expiry": when.isoformat()})
     write(folder / "oauth_states.json", {})
@@ -72,20 +82,43 @@ def id_token(email: str) -> str:
 
 
 class Google:
-    """Stands in for Google: tokeninfo, Gmail's profile and the primary calendar, each naming the token's account."""
+    """Stands in for Google: tokeninfo, Gmail's profile and the primary calendar, each naming the token's account, and
+    the token endpoint, renewing a refresh token (1//EMAIL) made with CLIENT into a fresh access token."""
 
-    def __init__(self, scoped: bool = True, status: int = 200):
-        self.calls, self.scoped, self.status = [], scoped, status
+    def __init__(self, scoped: bool = True, status: int = 200, token_status: int = 200):
+        self.calls, self.scoped, self.status, self.token_status = [], scoped, status, token_status
+        self.sent = []  # the access tokens tokeninfo, the profile and the calendar were asked about
+        self.issued = {}  # fresh access token → the account it belongs to
 
     def __call__(self, url, token, timeout):
         self.calls.append(url)
+        self.sent.append(token)
         if not token.startswith("ya29.") or token == "ya29.revoked":
             return (400 if url == TOKENINFO else 401), {"error": "invalid_token"}
         if self.status != 200:
             return self.status, None
-        email = token[len("ya29."):]
+        email = self.issued.get(token) or token[len("ya29."):]
         field = {TOKENINFO: "email", GMAIL_PROFILE: "emailAddress", PRIMARY_CALENDAR: "id"}[url]
         return 200, ({field: email} if self.scoped else {"scope": "https://www.googleapis.com/auth/drive.file"})
+
+    def renew(self, refresh, client, timeout):
+        self.calls.append(TOKEN)
+        if self.token_status != 200:
+            return self.token_status, None
+        if refresh == "1//revoked":
+            return 400, {"error": "invalid_grant", "error_description": "Token has been expired or revoked."}
+        if client != CLIENT:
+            return 401, {"error": "invalid_client", "error_description": "The OAuth client was not found."}
+        fresh = f"ya29.fresh-{len(self.issued)}"
+        self.issued[fresh] = refresh[len("1//"):]
+        return 200, {"access_token": fresh, "expires_in": 3599, "token_type": "Bearer"}
+
+
+def no_network(test: unittest.TestCase) -> None:
+    """Keyfit's own HTTPS requests fail the test: Google is always the stand-in."""
+    patcher = mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests"))
+    patcher.start()
+    test.addCleanup(patcher.stop)
 
 
 class Recognition(unittest.TestCase):
@@ -159,11 +192,12 @@ class AdapterTests(unittest.TestCase):
         self.repo = self.tmp / "repo"
         self.repo.mkdir()
         self.google = Google()
-        self.adapter = GoogleMcpAdapter(fetch=self.google)
+        self.adapter = GoogleMcpAdapter(fetch=self.google, renew=self.google.renew)
         self.gmail = self.home / ".gmail-mcp" / "work.json"
         self.system = mock.patch.object(gemini, "SYSTEM", self.tmp / "no-system")  # never this Mac's settings
         self.system.start()
         self.addCleanup(self.system.stop)
+        no_network(self)
 
     def conn(self, **servers):
         servers = servers or {"gmail_work": {"type": "gmail-autoauth", "login": str(self.gmail)}}
@@ -180,7 +214,7 @@ class AdapterTests(unittest.TestCase):
         env = self.env()
         self.adapter.inject(conn, env)
         local = self.adapter.check_local(conn, env, self.repo)
-        return local.merge(self.adapter.remote(conn, env)) if remote and not local.failed else local
+        return local.merge(self.adapter.check_remote(conn, env, self.repo)) if remote and not local.failed else local
 
     def test_confirmed_by_google_while_the_saved_token_is_valid(self):
         folder = workspace(self.home / "ws", ACME, valid=True)
@@ -198,25 +232,163 @@ class AdapterTests(unittest.TestCase):
                          ("ok", "gcal, gdrive", f"{ACME} · confirmed by Google"))
         self.assertEqual(self.google.calls, [TOKENINFO, GMAIL_PROFILE, PRIMARY_CALENDAR, TOKENINFO])
 
-    def test_an_expired_token_is_never_sent_and_the_local_check_decides(self):
+    def test_an_expired_token_is_renewed_and_the_fresh_one_asked_once(self):
+        """Google Workspace MCP: the client is in the login record. The expired token is never sent, the fresh one only
+        to tokeninfo."""
         folder = workspace(self.home / "ws", ACME)
         check = self.verify(self.conn(workspace={"type": "workspace-mcp", "login": str(folder)}))
-        self.assertEqual((check.status, check.detail),
-                         ("ok", f"{ACME} · not confirmed online (the token has expired; the server renews it)"))
-        self.assertEqual(self.google.calls, [])
+        self.assertEqual((check.status, check.detail), ("ok", f"{ACME} · confirmed by Google"))
+        self.assertEqual((self.google.calls, self.google.sent), ([TOKEN, TOKENINFO], ["ya29.fresh-0"]))
 
-    def test_gmail_autoauth_after_its_first_hour_is_a_warning(self):
-        """Its login names no account and its saved token is never renewed: Keyfit cannot tell whose it is."""
+    def test_gmail_autoauth_is_confirmed_hours_after_its_sign_in(self):
+        """Its login names no account: renewed with its OAuth client (~/.gmail-mcp/gcp-oauth.keys.json, else
+        GMAIL_OAUTH_PATH), Gmail's profile names it, and another account is refused."""
+        write(self.gmail, tokens(ACME))
+        oauth_client(self.home / ".gmail-mcp" / "gcp-oauth.keys.json")
+        check = self.verify()
+        self.assertEqual((check.status, check.detail), ("ok", "confirmed by Google"))
+        self.assertEqual((self.google.calls, self.google.sent), ([TOKEN, GMAIL_PROFILE], ["ya29.fresh-0"]))
+        write(self.gmail, tokens(PERSONAL))
+        check = self.verify()
+        self.assertEqual((check.status, check.detail),
+                         ("fail", f"the token in {self.gmail} belongs to {PERSONAL}, the project's Google account is "
+                                  f"{ACME}"))
+        self.assertIn("give gmail_work a login of its own", check.fix)
+        # the client file its definition names wins, relative to the folder the agent starts in
+        (self.home / ".gmail-mcp" / "gcp-oauth.keys.json").unlink()
+        oauth_client(self.repo / "keys" / "gmail.json", form="web")
+        write(self.gmail, tokens(ACME))
+        self.claude(gmail_work={**GMAIL, "env": {"GMAIL_CREDENTIALS_PATH": str(self.gmail),
+                                                 "GMAIL_OAUTH_PATH": "keys/gmail.json"}})
+        self.assertEqual(self.verify().detail, "confirmed by Google")
+
+    def test_calendar_drive_and_other_servers_are_renewed_with_their_own_clients(self):
+        cal = write(self.tmp / "cal.json", {"normal": tokens(ACME), "work": tokens(ACME, cached_email=ACME)})
+        oauth_client(self.repo / "gcp-oauth.keys.json", form="")  # the Calendar server takes the top-level form too
+        drive = write(self.home / ".config" / "google-drive-mcp" / "tokens.json", {"version": 2, "accounts": {"a": {
+            "email": ACME, "accessToken": f"ya29.{ACME}", "refreshToken": f"1//{ACME}", "expiryDate": expiry(False)}}})
+        oauth_client(self.home / ".config" / "google-drive-mcp" / "gcp-oauth.keys.json")  # next to its default login
+        self.claude(gcal={**CALENDAR, "env": {"GOOGLE_CALENDAR_MCP_TOKEN_PATH": str(cal),
+                                              "GOOGLE_OAUTH_CREDENTIALS": "./gcp-oauth.keys.json"}})
+        check = self.verify(self.conn(gcal={"type": "google-calendar-mcp", "login": str(cal)},
+                                      gdrive={"type": "google-drive-mcp", "login": str(drive)}))
+        self.assertEqual((check.status, check.detail), ("ok", "confirmed by Google"))
+        self.assertEqual(self.google.calls, [TOKEN, PRIMARY_CALENDAR, TOKEN, PRIMARY_CALENDAR, TOKEN, TOKENINFO])
+        self.assertEqual(self.google.sent, ["ya29.fresh-0", "ya29.fresh-1", "ya29.fresh-2"])
+        other = write(self.tmp / "other.json", tokens(None, client_id=CLIENT[0], client_secret=CLIENT[1],
+                                                       refresh_token=f"1//{ACME}"))
+        self.assertEqual(self.verify(self.conn(o={"type": "other", "login": str(other)})).detail, "confirmed by Google")
+        self.assertEqual(self.google.calls[-2:], [TOKEN, TOKENINFO])
+
+    def test_without_its_oauth_client_the_local_check_decides(self):
+        """No client found, or none in an other server's login: nothing is sent, and a login that names no account is a
+        warning, as before renewal."""
         write(self.gmail, tokens(ACME))
         check = self.verify()
         self.assertEqual(check.status, "warn")
         self.assertEqual(check.detail, f"account not confirmed: {self.gmail} names no account, and its saved token "
-                                       f"has expired")
-        self.assertEqual(check.fix, f"sign in again, then start the agent within the hour: GMAIL_CREDENTIALS_PATH="
-                                    f"{self.gmail} npx @gongrzhe/server-gmail-autoauth-mcp auth   (as {ACME})")
-        self.assertEqual(self.google.calls, [])
+                                       f"has expired, with no OAuth client found to renew it")
+        self.assertEqual(check.fix, "set GMAIL_OAUTH_PATH in gmail_work's env in your agents' MCP configs to its OAuth "
+                                    "client file")
         self.assertEqual(self.verify(remote=False).status, "ok")  # locally nothing is wrong; pending
         self.assertTrue(self.adapter.check_local(self.conn(), self.env(), self.repo).pending)
+        other = write(self.tmp / "other.json", tokens(None, id_token=id_token(ACME)))
+        check = self.verify(self.conn(o={"type": "other", "login": str(other)}))
+        self.assertEqual((check.status, check.detail),
+                         ("ok", f"{ACME} · not confirmed online (its saved token has expired, with no OAuth client found "
+                                f"to renew it)"))
+        oauth_client(self.home / ".gmail-mcp" / "gcp-oauth.keys.json", client=("another", "client"))
+        check = self.verify()  # not the client the sign-in was made with: Google says so, and the server can't renew it
+        self.assertEqual((check.status, check.detail),
+                         ("warn", f"account not confirmed: {self.gmail} names no account, and Google did not renew its "
+                                  f"token: invalid_client"))
+        self.assertIn("npx @gongrzhe/server-gmail-autoauth-mcp auth", check.fix)
+        workspace(self.home / "ws", ACME)
+        write(self.home / "ws" / f"{ACME}.json", {"token": "ya29.x", "expiry": "2026-01-01T00:00:00"})
+        check = self.verify(self.conn(w={"type": "workspace-mcp", "login": str(self.home / "ws")}))
+        self.assertEqual(check.detail, f"{ACME} · not confirmed online (its saved token has expired, with no refresh "
+                                       f"token to renew it)")
+        self.assertEqual(self.google.calls, [TOKEN])  # only the one with a client of its own
+
+    def test_a_revoked_sign_in_asks_for_the_servers_own(self):
+        write(self.gmail, tokens(None, refresh_token="1//revoked"))
+        oauth_client(self.home / ".gmail-mcp" / "gcp-oauth.keys.json")
+        check = self.verify()
+        self.assertEqual((check.status, check.detail, check.transient),
+                         ("fail", f"Google does not accept the sign-in in {self.gmail} (signed out or revoked)", False))
+        self.assertEqual(check.fix, f"GMAIL_CREDENTIALS_PATH={self.gmail} npx @gongrzhe/server-gmail-autoauth-mcp auth"
+                                    f"   (as {ACME})")
+        self.assertEqual(self.google.calls, [TOKEN])
+
+    def test_no_answer_from_the_token_endpoint_is_a_network_problem(self):
+        write(self.gmail, tokens(ACME))
+        oauth_client(self.home / ".gmail-mcp" / "gcp-oauth.keys.json")
+
+        def offline(refresh, client, timeout):
+            raise OSError("no route")
+
+        adapter = GoogleMcpAdapter(fetch=self.google, renew=offline)
+        check = adapter.check_remote(self.conn(), self.env(), self.repo)
+        self.assertEqual((check.status, check.detail, check.transient), ("fail", "Google did not answer (OSError)", True))
+        busy = GoogleMcpAdapter(fetch=self.google, renew=Google(token_status=503).renew)
+        check = busy.check_remote(self.conn(), self.env(), self.repo)
+        self.assertEqual((check.detail, check.transient), ("Google answered 503", True))
+        self.assertEqual(self.google.calls, [])
+
+    def test_renewal_writes_nothing_and_shows_no_token(self):
+        """The login keeps its mtime and content; the refresh token, client secret and fresh token are in no detail."""
+        write(self.gmail, tokens(ACME))
+        oauth_client(self.home / ".gmail-mcp" / "gcp-oauth.keys.json")
+        folder = workspace(self.home / "ws", ACME)
+        logins = [self.gmail, folder / f"{ACME}.json", self.home / ".gmail-mcp" / "gcp-oauth.keys.json"]
+        before = [(p.stat().st_mtime_ns, p.read_bytes()) for p in logins]
+        conn = self.conn(gmail_work={"type": "gmail-autoauth", "login": str(self.gmail)},
+                         workspace={"type": "workspace-mcp", "login": str(folder)})
+        fingerprint = self.adapter.fingerprint(conn, self.env())
+        check = self.verify(conn)
+        self.assertEqual((check.status, check.detail), ("ok", "confirmed by Google"))
+        self.assertEqual([(p.stat().st_mtime_ns, p.read_bytes()) for p in logins], before)
+        self.assertEqual(sorted(p.name for p in (self.home / ".gmail-mcp").iterdir()),
+                         ["gcp-oauth.keys.json", "work.json"])
+        self.assertEqual(self.adapter.fingerprint(conn, self.env()), fingerprint)
+        shown = " ".join(check.lines())
+        for secret in (f"1//{ACME}", CLIENT[1], *self.google.issued):
+            self.assertNotIn(secret, shown)
+
+    def test_the_renewal_request(self):
+        """POST to Google's token endpoint, pinned (a token_uri in a file is never followed), with the refresh token and
+        the client in the body, never in the URL; Google's error answer is read."""
+        import urllib.error
+        import urllib.parse
+
+        seen = []
+
+        class Answer(io.BytesIO):
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def urlopen(req, timeout):
+            seen.append(req)
+            if len(seen) == 2:
+                raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {},
+                                             io.BytesIO(b'{"error": "invalid_grant"}'))
+            return Answer(b'{"access_token": "ya29.fresh", "expires_in": 3599}')
+
+        with mock.patch("keyfit.http.urlopen", urlopen):
+            self.assertEqual(google_mcp._renew("1//r", CLIENT, 15), (200, {"access_token": "ya29.fresh",
+                                                                           "expires_in": 3599}))
+            self.assertEqual(google_mcp._renew("1//r", CLIENT, 15), (400, {"error": "invalid_grant"}))
+        req = seen[0]
+        self.assertEqual((req.full_url, req.get_method()), ("https://oauth2.googleapis.com/token", "POST"))
+        self.assertEqual(req.get_header("Content-type"), "application/x-www-form-urlencoded")
+        self.assertEqual(urllib.parse.parse_qs(req.data.decode()),
+                         {"grant_type": ["refresh_token"], "refresh_token": ["1//r"], "client_id": [CLIENT[0]],
+                          "client_secret": [CLIENT[1]]})
 
     def test_another_account_blocks_with_the_fix(self):
         folder = workspace(self.home / "ws", PERSONAL)
@@ -440,7 +612,9 @@ class CliTests(unittest.TestCase):
         env = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config)}
         for patcher in (mock.patch.dict(os.environ, env, clear=True),
                         mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+                        mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch.object(ADAPTERS["google-mcp"], "fetch", self.google),
+                        mock.patch.object(ADAPTERS["google-mcp"], "renew", self.google.renew),
                         mock.patch.object(gemini, "SYSTEM", self.tmp / "no-system")):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -469,7 +643,7 @@ class CliTests(unittest.TestCase):
         return tomllib.loads((self.config / "registry.toml").read_text())
 
     def test_add_takes_the_login_its_definition_reads(self):
-        write(self.gmail, tokens(ACME))  # past its first hour: recorded, with a note that its account is not confirmed
+        write(self.gmail, tokens(ACME))  # past its first hour, no OAuth client: recorded, with a note
         code, out, err = self.keyfit("add", "google-mcp", "--server", "gmail_work")
         self.assertEqual(code, 0, err)
         reg = self.registry()
@@ -479,7 +653,7 @@ class CliTests(unittest.TestCase):
         self.assertIn(f"acme: google-mcp 'acme' → gmail_work (Gmail AutoAuth MCP, ~/.gmail-mcp/work.json), checked "
                       f"against {ACME}; hidden in every other project\n", out)
         self.assertIn("  note: account not confirmed: ~/.gmail-mcp/work.json names no account, and its saved token has "
-                      "expired\n", out)
+                      "expired, with no OAuth client found to renew it\n", out)
         self.assertEqual(self.google.calls, [])
         self.assertEqual(Registry.load(self.config / "registry.toml").mcp_owners(), {"acme": ["gmail_work"]})
 
@@ -494,6 +668,25 @@ class CliTests(unittest.TestCase):
         code, out, err = self.keyfit("add", "google-mcp", "--server", "gmail_work")
         self.assertEqual((code, "note:" in out), (0, False), err)
         self.assertEqual(self.google.calls, [GMAIL_PROFILE, GMAIL_PROFILE])
+
+    def test_a_renewed_token_reaches_no_file_and_no_output(self):
+        """keyfit add and keyfit status renew Gmail AutoAuth's token: the refresh token, the client secret and the fresh
+        token are in neither the registry, the check cache nor the output, and the login is unchanged."""
+        write(self.gmail, tokens(ACME))
+        oauth_client(self.home / ".gmail-mcp" / "gcp-oauth.keys.json")
+        before = (self.gmail.stat().st_mtime_ns, self.gmail.read_bytes())
+        add = self.keyfit("add", "google-mcp", "--server", "gmail_work")
+        self.assertEqual(add[0], 0, add[2])
+        self.assertNotIn("note:", add[1])
+        status = self.keyfit("status")
+        self.assertIn("✔ google-mcp gmail_work   confirmed by Google", status[1])
+        self.assertEqual(self.google.calls, [TOKEN, GMAIL_PROFILE, TOKEN, GMAIL_PROFILE])
+        cached = (self.config / "cache" / "checks.json").read_text()
+        self.assertIn("confirmed by Google", cached)
+        written = (self.config / "registry.toml").read_text() + cached + "".join(add[1:] + status[1:])
+        for secret in (f"1//{ACME}", CLIENT[1], *self.google.issued):
+            self.assertNotIn(secret, written)
+        self.assertEqual((self.gmail.stat().st_mtime_ns, self.gmail.read_bytes()), before)
 
     def test_servers_of_one_account_are_shared_by_its_projects(self):
         workspace(self.home / ".google_workspace_mcp" / "credentials", ACME)
@@ -631,14 +824,14 @@ class ShimTests(unittest.TestCase):
         return sorted(s["serverName"] for s in settings["deniedMcpServers"])
 
     def test_the_session_sees_only_the_projects_google_server_and_warns_what_keyfit_cannot_confirm(self):
-        write(self.gmail, tokens(ACME))  # past its first hour: no online question at all
+        write(self.gmail, tokens(ACME))  # past its first hour and no OAuth client: no online question at all
         out = self.run_tool("-p", "hi", GMAIL_CREDENTIALS_PATH="/elsewhere.json", USER_GOOGLE_EMAIL=PERSONAL)
         seen = self.started(out)
         self.assertEqual(self.denied(seen), ["gcal", "gmail_personal"])
         self.assertEqual(seen["env"],
                          {"GMAIL_CREDENTIALS_PATH": None, "USER_GOOGLE_EMAIL": None, "KEYFIT_PROJECT": "demo"})
         self.assertIn("keyfit: ! google-mcp gmail_work   account not confirmed: ~/.gmail-mcp/work.json names no "
-                      "account, and its saved token has expired\n", out.stderr)
+                      "account, and its saved token has expired, with no OAuth client found to renew it\n", out.stderr)
         seen = self.started(self.run_tool("-p", "hi", cwd=self.other))  # globex: not signed in yet, a warning too
         self.assertEqual(self.denied(seen), ["gcal", "gmail_work"])
 
