@@ -243,7 +243,7 @@ class GuidedInitTests(Machine):
         self.assertEqual(code, 0, out + err)
         self.assertEqual(list(self.registry()["projects"]["acme"]), ["roots"])
         self.assertIn("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add "
-                      "aws|github|claude|codex|opencode|copilot|vercel|supabase|cloudflare|convex|google|gcloud|linear …\n"
+                      "aws|github|claude|codex|opencode|copilot|vercel|supabase|cloudflare|convex|google|gcloud|firebase|linear …\n"
                       "  aws, gh and vercel won't start here until mapped: keyfit add aws|github|vercel …\n", out)
         self.assertEqual(self.hidden, [])
         self.assertEqual(self.sts.read_text(), "")
@@ -262,7 +262,7 @@ class GuidedInitTests(Machine):
         expected = (f"Registered project 'acme' → {self.repo}\n"
                     "Worktrees of this repository resolve to it automatically. Check it with: keyfit status\n"
                     "Keyfit is not set up yet, so claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler, "
-                    "convex and gcloud still run without checks.\n"
+                    "convex, gcloud and firebase still run without checks.\n"
                     "  Set it up: keyfit setup --rc, then open a new terminal\n")
         self.assertEqual(self.init(stdin=io.StringIO("1\ny\n")), (0, expected, ""))
         self.assertEqual(self.init(argv=["--yes"]), (0, expected, ""))
