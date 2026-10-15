@@ -323,9 +323,12 @@ class GuidedInitTests(Machine):
         self.assertIn("Vercel: not signed in (~/Library/Application Support/com.vercel.cli) — sign in (vercel login), "
                       "then: keyfit add vercel\n", out)
         self.assertEqual(self.asked, ["Add a Linear API key for acme? [y/N] "])
-        (self.bin / "vercel").unlink()
+        for name in ("vercel", "codex"):
+            (self.bin / name).unlink()
         code, out, err = self.init("n")
         self.assertIn("Vercel: vercel not found on PATH — skipped", out)
+        self.assertIn("Codex: codex not found on PATH — skipped", out)  # not "no clean ChatGPT login"
+        self.assertNotIn("codex login", out)
 
     def test_ctrl_c_stops_but_keeps_the_registration(self):
         code, out, _ = self.init("1", KeyboardInterrupt())
