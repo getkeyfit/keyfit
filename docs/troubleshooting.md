@@ -51,7 +51,7 @@ codex is /Users/you/.config/keyfit/bin/codex
 codex is /opt/homebrew/bin/codex
 $ keyfit doctor
   …
-  ✔ PATH      ~/.config/keyfit/bin   right after Superset's agent wrapper, before every real tool
+  ✔ PATH       ~/.config/keyfit/bin   right after Superset's agent wrapper, before every real tool
 ```
 
 If the `PATH` line fails:
@@ -68,7 +68,7 @@ The tool doesn't start, and every failed check is shown with its fix:
 
 ```
 keyfit: claude not started, acme-api needs attention
-  ✘ aws       acme-dev → …4321   SSO session expired
+  ✘ aws        acme-dev → …4321   SSO session expired
     → aws sso login --sso-session acme
   (bypass once: KEYFIT_DISABLE=1 claude …)
 ```

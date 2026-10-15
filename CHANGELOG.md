@@ -222,6 +222,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   AWS profiles under `shared_aws_profiles`. They are now printed with the reason, the command and
   the names of the variables that would change, like a checked start. Sign-in commands, other
   commands in a folder that isn't registered, and `KEYFIT_DISABLE=1` still run, as documented.
+- `cloudflare` lines in `keyfit status`, `doctor` and failed checks started one column later than
+  the others: the kind column is now ten characters wide.
 
 ### Security
 

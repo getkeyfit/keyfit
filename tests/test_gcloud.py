@@ -493,7 +493,7 @@ class ShimTests(GcloudCase):
         code, argv, _ = self.run_shim("storage", "ls")
         self.assertEqual((code, argv), (1, None))
         self.assertIn("keyfit: gcloud not started, client needs attention", self.stderr)
-        self.assertIn(f"✘ gcloud    acme → acme-prod   configuration acme uses {PERSONAL}, the project's Google account "
+        self.assertIn(f"✘ gcloud     acme → acme-prod   configuration acme uses {PERSONAL}, the project's Google account "
                       f"is {ACME}\n    → gcloud config set account {ACME} --configuration acme", self.stderr)
 
     def test_another_configuration_account_or_project_is_refused(self):
@@ -597,7 +597,7 @@ class ShimTests(GcloudCase):
                 contextlib.redirect_stderr(err), mock.patch("os.execve", side_effect=Executed()):
             with self.assertRaises(Executed):
                 shim.main(["gcloud", "storage", "ls"])
-        self.assertIn(f"✘ gcloud    acme → acme-prod   gcloud has no valid sign-in for {ACME} (signed out, expired or "
+        self.assertIn(f"✘ gcloud     acme → acme-prod   gcloud has no valid sign-in for {ACME} (signed out, expired or "
                       f"revoked)\n    → gcloud auth login {ACME}\n  Sign in now? [Y/n] ", err.getvalue())
         self.assertEqual(ran, [(["gcloud", "auth", "login", ACME], "acme", False)])
         self.assertIn("keyfit: signed in, starting gcloud", err.getvalue())
@@ -663,7 +663,7 @@ class AddTests(GcloudCase):
         code, out, err = self.keyfit("add", "gcloud")
         self.assertEqual(code, 0, err)
         self.assertEqual(out, "client: gcloud account 'globex' → configuration globex, project globex-app\n"
-                              f"  ✔ gcloud    globex → globex-app   {GLOBEX} · account and project confirmed\n")
+                              f"  ✔ gcloud     globex → globex-app   {GLOBEX} · account and project confirmed\n")
         reg = self.registry()
         self.assertEqual((reg["projects"]["client"]["gcloud"], reg["accounts"]["gcloud"]["globex"]),
                          ("globex", {"configuration": "globex", "project": "globex-app"}))
@@ -741,12 +741,12 @@ class AddTests(GcloudCase):
     def test_status_and_doctor_show_the_configuration(self):
         self.keyfit("add", "gcloud", "--configuration", "acme")
         code, out, err = self.keyfit("status")
-        self.assertIn(f"✔ google    {ACME}\n", out)
-        self.assertIn(f"✔ gcloud    acme → acme-prod   {ACME} · account and project confirmed", out)
+        self.assertIn(f"✔ google     {ACME}\n", out)
+        self.assertIn(f"✔ gcloud     acme → acme-prod   {ACME} · account and project confirmed", out)
         with mock.patch.object(secrets, "keychain_reachable", return_value=""):
             code, out, err = self.keyfit("doctor")
-        self.assertIn(f"✔ gcloud    {self.bin / 'gcloud'}", out)
-        self.assertIn(f"✔ gcloud    acme → acme-prod   {ACME} · configuration acme in ~/.config/gcloud\n", out)
+        self.assertIn(f"✔ gcloud     {self.bin / 'gcloud'}", out)
+        self.assertIn(f"✔ gcloud     acme → acme-prod   {ACME} · configuration acme in ~/.config/gcloud\n", out)
 
 
 if __name__ == "__main__":

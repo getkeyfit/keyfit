@@ -440,7 +440,7 @@ class ShimTests(ConvexCase):
         code, argv, _ = self.run_shim("deploy")
         self.assertEqual((code, argv), (1, None))
         self.assertIn("keyfit: convex not started, client needs attention", self.stderr)
-        self.assertIn("✘ convex    Acme   Convex rejected the token (signed out or revoked?)", self.stderr)
+        self.assertIn("✘ convex     Acme   Convex rejected the token (signed out or revoked?)", self.stderr)
         self.assertIn("→ keyfit add convex --name acme --copy", self.stderr)
 
     def test_folder_pointing_at_another_teams_deployment_blocks(self):
@@ -509,7 +509,7 @@ class ShimTests(ConvexCase):
         self.cli_login(REVOKED)
         code, argv, env = self.run_shim("deploy", cwd=self.repos["solo"], terminal="\n", NEW_CONVEX_LOGIN=FRESH)
         self.assertIsNone(code, self.stderr)
-        self.assertIn("✘ convex    Acme   Convex rejected the token (signed out or revoked?)\n"
+        self.assertIn("✘ convex     Acme   Convex rejected the token (signed out or revoked?)\n"
                       "    → npx convex login --force\n  Sign in now? [Y/n] ", self.stderr)
         self.assertIn("keyfit: signed in, starting convex", self.stderr)
         self.assertEqual(env["CONVEX_OVERRIDE_ACCESS_TOKEN"], FRESH)
@@ -521,7 +521,7 @@ class ShimTests(ConvexCase):
         executable(self.bin / "claude", "#!/bin/sh\nexit 0\n")
         code, argv, _ = self.run_shim("-p", "hi", cwd=self.repos["solo"], tool="claude")
         self.assertEqual((code, argv), (1, None))
-        self.assertIn("✘ convex    Acme   the convex CLI is not signed in\n    → npx convex login --force\n",
+        self.assertIn("✘ convex     Acme   the convex CLI is not signed in\n    → npx convex login --force\n",
                       self.stderr)
         self.assertNotIn("Sign in now?", self.stderr)
 
@@ -657,12 +657,12 @@ class AddConvexTests(ConvexCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             main(["status"])
-        self.assertIn("✔ convex    Globex   login and team confirmed", out.getvalue())
+        self.assertIn("✔ convex     Globex   login and team confirmed", out.getvalue())
         os.remove(self.bin / "convex")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             main(["doctor"])
-        self.assertIn("✔ convex    not installed globally   npx convex gets its account from claude, codex, opencode, copilot and "
+        self.assertIn("✔ convex     not installed globally   npx convex gets its account from claude, codex, opencode, copilot and "
                       "gemini sessions",
                       out.getvalue())
 

@@ -374,7 +374,7 @@ class ShimTests(SupabaseCase):
         code, argv, _ = self.run_shim("db", "push")
         self.assertEqual((code, argv), (1, None))
         self.assertIn("keyfit: supabase not started, client needs attention", self.stderr)
-        self.assertIn("✘ supabase  Acme   Supabase rejected the token (deleted or expired?)", self.stderr)
+        self.assertIn("✘ supabase   Acme   Supabase rejected the token (deleted or expired?)", self.stderr)
         self.assertIn("→ keyfit add supabase --name acme   (paste a token from supabase.com/dashboard/account/tokens, "
                       "or add --cli for the supabase CLI's login)", self.stderr)
 
@@ -604,7 +604,7 @@ class AddSupabaseTests(SupabaseCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             main(["status"])
-        self.assertIn("✔ supabase  Globex   token and organization confirmed", out.getvalue())
+        self.assertIn("✔ supabase   Globex   token and organization confirmed", out.getvalue())
         self.assertNotIn("supabase won't start", out.getvalue())
 
 
