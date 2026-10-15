@@ -4,6 +4,7 @@
     roots = ["~/git/acme"]
     aws = { profile = "acme", account = "123456789012" }
     github = "octocat"
+    google = "work"
 
     [projects.globex]
     roots = ["~/git/globex"]
@@ -11,6 +12,9 @@
 
     [accounts.github.octocat]
     login = "octocat"
+
+    [accounts.google.work]
+    email = "me@acme.com"
 
     [settings]
     shared_aws_profiles = ["ci-worker"]
@@ -40,6 +44,9 @@ from . import tomlwrite
 # Connection kinds earlier versions supported; old registries may still carry them. They are ignored:
 # never injected or checked, only mentioned by `keyfit status` so they can be removed from registry.toml.
 LEGACY_KINDS = ("workos", "bitwarden")
+# Connections checked against the project's one Google account (`google = "work"`, its email): each gets the email as
+# `account`, None while the project has none. The firebase CLI and Gemini CLI join later.
+GOOGLE_TOOLS = ("gcloud",)
 
 
 class RegistryError(ValueError):
@@ -151,7 +158,8 @@ class Registry:
     # projects ---------------------------------------------------------------
 
     def projects(self) -> dict[str, Project]:
-        """Projects with account references expanded: `claude = "work"` → the [accounts.claude.work] table."""
+        """Projects with account references expanded: `claude = "work"` → the [accounts.claude.work] table. Google tools
+        (GOOGLE_TOOLS) also get the email of the project's Google account."""
         out = {}
         for name, body in self.data["projects"].items():
             body = dict(body)
@@ -162,6 +170,10 @@ class Registry:
                 account = self.data["accounts"].get(kind, {}).get(value) if isinstance(value, str) else None
                 if account is not None:
                     body[kind] = {**account, "name": value}
+            google = body.get("google")
+            for kind in GOOGLE_TOOLS:  # said once per project, checked by every Google tool
+                if isinstance(body.get(kind), dict):
+                    body[kind] = {**body[kind], "account": google.get("email") if isinstance(google, dict) else None}
             out[name] = Project(name, list(roots), body, list(servers), legacy)
         return out
 
