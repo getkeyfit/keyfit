@@ -224,6 +224,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commands in a folder that isn't registered, and `KEYFIT_DISABLE=1` still run, as documented.
 - `cloudflare` lines in `keyfit status`, `doctor` and failed checks started one column later than
   the others: the kind column is now ten characters wide.
+- Guided `keyfit init` on a Mac without Codex said `no clean ChatGPT login in ~/.codex … sign in
+  (codex login)`; it now says `codex not found on PATH — skipped`, like the other tools.
 
 ### Security
 

@@ -215,8 +215,13 @@ def _offer_claude(name: str, base: dict) -> None:
 
 def _offer_codex(name: str, base: dict) -> None:
     from .adapters.codex import home
+    from .realbin import find_real
 
-    folder = home({}, dict(os.environ))
+    env = dict(os.environ)
+    if find_real("codex", env, skip_wrappers=True) is None:
+        print("Codex: codex not found on PATH — skipped")
+        return
+    folder = home({}, env)
     login, problem = _chatgpt_login(folder)
     if login is None:
         print(f"Codex: {problem} — sign in (codex login), then: keyfit add codex")
