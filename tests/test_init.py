@@ -384,7 +384,7 @@ class MessagesTests(Machine):
         self.assertIn("✘ github    octocta   no account [accounts.github.octocta]\n"
                       "    → map it again: keyfit add github …", out)
         self.assertRegex(out, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, opencode, copilot, "
-                              r"github, vercel, supabase, cloudflare, convex, google, gcloud\)")
+                              r"github, vercel, supabase, cloudflare, convex, google, gcloud, firebase\)")
         self.assertIn("✘ aws       acme-dev → ?   the expected account must be a 12-digit AWS account ID", out)
         self.assertIn("  vercel won't start here until mapped: keyfit add vercel …\n", out)
         code, out, _ = self.run_main("which", "-v")
