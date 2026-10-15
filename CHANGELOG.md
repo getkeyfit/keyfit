@@ -127,7 +127,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment holds a project's accounts, they get `--standalone` or are refused. In a project with an
   OpenCode account, `opencode` starts without inherited `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
   `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_API_KEY`, `GITHUB_TOKEN` and
-  `OPENCODE_API_KEY` (Claude and Codex sessions keep them), and other projects' MCP servers are
+  `OPENCODE_API_KEY`, or any other key or token OpenCode's own report (`opencode auth list`) names
+  as coming from your shell (`OPENROUTER_API_KEY`, `GROQ_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`,
+  `CLOUDFLARE_API_TOKEN`, `GITLAB_TOKEN`, …): the check warns "from your shell, not the project's
+  account" and keeps their names (never values) with the cached result, so cached starts remove them
+  too, and a new key-like variable is checked again. Only names containing `KEY` or `TOKEN` count, so
+  the `CLOUDFLARE_ACCOUNT_ID` Keyfit sets stays. Claude, Codex, Copilot CLI and Gemini CLI sessions
+  keep them all. Other projects' MCP servers are
   switched off in `OPENCODE_CONFIG_CONTENT` for the folder OpenCode opens (your own content is kept). `--server`, `acp --login` and `opencode DIR` with a
   folder of another project are refused. `Sign in now?` runs `opencode auth login PROVIDER --standalone`;
   `keyfit init` offers OpenCode's sign-ins; `doctor` shows the project's database. Verified with
