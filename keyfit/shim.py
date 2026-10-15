@@ -799,7 +799,8 @@ def firebase_guard(project: Project, args: list[str], registry: Registry, env: d
 
 def firebase_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
     """With --config the CLI's folder is that file's: it is checked like the folder you are in. Outside every Firebase
-    folder the CLI uses its default login: when that is another account, the project's is named with --account."""
+    folder the CLI uses its default login: when that is another account, the project's is named with --account (only
+    before a command: firebase 15.26 fails on --account with none)."""
     conn = project.connections["firebase"]
     given = firebase.options(args)
     configs = [value for name, value in given if name == "--config" and value]
@@ -811,7 +812,9 @@ def firebase_args(project: Project, args: list[str], env: dict, cwd: Path) -> li
     store = firebase.read_store(env) or {}
     used, _ = firebase.bound(store, firebase.project_root(cwd, configs[-1] if configs else None))
     account = firebase.account_of(store, str(conn.get("account")))
-    if account and not same(used, conn.get("account")) and not any(name == "--account" for name, _ in given):
+    before = args[:args.index("--")] if "--" in args else args
+    command = any(not a.startswith("-") and not (i and before[i - 1] in firebase.VALUED) for i, a in enumerate(before))
+    if command and account and not same(used, conn.get("account")) and not any(n == "--account" for n, _ in given):
         return ["--account", account["user"]["email"], *args]
     return args
 
