@@ -208,6 +208,16 @@ From the second pre-launch review:
   `-ec./FILE`), as `-c=FILE` and as `--c FILE`. A config of another account, or in a folder bound to
   another wrangler profile, given that way reached wrangler without the refusal. `wrangler dev` with
   several configs has each one checked.
+- **A folder's `.env` no longer decides where a wrangler sign-in goes.** wrangler loads `.env`,
+  `.env.local` and `.env.<env>` into its environment, also for Keyfit's own `wrangler whoami`, so a file
+  there could set `CLOUDFLARE_API_BASE_URL` (the host every request, with the profile's token, goes to)
+  or the sign-in endpoints wrangler renews a sign-in at. wrangler now always runs with
+  `CLOUDFLARE_API_BASE_URL` set to Cloudflare's own API (a variable already set beats `.env`), without
+  inherited `WRANGLER_AUTH_DOMAIN`, `WRANGLER_AUTH_URL`, `WRANGLER_TOKEN_URL`, `WRANGLER_REVOKE_URL` and
+  `WRANGLER_CLIENT_ID`, and a `.env` file that sets any of them fails the check before wrangler runs,
+  naming the file and the variable, never the value. wrangler's sign-in commands, a `--cwd` folder and
+  `--env-file` files are held to the same. A project that deliberately uses another Cloudflare host
+  (staging, a compliance region) isn't supported yet.
 
 ## [0.1.0] - 2026-10-12
 
