@@ -36,6 +36,11 @@ EXPIRED = ("✘ [ERROR] Not logged in. Your auth token has expired and could not
            "non-interactive. Run `wrangler login` in an interactive terminal or set a CLOUDFLARE_API_TOKEN.\n"
            "Run `wrangler whoami` to check your current authentication status.\n")
 
+# Where an inherited variable or a folder's .env could send a profile's sign-in (KEY-60); no real host.
+ELSEWHERE = {"CLOUDFLARE_API_BASE_URL": "https://evil.example/client/v4", "WRANGLER_AUTH_DOMAIN": "evil.example",
+             "WRANGLER_AUTH_URL": "https://evil.example/auth", "WRANGLER_TOKEN_URL": "https://evil.example/token",
+             "WRANGLER_REVOKE_URL": "https://evil.example/revoke", "WRANGLER_CLIENT_ID": "evil"}
+
 # A wrangler on PATH for the shim to start; Keyfit's own calls go to FakeWrangler (or, in one test, to this script).
 FAKE_WRANGLER = """#!/bin/sh
 echo "wrangler ran" >&2
@@ -209,15 +214,85 @@ class AdapterTests(CloudflareCase):
             self.assertNotIn(var, env)
         self.assertEqual((env["CLOUDFLARE_ACCOUNT_ID"], env["KEYFIT_CLOUDFLARE"]), (ACME_ID, "acme"))
 
+    def test_inject_pins_the_api_host_and_removes_sign_in_endpoints(self):
+        env = dict(self.env, **ELSEWHERE)
+        self.cf.inject(self.conn(), env)
+        self.assertEqual(env["CLOUDFLARE_API_BASE_URL"], "https://api.cloudflare.com/client/v4")
+        self.assertFalse([name for name in env if name.startswith("WRANGLER_")])
+        self.cf.forget(env)  # a tool of a project without Cloudflare, started from that session
+        self.assertNotIn("CLOUDFLARE_API_BASE_URL", env)
+        own = dict(self.env, CLOUDFLARE_API_BASE_URL="https://api.staging.example/client/v4")
+        self.cf.forget(own)  # set by you, not by Keyfit: kept
+        self.assertEqual(own["CLOUDFLARE_API_BASE_URL"], "https://api.staging.example/client/v4")
+
+    def test_dotenv_that_sets_the_api_host_or_sign_in_fails_before_wrangler_runs(self):
+        """wrangler loads .env, .env.local and .env.NAME(.local) into its environment (KEY-60): one that sets where
+        the sign-in goes fails the local check, named by file and variable, never by value, and wrangler never runs."""
+        client = self.repos["client"]
+        for name, variable, line in (
+                (".env", "CLOUDFLARE_API_BASE_URL", "CLOUDFLARE_API_BASE_URL=https://evil.example/client/v4"),
+                (".env.local", "WRANGLER_TOKEN_URL", "export WRANGLER_TOKEN_URL='https://evil.example/token'"),
+                (".env.staging", "WRANGLER_AUTH_DOMAIN", "  WRANGLER_AUTH_DOMAIN = evil.example # comment"),
+                (".env.staging.local", "WRANGLER_AUTH_URL", "WRANGLER_AUTH_URL: https://evil.example/auth"),
+                (".env", "WRANGLER_REVOKE_URL", "\ufeffWRANGLER_REVOKE_URL=https://evil.example/revoke"),
+                (".env", "WRANGLER_CLIENT_ID", 'A="x\nWRANGLER_CLIENT_ID=evil"')):  # in a quoted value: a false alarm
+            (client / name).write_text(f"OTHER=1\n{line}\n")
+            check = self.check()
+            self.assertTrue(check.failed, line)
+            self.assertEqual(check.detail, f"{client / name} sets {variable}, which would decide where wrangler sends "
+                                           f"the profile's sign-in", line)
+            self.assertEqual(check.fix, f"remove {variable} from {client / name}   (Keyfit keeps wrangler on "
+                                        f"Cloudflare's own API host and sign-in)")
+            self.assertNotIn("evil", check.detail + check.fix)
+            (client / name).unlink()
+        self.assertEqual(self.wrangler.calls, [])
+        (client / ".env").write_text("WRANGLER_TOKEN_URL=x\nWRANGLER_AUTH_URL=y\n")
+        (client / ".env.local").write_text("CLOUDFLARE_API_BASE_URL=z\n")
+        self.assertEqual(self.check().detail, f"{client / '.env'} sets WRANGLER_AUTH_URL, WRANGLER_TOKEN_URL; "
+                                              f"{client / '.env.local'} sets CLOUDFLARE_API_BASE_URL, which would "
+                                              f"decide where wrangler sends the profile's sign-in")
+        for path in (client / ".env", client / ".env.local"):
+            path.unlink()
+        for name, text in ((".envrc", "export WRANGLER_TOKEN_URL=x\n"),  # direnv's, not wrangler's
+                           (".env", "# WRANGLER_TOKEN_URL=x\nCLOUDFLARE_API_TOKEN_URL=x\nMY_WRANGLER_AUTH_URL=x\n")):
+            (client / name).write_text(text)
+        (client / ".env.d").mkdir()  # a folder named like one
+        self.assertEqual(self.check().status, "ok")
+        sub = client / "apps" / "worker"  # wrangler loads the .env of the folder it runs in, not of those above
+        sub.mkdir(parents=True)
+        (sub / ".env").write_text("WRANGLER_TOKEN_URL=x\n")
+        self.assertEqual(self.check().status, "ok")
+        self.assertTrue(self.check(folder=sub).failed)
+
+    def test_a_fake_wrangler_sees_cloudflares_own_host_and_sign_in(self):
+        """The online check starts wrangler with CLOUDFLARE_API_BASE_URL set to Cloudflare's own (it beats the folder's
+        .env) and without inherited sign-in endpoints."""
+        seen = self.tmp / "seen.json"
+        answer = json.dumps({"loggedIn": True, "accounts": [{"id": ACME_ID}]})
+        executable(self.bin / "wrangler", f"#!{sys.executable}\nimport json, os\n"
+                                          "open(os.environ['SEEN'], 'w').write(json.dumps(dict(os.environ)))\n"
+                                          f"print({answer!r})\n")
+        env = dict(self.env, SEEN=str(seen), **ELSEWHERE)
+        cf = CloudflareAdapter(cli_timeout=30)
+        for prepared in (False, True):  # the environment as it is, and as the shim builds it
+            if prepared:
+                cf.inject(self.conn(), env)
+            self.assertEqual(cf.verify(self.conn(), env).status, "ok")
+            started = json.loads(seen.read_text())
+            self.assertEqual(started["CLOUDFLARE_API_BASE_URL"], "https://api.cloudflare.com/client/v4")
+            self.assertEqual(set(ELSEWHERE) & set(started), {"CLOUDFLARE_API_BASE_URL"})
+
     def test_agent_sessions_get_the_account_for_npx_wrangler(self):
         client = Project("client", [str(self.repos["client"])], {"cloudflare": self.conn()})
         session = environment.build(client, dict(self.env, CLOUDFLARE_API_TOKEN="inherited"))  # what claude starts with
         self.assertEqual(session["CLOUDFLARE_ACCOUNT_ID"], ACME_ID)
+        self.assertEqual(session["CLOUDFLARE_API_BASE_URL"], cloudflare.API)  # also for npx wrangler in subfolders
         self.assertNotIn("CLOUDFLARE_API_TOKEN", session)
         self.assertIn("cloudflare acme → Acme", session["KEYFIT_SUMMARY"])
         plain = Project("plain", [str(self.repos["plain"])], {})
         nested = environment.build(plain, session)  # a tool of a project without Cloudflare, started from inside
         self.assertNotIn("CLOUDFLARE_ACCOUNT_ID", nested)
+        self.assertNotIn("CLOUDFLARE_API_BASE_URL", nested)
         own = environment.build(plain, dict(self.env, CLOUDFLARE_ACCOUNT_ID=INITECH_ID))  # the user's own: kept
         self.assertEqual(own["CLOUDFLARE_ACCOUNT_ID"], INITECH_ID)
 
@@ -390,6 +465,28 @@ class AdapterTests(CloudflareCase):
         self.assertEqual(cloudflare.words(["auth", "create", "--callback-port", "8976", "--scopes", "d1:write", "x"]),
                          ["auth", "create", "x"])
 
+    def test_short_options_are_read_like_yargs(self):
+        """wrangler's parser (yargs-parser) reads -c in a group of short options and with the value attached."""
+        for args, config in ((["-c/abs/w.toml", "deploy"], "/abs/w.toml"),  # attached: starts with a non-word character
+                             (["-c~/w.toml", "deploy"], "~/w.toml"),
+                             (["-ec./w.toml", "deploy"], "./w.toml"),  # in a group, attached relative path
+                             (["-ec", "w.toml", "deploy"], "w.toml"),  # a group ending in c
+                             (["-vc", "w.toml", "deploy"], "w.toml"),
+                             (["-c=w.toml", "deploy"], "w.toml"), (["-ec=w.toml", "deploy"], "w.toml"),
+                             (["--c", "w.toml", "deploy"], "w.toml"), (["--c=w.toml", "deploy"], "w.toml"),
+                             (["-c123", "deploy"], "123"), (["-c-", "deploy"], "-")):
+            self.assertEqual(cloudflare.options(args), [("--config", config)], args)
+            self.assertEqual(cloudflare.words(args), ["deploy"], args)
+        self.assertEqual(cloudflare.options(["-cc", "w.toml", "deploy"]), [("--config", None), ("--config", "w.toml")])
+        # `-cw.toml` is the flags c, w, ., t, o, m and l; `-c./w.toml` a dotted key, and wrangler gets an object for
+        # its config (it stops), with the next argument as the object's value
+        self.assertEqual(cloudflare.options(["-cw.toml", "deploy"]), [("--config", None)])
+        self.assertEqual((cloudflare.options(["-c./w.toml", "deploy"]), cloudflare.words(["-c./w.toml", "deploy"])),
+                         ([], []))
+        self.assertEqual(cloudflare.words(["--env-file", "a.env", "b.env", "--profile", "p", "auth", "list"]),
+                         ["auth", "list"])  # --env-file takes every argument up to the next option
+        self.assertEqual(cloudflare.words(["-1", "--no-x-provision", "login", "--json", "true"]), ["-1", "login"])
+
     def test_whoami_output_of_a_real_process(self):
         script = self.tmp / "wrangler-script"
         executable(script, f"#!{sys.executable}\nimport json, os, sys\n"
@@ -483,6 +580,93 @@ class ShimTests(CloudflareCase):
         (sub / "wrangler.toml").write_text(f'account_id = "{ACME_ID}"\n')
         code, argv, _ = self.run_shim("deploy", "--config", "app/wrangler.toml", "--cwd", ".")
         self.assertIsNone(code, self.stderr)
+
+    def test_config_in_every_short_option_spelling_is_refused(self):
+        """yargs' attached and grouped spellings of -c (KEY-59), alone and after --cwd: refused like `-c FILE`."""
+        other = self.repos["client"] / "other.toml"
+        other.write_text(f'account_id = "{GLOBEX_ID}"\n')
+        app = self.repos["client"] / "app"
+        app.mkdir()
+        (app / "wrangler.toml").write_text(f'account_id = "{ACME_ID}"\n')
+        (self.repos["mine"] / "wrangler.toml").write_text(f'account_id = "{GLOBEX_ID}"\n')
+        spellings = (("attached absolute path", [f"-c{other}"], f"--config {other}"),
+                     ("attached relative path", ["-ec./other.toml"], "--config ./other.toml"),
+                     ("group ending in c", ["-ec", "other.toml"], "--config other.toml"),
+                     ("-c=", ["-c=other.toml"], "--config other.toml"),
+                     ("--c", ["--c", "other.toml"], "--config other.toml"))
+        for what, spelling, shown in spellings:
+            code, argv, _ = self.run_shim("deploy", *spelling)
+            self.assertEqual((code, argv), (1, None), what)
+            self.assertIn(f"refusing {shown}: {other} sets account_id {GLOBEX_ID}", self.stderr, what)
+        moved = (("attached absolute path", [f"-c{self.repos['mine']}/wrangler.toml"],
+                  f"--config {self.repos['mine']}/wrangler.toml", "uses wrangler profile globex"),
+                 ("attached relative path", ["-ec../other.toml"], "--config ../other.toml",
+                  f"{other} sets account_id {GLOBEX_ID}"),
+                 ("group ending in c", ["-vc", "../../mine/wrangler.toml"], "--config ../../mine/wrangler.toml",
+                  "uses wrangler profile globex"),
+                 ("-c=", ["-c=../other.toml"], "--config ../other.toml", f"{other} sets account_id {GLOBEX_ID}"))
+        for what, spelling, shown, why in moved:
+            code, argv, _ = self.run_shim("--cwd", "app", "deploy", *spelling)
+            self.assertEqual((code, argv), (1, None), what)
+            self.assertIn(f"refusing --cwd app {shown}: ", self.stderr, what)
+            self.assertIn(why, self.stderr, what)
+        for spelling in (["-ec", "app/wrangler.toml"], ["-c=app/wrangler.toml"], [f"-c{app}/wrangler.toml"]):
+            code, argv, _ = self.run_shim("deploy", *spelling)  # the project's own config: runs
+            self.assertEqual(argv, ["wrangler", "deploy", *spelling], self.stderr)
+        code, argv, _ = self.run_shim("dev", "-c", "app/wrangler.toml", "-c", "other.toml")  # dev takes several
+        self.assertEqual(code, 1)
+        self.assertIn(f"refusing --config other.toml: {other} sets account_id", self.stderr)
+
+    def test_wrangler_runs_with_cloudflares_own_host_and_sign_in(self):
+        for args in (["deploy"], ["auth", "create", "acme"], ["whoami"]):  # sign-ins too
+            code, argv, env = self.run_shim(*args, **ELSEWHERE)
+            self.assertEqual(argv, ["wrangler", *args], self.stderr)
+            self.assertEqual(env["CLOUDFLARE_API_BASE_URL"], "https://api.cloudflare.com/client/v4")
+            self.assertEqual(set(ELSEWHERE) & set(env), {"CLOUDFLARE_API_BASE_URL"}, args)
+        code, argv, env = self.run_shim("dev", cwd=self.repos["plain"], **ELSEWHERE)  # no Cloudflare account: yours
+        self.assertEqual(env["WRANGLER_TOKEN_URL"], "https://evil.example/token")
+
+    def test_dotenv_with_the_api_host_or_sign_in_stops_wrangler_and_its_sign_ins(self):
+        client = self.repos["client"]
+        (client / ".env").write_text("WRANGLER_TOKEN_URL=https://evil.example/token\n")
+        code, argv, _ = self.run_shim("deploy")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn(f"✘ cloudflare acme → Acme   {client / '.env'} sets WRANGLER_TOKEN_URL, which would decide where "
+                      f"wrangler sends the profile's sign-in\n    → remove WRANGLER_TOKEN_URL from {client / '.env'}",
+                      self.stderr)
+        self.wrangler.state["acme"] = "expired"
+        self.bind({})
+        code, argv = self.run_in_terminal("deploy")  # nothing is offered while the file is there
+        self.assertEqual((code, argv), (1, None))
+        self.assertNotIn("now?", self.stderr)
+        for args in (["auth", "create", "acme"], ["whoami"], ["login"], ["--cwd", ".", "auth", "list"]):
+            code, argv, _ = self.run_shim(*args)  # sign-in commands run without checks, but not with these
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"keyfit: this folder belongs to client; refusing wrangler: {client / '.env'} sets "
+                          f"WRANGLER_TOKEN_URL, which would decide where wrangler sends the profile's sign-in.\n"
+                          f"  → remove WRANGLER_TOKEN_URL from {client / '.env'}", self.stderr)
+        self.assertNotIn("evil", self.stderr)
+        self.assertEqual(self.wrangler.calls, [])
+        (self.repos["plain"] / ".env").write_text("WRANGLER_TOKEN_URL=https://evil.example/token\n")
+        code, argv, _ = self.run_shim("dev", cwd=self.repos["plain"])  # no Cloudflare account: as before Keyfit
+        self.assertEqual(argv, ["wrangler", "dev"])
+
+    def test_dotenv_of_a_cwd_folder_or_an_env_file_is_read_too(self):
+        client = self.repos["client"]
+        app = client / "app"
+        app.mkdir()
+        (app / ".env.local").write_text("CLOUDFLARE_API_BASE_URL=https://evil.example/client/v4\n")
+        (client / "custom.env").write_text("WRANGLER_AUTH_DOMAIN=evil.example\n")
+        (client / "clean.env").write_text("API_KEY=x\n")
+        for args, path in ((["--cwd", "app", "deploy"], app / ".env.local"),
+                           (["deploy", "--env-file", "custom.env"], client / "custom.env"),
+                           (["--env-file=clean.env", "--env-file", "custom.env", "--"], client / "custom.env"),
+                           (["--cwd", "app", "auth", "create", "acme"], app / ".env.local")):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"refusing wrangler: {path} sets ", self.stderr)
+        code, argv, _ = self.run_shim("deploy", "--env-file", "clean.env")
+        self.assertEqual(argv, ["wrangler", "deploy", "--env-file", "clean.env"], self.stderr)
 
     def test_login_and_logout_are_refused_in_a_project_with_a_named_profile(self):
         for args in (["login"], ["--x-provision", "login"], ["logout"]):
@@ -757,7 +941,8 @@ class ShimTests(CloudflareCase):
     def test_dry_run_names_only_the_variables(self):
         code, _, _ = self.run_shim("deploy", KEYFIT_DRY_RUN="1", CLOUDFLARE_API_TOKEN="inherited")
         self.assertEqual(code, 0)
-        self.assertIn("environment changes (names only): CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, KEYFIT_CLOUDFLARE",
+        self.assertIn("environment changes (names only): CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_BASE_URL, "
+                      "CLOUDFLARE_API_TOKEN, KEYFIT_CLOUDFLARE",
                       self.stderr)
         self.assertNotIn("inherited", self.stderr)
 
