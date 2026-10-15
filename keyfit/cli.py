@@ -334,8 +334,8 @@ def _offer_google(name: str, base: dict) -> None:
         print("Google: gcloud is not signed in to a Google account here — later: keyfit add google --email "
               "<the project's work or personal email>")
         return
-    print("Google accounts gcloud is signed in to (gcloud, and later the firebase CLI and Gemini CLI, are checked "
-          "against the project's one):")
+    print("Google: the project's one Google account, work or personal; its Google tools are checked against it. "
+          "gcloud is signed in to:")
     email = _choose(f"Google account for {name}", found)
     if email:
         cmd_add_google(argparse.Namespace(**base, email=email, name=None, guided=True))
@@ -1914,7 +1914,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = command(sub, "init", "register the current repository as a project, then offer the AWS, GitHub, Claude, "
                              "Codex, OpenCode, Copilot CLI, Vercel, Supabase, Cloudflare, Convex, Google, Google Cloud "
-                             "and Linear accounts found on this Mac (imports `use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
+                             "and Linear accounts found on this Mac (imports `use aws` / LINEAR_API_KEY lines from its "
+                             ".envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
     p.add_argument("-y", "--yes", action="store_true",
