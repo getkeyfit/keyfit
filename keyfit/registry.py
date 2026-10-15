@@ -5,6 +5,7 @@
     aws = { profile = "acme", account = "123456789012" }
     github = "octocat"
     google = "work"
+    google-mcp = "work"
 
     [projects.globex]
     roots = ["~/git/globex"]
@@ -16,6 +17,10 @@
     [accounts.google.work]
     email = "me@acme.com"
 
+    [accounts.google-mcp.work.servers.gmail_work]
+    type = "gmail-autoauth"
+    login = "~/.gmail-mcp/work.json"
+
     [settings]
     shared_aws_profiles = ["ci-worker"]
 
@@ -24,7 +29,8 @@
 
 Projects are keyed by name; `roots` are main-checkout paths (worktrees resolve
 to them through git); `mcp_servers` are name patterns of MCP servers that
-belong to the project and stay hidden in every other project. Everything else
+belong to the project and stay hidden in every other project, and so do the
+Google Workspace servers of its `google-mcp` account, by name. Everything else
 on a project is a connection, kept as plain data here and interpreted by the
 adapters. `[settings]` holds machine-wide options: `shared_aws_profiles` are
 AWS profiles of tools that serve every project (`aws --profile` with only
@@ -35,6 +41,7 @@ stored itself (service `keyfit`) — names only, never values.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,7 +53,7 @@ from . import tomlwrite
 LEGACY_KINDS = ("workos", "bitwarden")
 # Connections checked against the project's one Google account (`google = "work"`, its email): each gets the email as
 # `account`, None while the project has none.
-GOOGLE_TOOLS = ("gcloud", "firebase", "gemini")
+GOOGLE_TOOLS = ("gcloud", "firebase", "gemini", "google-mcp")
 
 
 class RegistryError(ValueError):
@@ -122,6 +129,14 @@ class Project:
     def canonical_roots(self) -> list[Path]:
         return [canonical(r) for r in self.roots]
 
+    def mcp_claims(self) -> list[str]:
+        """Name patterns of the MCP servers the project owns: its `mcp_servers` and, by exact name, its Google Workspace
+        servers (the `google-mcp` connection)."""
+        google = self.connections.get("google-mcp")
+        servers = google.get("servers") if isinstance(google, dict) else None
+        exact = [re.sub(r"([*?\[])", r"[\1]", name) for name in servers] if isinstance(servers, dict) else []
+        return [*self.mcp_servers, *(p for p in exact if p not in self.mcp_servers)]
+
     def to_toml(self) -> dict:
         extra = {"mcp_servers": list(self.mcp_servers)} if self.mcp_servers else {}
         return {"roots": list(self.roots), **extra, **self.connections}
@@ -178,8 +193,8 @@ class Registry:
         return out
 
     def mcp_owners(self) -> dict[str, list[str]]:
-        """Project name → the MCP server name patterns it owns."""
-        return {name: p.mcp_servers for name, p in self.projects().items() if p.mcp_servers}
+        """Project name → the MCP server name patterns it owns (Project.mcp_claims)."""
+        return {name: claims for name, p in self.projects().items() if (claims := p.mcp_claims())}
 
     def shared_aws_profiles(self) -> set[str]:
         """AWS profiles that run unchanged in every folder ([settings] shared_aws_profiles, default none)."""
