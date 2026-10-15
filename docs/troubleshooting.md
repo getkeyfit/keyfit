@@ -21,7 +21,7 @@ Signs that the tool started without Keyfit:
 1. **Run `keyfit doctor` and read the `shims` and `PATH` lines.**
    - `✘ PATH … not on PATH`: this terminal was opened before setup. Open a new one. If doctor says no startup file loads Keyfit, run `keyfit setup --rc` first.
    - `✘ PATH … <folder> comes first: …` or `✘ PATH … comes before Superset's agent wrapper`: something put another folder ahead of the shims after Keyfit's line ran. Fix it in three steps:
-     1. Make Keyfit's line (it ends in `# keyfit: claude/codex/aws/gh shims on PATH`) the last line of the startup file doctor names.
+     1. Make Keyfit's line (it ends in `# keyfit: tool shims on PATH`, or `# keyfit: claude/codex/aws/gh shims on PATH` from an earlier version) the last line of the startup file doctor names.
      2. Run `keyfit setup` again. This rewrites the PATH files in `~/.config/keyfit`, and earlier versions placed the shims differently.
      3. Open a new terminal.
    - `✘ shims … runs <path>, which no longer exists`: the Python or the checkout that ran `keyfit setup` has moved, for example after a Python upgrade. Run `keyfit setup` again.
@@ -257,5 +257,5 @@ pipx uninstall keyfit            # last, or: brew uninstall keyfit
 
 If `keyfit` itself no longer runs, do it by hand:
 
-1. Remove the line ending in `# keyfit: claude/codex/aws/gh shims on PATH` from your startup files. Do this first, or new shells will complain that the file it loads is missing.
+1. Remove the line ending in `# keyfit: tool shims on PATH` (or `# keyfit: claude/codex/aws/gh shims on PATH`, from an earlier version) from your startup files. Do this first, or new shells will complain that the file it loads is missing.
 2. Delete `~/.config/keyfit`.

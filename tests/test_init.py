@@ -531,6 +531,10 @@ class DoctorTests(Machine):
             main(["setup", "--shell", "bash", "--rc"])
         code, out = self.doctor(self.bin)
         self.assertIn("→ open a new terminal (~/.bash_profile loads Keyfit)", out)
+        profile = self.home / ".bash_profile"  # the line as an earlier version wrote it counts too
+        profile.write_text(profile.read_text().replace("# keyfit: tool shims on PATH", cli.OLD_COMMENT))
+        code, out = self.doctor(self.bin)
+        self.assertIn("→ open a new terminal (~/.bash_profile loads Keyfit)", out)
         code, out = self.doctor(self.bin, self.shims)
         self.assertIn("→ make Keyfit's line (`…  # keyfit: …`) the last line of ~/.bash_profile", out)
 
