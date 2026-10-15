@@ -215,8 +215,13 @@ def _offer_claude(name: str, base: dict) -> None:
 
 def _offer_codex(name: str, base: dict) -> None:
     from .adapters.codex import home
+    from .realbin import find_real
 
-    folder = home({}, dict(os.environ))
+    env = dict(os.environ)
+    if find_real("codex", env, skip_wrappers=True) is None:
+        print("Codex: codex not found on PATH — skipped")
+        return
+    folder = home({}, env)
     login, problem = _chatgpt_login(folder)
     if login is None:
         print(f"Codex: {problem} — sign in (codex login), then: keyfit add codex")
@@ -1733,6 +1738,9 @@ def cmd_run(args) -> int:
 
 
 OLD_PATH_LINE = 'export PATH="$HOME/.config/keyfit/bin:$PATH"  # keyfit shims: claude, codex, aws, gh'
+# The comment that ends Keyfit's line in a startup file, and the one before it: lines with either are Keyfit's.
+COMMENT = "# keyfit: tool shims on PATH"
+OLD_COMMENT = "# keyfit: claude/codex/aws/gh shims on PATH"  # it named four tools of many
 NOT_MACOS = "Keyfit supports macOS for now (it stores keys in the Keychain); Linux is planned."
 
 # Superset's agent wrapper (when it is on PATH) first, Keyfit right behind it, then everything else, so the chain
@@ -1775,8 +1783,8 @@ SHIM = """#!/bin/sh
 [ -x "@PYTHON@" ] && [ -f "@ENTRY@" ] || { printf '%s\\n' \\
   "keyfit: @TOOL@ not started: Keyfit is not installed where its shims expect it (@ENTRY@)." \\
   "  Upgraded or reinstalled Keyfit? Run: keyfit setup" \\
-  "  Uninstalled it? Remove the line ending in '# keyfit: claude/codex/aws/gh shims on PATH' from your shell startup \\
-file, then open a new terminal." >&2; exit 127; }
+  "  Uninstalled it? Remove the line ending in '# keyfit: tool shims on PATH' (or, from an earlier version, \\
+'# keyfit: claude/codex/aws/gh shims on PATH') from your shell startup file, then open a new terminal." >&2; exit 127; }
 exec "@PYTHON@" -I -S "@ENTRY@" @TOOL@ "$@"
 """
 
@@ -1798,11 +1806,11 @@ def _rc_files(shell: str) -> list[Path]:
     return [profile, home / ".bashrc"] if re.search(r"(?:source|\.)\s+\S*\.bashrc\b", text) else [profile]
 
 
-def _setup_line(shell: str) -> str:
+def _setup_line(shell: str, comment: str = COMMENT) -> str:
     """The line `keyfit setup --rc` writes into a startup file of this shell. Its text is how Keyfit finds the line
-    again (setup, --remove, doctor), so it stays as it is although the shims now include vercel."""
+    again (setup, --remove, doctor), so the line with the earlier comment (OLD_COMMENT) still counts as Keyfit's."""
     filename, _, load = SHELLS[shell]
-    return f'{load} "{config_dir() / filename}"  # keyfit: claude/codex/aws/gh shims on PATH'
+    return f'{load} "{config_dir() / filename}"  {comment}'
 
 
 def _startup_files() -> list[Path]:
@@ -1814,8 +1822,8 @@ def _startup_files() -> list[Path]:
 
 
 def _keyfit_lines() -> set[str]:
-    """Every line `keyfit setup` writes into startup files: zsh's, bash's, and the PATH line of earlier versions."""
-    return {_setup_line(shell) for shell in SHELLS} | {OLD_PATH_LINE}
+    """Every line `keyfit setup` writes into startup files: zsh's, bash's, and those of earlier versions."""
+    return {_setup_line(shell, c) for shell in SHELLS for c in (COMMENT, OLD_COMMENT)} | {OLD_PATH_LINE}
 
 
 def _loads_keyfit(rc: Path) -> bool:
@@ -1823,12 +1831,13 @@ def _loads_keyfit(rc: Path) -> bool:
     return any(line.strip() in lines for line in rc.read_text(errors="replace").splitlines())
 
 
-def _add_line(rc: Path, line: str) -> None:
+def _add_line(rc: Path, line: str, earlier: tuple[str, ...]) -> None:
     text = rc.read_text() if rc.exists() else ""
+    old = next((old for old in earlier if old in text), None)
     if line in text:
         print(f"{tilde(rc)} already loads them")
-    elif OLD_PATH_LINE in text:
-        rc.write_text(text.replace(OLD_PATH_LINE, line))
+    elif old:
+        rc.write_text(text.replace(old, line))
         print(f"Updated the Keyfit line in {tilde(rc)}:\n  {line}")
     else:
         with rc.open("a") as fh:
@@ -1869,9 +1878,10 @@ def cmd_setup(args) -> int:
         print(f"Keyfit has PATH files for zsh and bash; in {shell or 'your shell'}, put {folder} first on PATH "
               f"(after Superset's wrapper, if you use Superset).")
         return 0
-    line = _setup_line(shell)
+    line, old = _setup_line(shell), _setup_line(shell, OLD_COMMENT)
     candidates = dict.fromkeys(_rc_files(shell) + ([Path.home() / ".zshrc"] if shell == "zsh" else []))
-    active = [path for path in candidates if path.is_file() and line in path.read_text(errors="replace")]
+    active = [path for path in candidates
+              if path.is_file() and any(known in path.read_text(errors="replace") for known in (line, old))]
     if rc is None and active:  # running setup again (an upgrade): the shims are rewritten in place
         print(f"Already active: {' and '.join(tilde(p) for p in active)} loads them; new starts use them now.")
     elif rc is None:
@@ -1880,7 +1890,7 @@ def cmd_setup(args) -> int:
         print(f"To activate, add this as the LAST line of {files} (or run: {again}):\n  {line}")
     else:
         for path in [Path(rc).expanduser()] if rc else _rc_files(shell):
-            _add_line(path, line)
+            _add_line(path, line, (old, OLD_PATH_LINE))
         print("Next: open a new terminal, go to a project's repository and run: keyfit init")
     undo = "keyfit setup --remove" + (f" --rc {tilde(Path(rc).expanduser())}" if rc else "")
     print(f"Undo any time: {undo}; run a tool once without checks: KEYFIT_DISABLE=1 claude")

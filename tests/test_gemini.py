@@ -463,7 +463,7 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool()
         self.assertEqual((out.returncode, out.stdout), (1, ""))
         self.assertIn(f"keyfit: gemini not started, demo needs attention\n"
-                      f"  ✘ gemini    {ACME}   Gemini CLI is signed in as {PERSONAL}, the project's Google account is "
+                      f"  ✘ gemini     {ACME}   Gemini CLI is signed in as {PERSONAL}, the project's Google account is "
                       f"{ACME}\n    → rm {creds}, then: GEMINI_CLI_HOME={self.work} gemini --prompt-interactive /quit\n",
                       out.stderr)
         self.assertNotIn("Sign in now?", out.stderr)
@@ -734,19 +734,19 @@ class AddTests(unittest.TestCase):
         sign_in(self.home, ACME)
         self.run_main("add", "gemini")
         _, out, _ = self.run_main("doctor")
-        self.assertIn(f"  ✔ gemini    {ACME}   Google sign-in · home ~/.gemini\n", out)
-        self.assertIn("  ! gemini    not found on PATH   needed only if you use it\n"
+        self.assertIn(f"  ✔ gemini     {ACME}   Google sign-in · home ~/.gemini\n", out)
+        self.assertIn("  ! gemini     not found on PATH   needed only if you use it\n"
                       "    → npm install -g @google/gemini-cli\n", out)
         sign_in(self.home, PERSONAL)
         _, out, _ = self.run_main("doctor")
-        self.assertIn(f"  ✘ gemini    {ACME}   Gemini CLI is signed in as {PERSONAL}", out)
+        self.assertIn(f"  ✘ gemini     {ACME}   Gemini CLI is signed in as {PERSONAL}", out)
 
     def test_doctor_never_reads_a_key(self):
         os.environ["ACME_GEMINI_KEY"] = KEY
         self.run_main("add", "gemini", "--key", "env:ACME_GEMINI_KEY")
         with mock.patch.object(secrets, "resolve", side_effect=AssertionError("doctor read a key")):
             _, out, _ = self.run_main("doctor")
-        self.assertIn(f"  ✔ gemini    acme · API key   $ACME_GEMINI_KEY · home {self.config / 'gemini' / 'acme' / '.gemini'}",
+        self.assertIn(f"  ✔ gemini     acme · API key   $ACME_GEMINI_KEY · home {self.config / 'gemini' / 'acme' / '.gemini'}",
                       out)
 
     def test_a_new_google_account_says_what_gemini_needs_next(self):
@@ -763,7 +763,7 @@ class AddTests(unittest.TestCase):
         self.run_main("add", "gemini")
         code, out, _ = self.run_main("status")
         self.assertEqual(code, 0, out)
-        self.assertIn(f"  ✔ gemini    {ACME}   Google sign-in · confirmed by Google\n", out)
+        self.assertIn(f"  ✔ gemini     {ACME}   Google sign-in · confirmed by Google\n", out)
 
 
 if __name__ == "__main__":

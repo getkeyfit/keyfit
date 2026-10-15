@@ -142,7 +142,7 @@ class ShimTests(unittest.TestCase):
         executable(self.bin / "claude", FAKE_CLAUDE_SIGNED_OUT)
         code, out, terminal = self.run_in_terminal("claude", "-p", "hi", answer="\n")
         self.assertEqual(code, 0, terminal)
-        self.assertIn("✘ claude    Work   not signed in\n    → claude auth login\n  Sign in now? [Y/n] ", terminal)
+        self.assertIn("✘ claude     Work   not signed in\n    → claude auth login\n  Sign in now? [Y/n] ", terminal)
         self.assertIn("fake sign-in done", out)  # the sign-in ran, with the terminal's stdin
         self.assertIn("keyfit: signed in, starting claude\n", terminal)
         self.assertEqual(json.loads(out.splitlines()[-1])["argv"][-2:], ["-p", "hi"])
@@ -236,6 +236,35 @@ class ShimTests(unittest.TestCase):
         self.assertEqual(out.stdout, "")  # the real command never ran
         self.assertIn("refusing --profile", out.stderr)
 
+    def test_dry_run_prints_a_shared_profile_instead_of_running_it(self):
+        for cwd in (self.repo, self.outside):  # decided before the folder is looked at
+            out = self.run_tool("aws", "--profile", "ci-worker", "s3", "ls", cwd=cwd, KEYFIT_DRY_RUN="1")
+            self.assertEqual((out.returncode, out.stdout), (0, ""), out.stderr)  # the real command never ran
+            self.assertEqual(out.stderr, "keyfit: AWS profile ci-worker is shared ([settings] shared_aws_profiles): "
+                                         "aws runs without a project's accounts or checks\n"
+                                         f"  would run: {self.bin / 'aws'} --profile ci-worker s3 ls\n"
+                                         "  environment changes (names only): none\n")
+
+    def test_dry_run_prints_a_checked_start_instead_of_running_it(self):
+        out = self.run_tool("aws", "s3", "ls", KEYFIT_DRY_RUN="1")
+        self.assertEqual((out.returncode, out.stdout), (0, ""), out.stderr)
+        self.assertIn(f"keyfit: project demo, checks ok\n  would run: {self.bin / 'aws'} s3 ls\n"
+                      "  environment changes (names only): ", out.stderr)
+        self.assertIn("AWS_PROFILE", out.stderr)
+
+    def test_dry_run_still_runs_sign_in_commands(self):
+        seen = json.loads(self.run_tool("aws", "sso", "login", KEYFIT_DRY_RUN="1").stdout)
+        self.assertEqual((seen["argv"], seen["AWS_PROFILE"]), (["sso", "login"], "iam"))
+
+    def test_dry_run_still_runs_in_an_unregistered_folder(self):
+        seen = json.loads(self.run_tool("aws", "s3", "ls", cwd=self.outside, KEYFIT_DRY_RUN="1").stdout)
+        self.assertEqual((seen["argv"], seen["KEYFIT_PROJECT"]), (["s3", "ls"], None))
+
+    def test_dry_run_still_runs_with_keyfit_disabled(self):
+        out = self.run_tool("aws", "--profile", "other", "s3", "ls", KEYFIT_DRY_RUN="1", KEYFIT_DISABLE="1")
+        self.assertEqual(json.loads(out.stdout)["argv"], ["--profile", "other", "s3", "ls"])
+        self.assertEqual(self.sts.read_text(), "")  # unchecked
+
     def test_shared_profiles_come_only_from_settings(self):
         reg = self.config / "registry.toml"
         reg.write_text(reg.read_text().replace('shared_aws_profiles = ["ci-worker"]', "shared_aws_profiles = []"))
@@ -273,7 +302,7 @@ class ShimTests(unittest.TestCase):
         reg.write_text(reg.read_text().replace('claude = "work"', 'claude = "wrok"'))
         out = self.run_tool("claude", "-p", "hi")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("✘ claude    wrok   no account [accounts.claude.wrok]\n    → map it again: keyfit add claude …",
+        self.assertIn("✘ claude     wrok   no account [accounts.claude.wrok]\n    → map it again: keyfit add claude …",
                       out.stderr)
         self.assertNotIn("internal error", out.stderr)
         self.assertEqual(self.run_tool("aws", "s3", "ls").returncode, 0)  # the project's aws has its own account

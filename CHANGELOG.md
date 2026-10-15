@@ -194,6 +194,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `init` come first in it, and every command's `--help` says what it does. After `keyfit setup --rc`,
   Keyfit says what to do next; with `--rc FILE` it prints the matching `--remove --rc FILE`.
   Running `keyfit setup` again (after an upgrade) says when your startup file already loads the shims.
+  The line it adds ends in `# keyfit: tool shims on PATH` instead of naming four of the tools; the
+  line of earlier versions still counts (`setup --rc` rewrites it in place, `setup --remove` and
+  `doctor` find it, and a shim whose Keyfit is gone names both).
 - **`keyfit init` refuses your home folder** (and any folder above it), and a `--root` that doesn't
   exist: every folder under it would have belonged to one project. Outside git, it says that every
   folder below belongs to the project. It also says when Keyfit isn't active in this terminal yet.
@@ -213,6 +216,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of failing on `import tomllib`.
 - Shims whose Keyfit installation is gone (uninstalled before `keyfit setup --remove`, or moved) say
   what to do instead of sh's "No such file or directory". The tool still doesn't start.
+- `KEYFIT_DRY_RUN=1` started commands Keyfit lets through without checks: `supabase`, `wrangler`,
+  `convex`, `gcloud` and `firebase` in a project without an account of their kind
+  (`KEYFIT_DRY_RUN=1 wrangler deploy` deployed), OpenCode's own commands (`opencode serve`, …) and
+  AWS profiles under `shared_aws_profiles`. They are now printed with the reason, the command and
+  the names of the variables that would change, like a checked start. Sign-in commands, other
+  commands in a folder that isn't registered, and `KEYFIT_DISABLE=1` still run, as documented.
+- `cloudflare` lines in `keyfit status`, `doctor` and failed checks started one column later than
+  the others: the kind column is now ten characters wide.
+- Guided `keyfit init` on a Mac without Codex said `no clean ChatGPT login in ~/.codex … sign in
+  (codex login)`; it now says `codex not found on PATH — skipped`, like the other tools.
 
 ### Security
 

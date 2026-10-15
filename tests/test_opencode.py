@@ -408,7 +408,7 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("run", "hi")
         self.assertEqual((out.returncode, out.stdout), (1, ""))
         self.assertIn("keyfit: opencode not started, demo needs attention\n"
-                      "  ✘ opencode  work   not signed in (no OpenCode database yet)\n"
+                      "  ✘ opencode   work   not signed in (no OpenCode database yet)\n"
                       f"    → OPENCODE_DB={self.db} opencode auth login anthropic --standalone\n", out.stderr)
         self.assertNotIn("Sign in now?", out.stderr)  # no terminal: nothing is asked
 
@@ -458,6 +458,15 @@ class ShimTests(unittest.TestCase):
         seen = self.started(out)
         self.assertEqual(seen["argv"], ["mcp", "list"])
         self.assertEqual((seen["env"]["OPENCODE_DB"], seen["env"]["ANTHROPIC_API_KEY"]), (None, "sk-kept"))
+
+    def test_dry_run_prints_opencodes_own_commands_instead_of_running_them(self):
+        for cwd in (self.repo, self.outside):  # decided before the folder is looked at
+            out = self.run_tool("serve", "--port", "4096", cwd=cwd, KEYFIT_DRY_RUN="1")
+            self.assertEqual((out.returncode, out.stdout), (0, ""), out.stderr)  # no server started
+            self.assertEqual(out.stderr, "keyfit: opencode serve is OpenCode's own command: it runs without a "
+                                         "project's accounts or checks\n"
+                                         f"  would run: {self.bin / 'opencode'} serve --port 4096\n"
+                                         "  environment changes (names only): none\n")
 
     def test_inside_a_session_the_background_server_never_gets_the_projects_environment(self):
         # a session's environment holds its project's accounts; a background server started from it would keep them
@@ -630,8 +639,8 @@ class AddTests(unittest.TestCase):
         database(self.home / ".local" / "share" / "opencode" / "opencode.db", ("anthropic", "Anthropic"))
         self.run_main("add", "opencode")
         _, out, _ = self.run_main("doctor")
-        self.assertIn("  ✔ opencode  default   anthropic signed in · ~/.local/share/opencode/opencode.db\n", out)
-        self.assertIn("  ! opencode  not found on PATH   needed only if you use it\n    → brew install opencode\n", out)
+        self.assertIn("  ✔ opencode   default   anthropic signed in · ~/.local/share/opencode/opencode.db\n", out)
+        self.assertIn("  ! opencode   not found on PATH   needed only if you use it\n    → brew install opencode\n", out)
 
 
 if __name__ == "__main__":
