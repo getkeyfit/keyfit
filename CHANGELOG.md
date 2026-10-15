@@ -132,8 +132,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CLOUDFLARE_API_TOKEN`, `GITLAB_TOKEN`, …): the check warns "from your shell, not the project's
   account" and keeps their names (never values) with the cached result, so cached starts remove them
   too, and a new key-like variable is checked again. Only names containing `KEY` or `TOKEN` count, so
-  the `CLOUDFLARE_ACCOUNT_ID` Keyfit sets stays. Claude, Codex, Copilot CLI and Gemini CLI sessions
-  keep them all. Other projects' MCP servers are
+  the `CLOUDFLARE_ACCOUNT_ID` Keyfit sets stays. Claude, Codex and Copilot CLI sessions keep them all;
+  Gemini CLI sessions keep them too, apart from the Google keys its own account removes
+  (`GEMINI_API_KEY`, `GOOGLE_API_KEY`). Other projects' MCP servers are
   switched off in `OPENCODE_CONFIG_CONTENT` for the folder OpenCode opens (your own content is kept). `--server`, `acp --login` and `opencode DIR` with a
   folder of another project are refused. `Sign in now?` runs `opencode auth login PROVIDER --standalone`;
   `keyfit init` offers OpenCode's sign-ins; `doctor` shows the project's database. Verified with
