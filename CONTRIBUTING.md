@@ -18,7 +18,7 @@ python3 -m unittest discover -s tests -k test_remote_timeout  # tests whose name
 ```
 
 The tests use fake `aws`, `claude`, `gh`, `opencode`, `copilot`, `gemini`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud`, `firebase`, `npx` and `security` binaries and a temporary config
-directory. They never reach the network, your accounts, `~/.config/keyfit`, wrangler's config folder, OpenCode's database, Copilot CLI's `~/.copilot`, Gemini CLI's `~/.gemini`, gcloud's `~/.config/gcloud`, the firebase CLI's `~/.config/configstore` or your Keychain.
+directory. They never reach the network, your accounts, `~/.config/keyfit`, wrangler's config folder, OpenCode's database, Copilot CLI's `~/.copilot`, Gemini CLI's `~/.gemini`, gcloud's `~/.config/gcloud`, the firebase CLI's `~/.config/configstore`, the Google Workspace MCP servers' logins (`~/.gmail-mcp`, `~/.google_workspace_mcp`, …) or your Keychain.
 Keep it that way: a new test module sets `KEYFIT_CONFIG_DIR` to a temporary directory at the
 top, like the existing ones.
 
