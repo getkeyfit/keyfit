@@ -20,20 +20,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the server's own definition (`env`) in the five agents' configs, else the server's default.
   Before an agent starts, every definition of the server (yours and the folder's, in every agent) must
   read that login, and every account in it must be the project's Google account (by the email it names:
-  the file's name, `cached_email`, `email` or an `id_token`); while a saved token is still valid, Google
-  must name that account too (tokeninfo, Gmail's profile or the primary calendar). Tokens are never
-  renewed: a login that names no account (Gmail AutoAuth after the hour following its sign-in) is a
-  warning, `account not confirmed`, at every agent start, and a server not signed in yet is a warning
-  too. Another account blocks the start, with a fix that gives the server a login of its own (Keyfit
-  never removes the other one). The servers join the project's MCP ownership: every other project's
-  sessions don't see them, in all five agents, and a project with Google Workspace servers doesn't see
-  any other Gmail, Drive or Calendar server (Google's own remote servers included; `keyfit add mcp`
-  still gives one to a project). Sessions start without inherited `GMAIL_CREDENTIALS_PATH`,
-  `WORKSPACE_MCP_CREDENTIALS_DIR`, `GOOGLE_MCP_CREDENTIALS_DIR`, `GOOGLE_CALENDAR_MCP_TOKEN_PATH`,
-  `GOOGLE_DRIVE_MCP_TOKEN_PATH` and `USER_GOOGLE_EMAIL`, so each server reads the login Keyfit checked.
-  `keyfit init` offers the servers signed in as the project's account; `doctor` shows each server, its
-  login and the account it names. claude.ai's own Gmail, Google Drive and Google Calendar connectors
-  belong to the Claude account and stay outside Keyfit's reach (documented).
+  the file's name, `cached_email`, `email` or an `id_token`). Google must name that account too
+  (tokeninfo, Gmail's profile or the primary calendar), asked with the saved token while it is valid,
+  else with one renewed the way the server does: the login's refresh token and the server's own OAuth
+  client (from the Workspace server's login, `GMAIL_OAUTH_PATH` or `~/.gmail-mcp/gcp-oauth.keys.json`,
+  `GOOGLE_OAUTH_CREDENTIALS`, `GOOGLE_DRIVE_OAUTH_CREDENTIALS` or the Drive server's config folder) go
+  to Google's token endpoint, pinned, and the fresh token answers once and is dropped; nothing is
+  written to the login. This is the one place Keyfit uses a refresh token, so Gmail AutoAuth, whose
+  login names no account, is confirmed at every check, hours after its sign-in; a signed-out or revoked
+  sign-in fails with the server's own sign-in as the fix. Without a refresh token or OAuth client the
+  local check decides, and a login that names no account is a warning, `account not confirmed`, at
+  every agent start; a server not signed in yet is a warning too. Another account blocks the start,
+  with a fix that gives the server a login of its own (Keyfit never removes the other one). The servers
+  join the project's MCP ownership: every other project's sessions don't see them, in all five agents,
+  and a project with Google Workspace servers doesn't see any other Gmail, Drive or Calendar server
+  (Google's own remote servers included; `keyfit add mcp` still gives one to a project). Sessions start
+  without inherited `GMAIL_CREDENTIALS_PATH`, `WORKSPACE_MCP_CREDENTIALS_DIR`,
+  `GOOGLE_MCP_CREDENTIALS_DIR`, `GOOGLE_CALENDAR_MCP_TOKEN_PATH`, `GOOGLE_DRIVE_MCP_TOKEN_PATH` and
+  `USER_GOOGLE_EMAIL`, so each server reads the login Keyfit checked. `keyfit init` offers the servers
+  signed in as the project's account; `doctor` shows each server, its login and the account it names.
+  claude.ai's own Gmail, Google Drive and Google Calendar connectors belong to the Claude account and
+  stay outside Keyfit's reach (documented).
 - **Gemini CLI, the fifth agent (thirteenth tool), on the project's Google account.** `gemini` starts with
   the project's accounts, checked, like the other agents, and signed in as the project's Google account
   (the work or the personal email of `keyfit add google`). Gemini CLI keeps its settings, sessions and
