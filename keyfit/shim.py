@@ -199,7 +199,8 @@ def requested_profiles(args: list[str]) -> list[str]:
 
 
 def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Path,
-                owners: dict | None = None) -> list[str]:
+                owners: dict | None = None, seen=()) -> list[str]:
+    """*seen*: the shell variables the checks found that the tool must start without (OpenCode's)."""
     if tool == "aws":
         profile = project.connections["aws"]["profile"]
         for asked in requested_profiles(args):
@@ -236,7 +237,7 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
             extra.append("--no-daemon")  # the shared daemon keeps the first launcher's environment
         return extra + args
     if tool == "opencode":
-        return opencode_args(project, args, env, cwd, owners)
+        return opencode_args(project, args, env, cwd, owners, seen)
     if tool == "copilot":
         return copilot_args(project, args, env, cwd, owners)
     if tool == "gemini":
@@ -301,14 +302,16 @@ def opencode_mcp(project: Project, env: dict, cwd: Path, owners: dict | None) ->
                       f"  Fix or unset it (bypass once: KEYFIT_DISABLE=1 opencode …)") from None
 
 
-def opencode_args(project: Project, args: list[str], env: dict, cwd: Path, owners: dict | None = None) -> list[str]:
+def opencode_args(project: Project, args: list[str], env: dict, cwd: Path, owners: dict | None = None,
+                  seen=()) -> list[str]:
     """Sessions, and the commands that read the project's sign-ins and sessions, run on a private server
     (--standalone): the background server serves every folder and keeps the environment of the start that launched
     it. Every MCP server the project must not see is switched off, for the folder OpenCode opens; with an OpenCode
-    account, provider keys from the shell go."""
+    account, provider keys from the shell go: the fixed ones, and those OpenCode's report named at the check (*seen*,
+    cached with it)."""
     opencode_server_option(project, args)
     if "opencode" in project.connections:
-        opencode.scrub(env)
+        opencode.scrub(env, seen)
     folder = opencode_folder(args)
     opencode_mcp(project, env, Path(folder).resolve() if folder else cwd, owners)
     return opencode_standalone(args)
@@ -1139,7 +1142,8 @@ def main(argv: list[str]) -> int:
         if tool in AGENTS:
             for check in (c for c in checks if c.status == "warn"):
                 _say([f"keyfit: {check.lines()[0].strip()}"])
-        args = adjust_args(tool, project, args, run_env, Path.cwd(), registry.mcp_owners())
+        seen = [var for check in checks if check.kind == tool for var in check.scrub]
+        args = adjust_args(tool, project, args, run_env, Path.cwd(), registry.mcp_owners(), seen)
     except Refused as refusal:
         print(refusal, file=sys.stderr)
         return 1
