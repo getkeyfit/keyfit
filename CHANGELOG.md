@@ -201,6 +201,14 @@ From the pre-launch security review:
 - **Release workflow:** actions pinned to commit hashes, `build` and `twine` to versions.
 - `docs/security.md` now says plainly what Keyfit sees, stores, sends and does not protect against.
 
+From the second pre-launch review:
+
+- **wrangler's other spellings of `--config` are refused too.** wrangler's parser also reads `-c` with
+  the value attached (`-c/path/wrangler.toml`, `-c~/…`), in a group of short options (`-ec FILE`,
+  `-ec./FILE`), as `-c=FILE` and as `--c FILE`. A config of another account, or in a folder bound to
+  another wrangler profile, given that way reached wrangler without the refusal. `wrangler dev` with
+  several configs has each one checked.
+
 ## [0.1.0] - 2026-10-12
 
 First public version. macOS only; Python 3.11 or newer, no other dependencies.
