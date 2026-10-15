@@ -474,6 +474,13 @@ class ShimTests(GcloudCase):
                          (["gcloud", "components", "list"], "default", "/k.json"))
         self.assertEqual((self.stderr, self.gcloud.calls), ("", []))
 
+    def test_dry_run_prints_a_project_without_gcloud_instead_of_running_it(self):
+        code, argv, _ = self.run_shim("run", "deploy", cwd=self.repos["plain"], KEYFIT_DRY_RUN="1")
+        self.assertEqual((code, argv), (0, None), self.stderr)  # never started
+        self.assertIn("keyfit: project plain has no gcloud account mapped: gcloud runs without checks, as before "
+                      "Keyfit\n  would run: ", self.stderr)
+        self.assertIn("gcloud run deploy\n  environment changes (names only): ", self.stderr)
+
     def test_unregistered_folder_passes_through(self):
         code, argv, env = self.run_shim("--project", "globex-app", "--account", GLOBEX, "projects", "list",
                                         cwd=self.outside, CLOUDSDK_CORE_ACCOUNT=PERSONAL)

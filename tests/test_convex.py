@@ -421,6 +421,13 @@ class ShimTests(ConvexCase):
         self.assertEqual((env["CONVEX_OVERRIDE_ACCESS_TOKEN"], env["CONVEX_DEPLOYMENT"]), (GLOBEX, "dev:brave-otter-456"))
         self.assertEqual((self.stderr, self.fetched), ("", []))
 
+    def test_dry_run_prints_a_project_without_convex_instead_of_running_it(self):
+        code, argv, _ = self.run_shim("deploy", cwd=self.repos["plain"], KEYFIT_DRY_RUN="1")
+        self.assertEqual((code, argv), (0, None), self.stderr)  # never started
+        self.assertIn("keyfit: project plain has no convex account mapped: convex runs without checks, as before "
+                      "Keyfit\n  would run: ", self.stderr)
+        self.assertIn("convex deploy\n  environment changes (names only): ", self.stderr)
+
     def test_unregistered_folder_passes_through(self):
         code, argv, env = self.run_shim("deploy", "--admin-key", "x", "--url", "u", cwd=self.outside,
                                         CONVEX_DEPLOYMENT="dev:brave-otter-456")
