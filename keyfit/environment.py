@@ -51,6 +51,12 @@ def build(project: Project, base_env: dict | None = None, kinds=None) -> dict:
     return env
 
 
+def _names(entry: dict) -> tuple:
+    """The variable names a cached check found in the shell."""
+    names = entry.get("scrub")
+    return tuple(n for n in names if isinstance(n, str)) if isinstance(names, list) else ()
+
+
 def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cache: bool = False) -> list[Check]:
     """Check the selected connections. Remote checks run in parallel; successes are cached."""
 
@@ -69,7 +75,7 @@ def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cac
         if use_cache:
             hit = cache.get(k)
             if hit is not None:
-                return local.merge(Check(kind, hit["status"], local.label, hit["detail"]))
+                return local.merge(Check(kind, hit["status"], local.label, hit["detail"], scrub=_names(hit)))
         result = adapter.remote(conn, env)
         if result.failed and result.transient:
             result = adapter.remote(conn, env)  # one retry for a network blip
@@ -78,9 +84,10 @@ def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cac
             if last is not None:
                 age = human(time.time() - last["at"])
                 return local.merge(Check(kind, "warn", local.label,
-                                         f"{last['detail']} {age} ago · could not re-check now ({result.detail})"))
+                                         f"{last['detail']} {age} ago · could not re-check now ({result.detail})",
+                                         scrub=_names(last)))
         if not result.failed:
-            cache.put(k, result.status, result.detail)
+            cache.put(k, result.status, result.detail, result.scrub)
         return local.merge(result)
 
     items = _selected(project, kinds)
