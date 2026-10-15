@@ -211,6 +211,19 @@ def read(kind: str, login: Path) -> tuple[list[dict] | None, str]:
     return [entry for entry in map(_record, records) if entry], ""
 
 
+def who(kind: str, login: Path | None) -> str:
+    """What a login says about its accounts, for messages: their emails, that it names none, or no sign-in yet."""
+    entries, reason = read(kind, login) if login else (None, "no login")
+    if entries is None:
+        return reason
+    named = sorted({e["email"].lower() for e in entries if e["email"]})
+    if not entries:
+        return "not signed in yet"
+    if not named:
+        return "names no account"
+    return ", ".join(named) + (" and an account it does not name" if any(not e["email"] for e in entries) else "")
+
+
 def _valid(entry: dict) -> str | None:
     """The sign-in's access token while it is still valid (never stored or shown)."""
     expiry = entry.get("expiry")

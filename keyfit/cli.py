@@ -18,6 +18,7 @@ from .adapters import firebase as firebase_adapter
 from .adapters import gcloud as gcloud_adapter
 from .adapters import gemini as gemini_adapter
 from .adapters import google as google_adapter
+from .adapters import google_mcp as google_mcp_adapter
 from .adapters import linear as linear_adapter
 from .adapters import opencode as opencode_adapter
 from .adapters import supabase as supabase_adapter
@@ -420,6 +421,33 @@ def _offer_gemini(name: str, base: dict) -> None:
         cmd_add_gemini(argparse.Namespace(**dict(offer, new=True)))
 
 
+def _offer_google_mcp(name: str, base: dict) -> None:
+    env = dict(os.environ)
+    ADAPTERS["google-mcp"].inject({}, env)  # as in a session: each server reads what its definition says
+    found = google_mcp_adapter.found(env, Path.cwd())
+    if not found:
+        print("Google Workspace MCP: no Gmail, Drive or Calendar server Keyfit knows in your agents' MCP configs — "
+              "skipped")
+        return
+    email = google_adapter.email_of(Registry.load(base["registry"]).get(name).connections.get("google"))
+    if email is None:
+        print(f"Google Workspace MCP: {', '.join(sorted(found))} found; their sign-ins are checked against {name}'s "
+              "Google account, and it has none yet — later: keyfit add google --email <email>, then: keyfit add "
+              "google-mcp")
+        return
+    print(f"Google Workspace MCP servers (each one {name} takes must be signed in as {email}, and is hidden in every "
+          "other project):")
+    for server in sorted(found):
+        _, kind, login = found[server][0]
+        emails = {e["email"] for e in google_mcp_adapter.read(kind, login)[0] or [] if e["email"]} if login else set()
+        line = _google_mcp_line(server, found[server])
+        if any(not google_adapter.same(e, email) for e in emails):
+            print(f"  {line} — not offered")
+            continue
+        if _yes(f"  Use {line} for {name}?"):
+            cmd_add_google_mcp(argparse.Namespace(**base, server=server, login=None, type=None, name=None))
+
+
 def _offer_linear(name: str, base: dict) -> None:
     if not secrets.can_store():
         print("Linear: later, with a key in an environment variable: keyfit add linear --key env:<VARIABLE>")
@@ -436,7 +464,7 @@ GUIDED = (("aws", "AWS", _offer_aws), ("github", "GitHub", _offer_github), ("cla
           ("supabase", "Supabase", _offer_supabase), ("cloudflare", "Cloudflare", _offer_cloudflare),
           ("convex", "Convex", _offer_convex), ("google", "Google", _offer_google),
           ("gcloud", "Google Cloud", _offer_gcloud), ("firebase", "Firebase", _offer_firebase),
-          ("gemini", "Gemini CLI", _offer_gemini),
+          ("gemini", "Gemini CLI", _offer_gemini), ("google-mcp", "Google Workspace MCP", _offer_google_mcp),
           ("linear", "Linear", _offer_linear))
 
 
@@ -500,7 +528,8 @@ def cmd_status(args) -> int:
     checks = []
     if not r.project.connections:
         print("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add aws|github|"
-              "claude|codex|opencode|copilot|gemini|vercel|supabase|cloudflare|convex|google|gcloud|firebase|linear …")
+              "claude|codex|opencode|copilot|gemini|vercel|supabase|cloudflare|convex|google|gcloud|firebase|"
+              "google-mcp|linear …")
     else:
         env = environment.build(r.project)
         checks = environment.verify(r.project, env, remote=not args.offline)  # fresh; refreshes the cache
@@ -1543,6 +1572,113 @@ def _add_gemini_key(reg: Registry, project: Project, args, env: dict, extra: dic
     return 0
 
 
+def _google_mcp_line(name: str, rows: list) -> str:
+    """One server as found in the agents' configs: its type, its login and who that login is signed in as."""
+    _, kind, login = rows[0]
+    where = tilde(login) if login else "its own login"
+    return f"{name} ({google_mcp_adapter.TYPES[kind].title}, {where}: {google_mcp_adapter.who(kind, login)})"
+
+
+def cmd_add_google_mcp(args) -> int:
+    """Give the project a Google Workspace MCP server (Gmail, Drive, Calendar) signed in as its Google account: the
+    server's login is checked against that account, and every other project's sessions stop seeing the server."""
+    reg = Registry.load(args.registry)
+    project = _project_from_args(reg, args)
+    if project is None:
+        return 1
+    email = google_adapter.email_of(project.connections.get("google"))
+    if email is None:
+        print(f"{project.name} has no Google account yet, which its Google Workspace servers are checked against.\n"
+              "  → keyfit add google --email <the project's work or personal email>, then: keyfit add google-mcp",
+              file=sys.stderr)
+        return 1
+    if args.name and not secrets.NAME.fullmatch(args.name):
+        print("a name is letters, digits, '.', '_' and '-'", file=sys.stderr)
+        return 1
+    env, cwd = dict(os.environ), Path.cwd()
+    ADAPTERS["google-mcp"].inject({}, env)  # as in a session: each server reads what its definition says
+    found = google_mcp_adapter.found(env, cwd)
+    name = args.server
+    if not name:
+        names = sorted(found)
+        if names and sys.stdin.isatty():
+            print("Google Workspace MCP servers in your agents' configs:")
+            options = [_google_mcp_line(n, found[n]) for n in names]
+            picked = _choose(f"Google Workspace server for {project.name}", options)
+            name = names[options.index(picked)] if picked else None
+        if not name:
+            known = f" (your agents have {', '.join(names)})" if names else ""
+            print(f"name the server: keyfit add google-mcp --server <its name in your agents' MCP config>{known}",
+                  file=sys.stderr)
+            return 1
+    if not google_mcp_adapter.NAME.fullmatch(name):
+        print(f"{printable(name)}: Keyfit takes servers named with letters, digits, '_' and '-' (every agent can hide "
+              "those) — rename it in your agents' MCP config", file=sys.stderr)
+        return 1
+    if any(n == name and mcp.google_type(spec) == mcp.GOOGLE_REMOTE for _, n, spec in mcp.definitions(env, cwd)):
+        print(f"{name} is one of Google's own remote servers: its sign-in is the agent's, out of Keyfit's reach.\n"
+              f"  To give it to {project.name} only (hidden in every other project): keyfit add mcp {name}",
+              file=sys.stderr)
+        return 1
+    rows = found.get(name, [])
+    kinds = sorted({kind for _, kind, _ in rows})
+    if args.type or len(kinds) == 1:
+        kind = args.type or kinds[0]
+    elif kinds:
+        print(f"{name} runs different servers in your agents ({', '.join(kinds)}): give them different names",
+              file=sys.stderr)
+        return 1
+    elif args.login:
+        kind = "other"
+    else:
+        print(f"{name} is not a Google Workspace server Keyfit knows in your agents' MCP configs ("
+              f"{', '.join(t for t in google_mcp_adapter.TYPES if t != 'other')}).\n"
+              f"  Name its login file: keyfit add google-mcp --server {name} --login PATH", file=sys.stderr)
+        return 1
+    logins = sorted({str(login) for _, k, login in rows if k == kind and login})
+    if args.login:
+        login = canonical(args.login)
+    elif len(logins) > 1:
+        print(f"{name} reads different logins in your agents ({', '.join(tilde(p) for p in logins)}): point them at "
+              "one, or name it with --login PATH", file=sys.stderr)
+        return 1
+    else:
+        login = Path(logins[0]) if logins else google_mcp_adapter.default_login(kind, env)
+        if login is None:
+            print(f"name its login file: keyfit add google-mcp --server {name} --login PATH", file=sys.stderr)
+            return 1
+    record = {"type": kind, "login": tilde(login)}
+    conn = {"servers": {name: record}, "account": email}
+    adapter = ADAPTERS["google-mcp"]
+    check = adapter.check_local(conn, env, cwd)
+    if not check.failed and check.pending:  # Google confirms it while the saved token is valid; an expired one stays
+        check = check.merge(adapter.remote(conn, env))
+    if check.failed:
+        print(f"{check.detail}\n  → {check.fix}", file=sys.stderr)
+        return 1
+    body = reg.data["projects"][project.name]
+    google, current = body.get("google"), body.get("google-mcp")
+    account = args.name or (current if isinstance(current, str) else None) or \
+        (google if isinstance(google, str) else google_adapter.default_name(email))
+    held = reg.data["accounts"].get("google-mcp", {}).get(account)
+    held = held if isinstance(held, dict) else {}
+    table = {**(held.get("servers") if isinstance(held.get("servers"), dict) else {}), name: record}
+    reg.set_account("google-mcp", account, {**held, "servers": table})
+    reg.set_connection(project.name, "google-mcp", account)
+    reg.save()
+    print(f"{project.name}: google-mcp '{account}' → {name} ({google_mcp_adapter.TYPES[kind].title}, {tilde(login)}), "
+          f"signed in as {email}; hidden in every other project")
+    others = sorted(p for p, b in reg.data["projects"].items() if p != project.name and b.get("google-mcp") == account)
+    if others:
+        print(f"  account '{account}' is shared: {', '.join(others)} take{'s' if len(others) == 1 else ''} {name} too")
+    if check.status == "warn":
+        print(f"  note: {check.detail}\n  → {check.fix}")
+    rest = sorted(n for n in found if n not in table)
+    if rest:
+        print(f"  {project.name}'s sessions no longer see the other Google Workspace servers: {', '.join(rest)}")
+    return 0
+
+
 def _configuration_line(name: str, settings: dict) -> str:
     return f"{name}  ({settings.get('account') or 'no account'} → {settings.get('project') or 'no project'})"
 
@@ -2132,6 +2268,9 @@ def cmd_doctor(args) -> int:
             conn = r.project.connections.get("gemini")
             if isinstance(conn, dict):  # which home Gemini CLI gets and whose sign-in it holds; a key only by its name
                 checks.append(_doctor_gemini(r.project, conn, env))
+            conn = r.project.connections.get("google-mcp")
+            if isinstance(conn, dict):  # which servers, logins and accounts, from the files only (labels, never a token)
+                checks.append(_doctor_google_mcp(r.project, conn, env))
             conn = r.project.connections.get("copilot")
             if isinstance(conn, dict):  # which account and config folder Copilot gets, from the registry (no token)
                 github = r.project.connections.get("github")
@@ -2167,6 +2306,17 @@ def _doctor_gemini(project: Project, conn: dict, env: dict) -> Check:
         return Check("gemini", "ok", label, f"{secrets.describe(conn['key'])} · {where}")
     check = ADAPTERS["gemini"].local(conn, environment.build(project, env, kinds=("gemini",)))
     return check if check.failed else Check("gemini", "ok", check.label, f"Google sign-in · {where}")
+
+
+def _doctor_google_mcp(project: Project, conn: dict, env: dict) -> Check:
+    """The doctor's Google Workspace line: each server, the login it reads and who that login is signed in as."""
+    check = ADAPTERS["google-mcp"].local(conn, environment.build(project, env, kinds=("google-mcp",)))
+    if check.failed:
+        return check
+    where = [f"{name}: {tilde(google_mcp_adapter.recorded(server))} ({server['type']}, "
+             f"{google_mcp_adapter.who(server['type'], google_mcp_adapter.recorded(server))})"
+             for name, server in google_mcp_adapter.servers(conn)]
+    return Check("google-mcp", check.status, check.label, " · ".join(where), check.fix)
 
 
 START = """start here:
@@ -2208,8 +2358,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = command(sub, "init", "register the current repository as a project, then offer the AWS, GitHub, Claude, "
                              "Codex, OpenCode, Copilot CLI, Vercel, Supabase, Cloudflare, Convex, Google, Google "
-                             "Cloud, Firebase, Gemini CLI and Linear accounts found on this Mac (imports `use aws` / "
-                             "LINEAR_API_KEY lines from its .envrc, if any)")
+                             "Cloud, Firebase, Gemini CLI, Google Workspace MCP and Linear accounts found on this Mac "
+                             "(imports `use aws` / LINEAR_API_KEY lines from its .envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
     p.add_argument("-y", "--yes", action="store_true",
@@ -2348,6 +2498,18 @@ def build_parser() -> argparse.ArgumentParser:
                                            "Assist with a Workspace account needs one)")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_gemini)
+    p = command(kinds, "google-mcp", "Google Workspace MCP server (Gmail, Drive, Calendar) signed in as the project's "
+                                     "Google account, hidden in every other project")
+    p.add_argument("--server", help="its name in your agents' MCP config (default: pick one of the Gmail, Drive and "
+                                    "Calendar servers they have)")
+    p.add_argument("--login", help="the login file (or folder) it reads (default: from its definition, else where its "
+                                   "type keeps it)")
+    p.add_argument("--type", choices=list(google_mcp_adapter.TYPES),
+                   help="what it runs (default: recognised from its command; other: any server with a JSON token file)")
+    p.add_argument("--name", help="short account name, reusable across projects (default: the project's Google "
+                                  "account's name, e.g. work)")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_google_mcp)
     p = command(kinds, "linear", "Linear workspace and where its API key lives")
     p.add_argument("--key", help="env:VAR, keychain:service/account, or a bare variable name "
                                  "(default: paste the key; it is verified, then stored in the Keychain)")
