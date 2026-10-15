@@ -476,8 +476,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(reg["projects"]["acme"]["google-mcp"], "acme")
         self.assertEqual(reg["accounts"]["google-mcp"]["acme"],
                          {"servers": {"gmail_work": {"type": "gmail-autoauth", "login": "~/.gmail-mcp/work.json"}}})
-        self.assertIn(f"acme: google-mcp 'acme' → gmail_work (Gmail AutoAuth MCP, ~/.gmail-mcp/work.json), signed in "
-                      f"as {ACME}; hidden in every other project\n", out)
+        self.assertIn(f"acme: google-mcp 'acme' → gmail_work (Gmail AutoAuth MCP, ~/.gmail-mcp/work.json), checked "
+                      f"against {ACME}; hidden in every other project\n", out)
         self.assertIn("  note: account not confirmed: ~/.gmail-mcp/work.json names no account, and its saved token has "
                       "expired\n", out)
         self.assertEqual(self.google.calls, [])
