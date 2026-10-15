@@ -55,12 +55,15 @@ SCRUB = ("CLOUDFLARE_API_TOKEN", "CF_API_TOKEN", "CLOUDFLARE_API_KEY", "CF_API_K
          "CLOUDFLARE_ACCOUNT_ID", "CF_ACCOUNT_ID")
 CONFIGS = ("wrangler.json", "wrangler.jsonc", "wrangler.toml")
 BINDINGS = Path("profiles") / "directory-bindings.json"
-# Options that take a value (yargs: `--name value`, `--name=value`, `-c value`): wrangler's global ones and those of
-# the commands Keyfit looks at (login, auth create, whoami). Every other option is read as a flag, so
-# `wrangler --x-provision login` is still `login`.
-VALUED = {"-c", "--config", "--cwd", "-e", "--env", "--env-file", "--profile", "--scopes", "--callback-host",
-          "--callback-port", "--account"}
-OPTIONS = {"-c": "--config", "--config": "--config", "--cwd": "--cwd", "--profile": "--profile"}
+# Options that take a value (yargs: `--name value`, `--name=value`, `-c value`, `-cVALUE`, `-ec value`): wrangler's
+# global ones and those of the commands Keyfit looks at (login, auth create, whoami), with yargs' camelCase spellings.
+# Every other option is read as a flag, so `wrangler --x-provision login` is still `login`.
+VALUED = {"c", "config", "cwd", "e", "env", "profile", "scopes", "callback-host", "callbackHost", "callback-port",
+          "callbackPort", "account"}
+OPTIONS = {"c": "--config", "config": "--config", "cwd": "--cwd", "profile": "--profile"}
+ARRAYS = {"env-file", "envFile"}  # options that take every following argument up to the next option
+NEGATIVE = re.compile(r"-([0-9]+(\.[0-9]+)?|\.[0-9]+)")  # a negative number: an argument, not options (fullmatch)
+NUMBER = re.compile(r"-?[0-9]+(\.[0-9]*)?(e-?[0-9]+)?")  # taken by the letter it is attached to (fullmatch)
 UNREACHABLE = ("could not be reached", "fetch failed", "enotfound", "econnrefused", "econnreset", "etimedout",
                "eai_again", "getaddrinfo", "network")
 SIGNED_OUT = ("not logged in", "not authenticated", "could not be refreshed", "authentication error",
@@ -275,37 +278,73 @@ def mismatch(conn, folder, env: dict, asked: str | None = None, config: Path | N
     return None
 
 
-def options(args: list[str]) -> list[tuple[str, str | None]]:
-    """(long name, value) of each --profile, -c/--config and --cwd option, read like wrangler's parser (yargs):
-    `--name value`, `--name=value`, `-c value`, anywhere before `--`."""
-    found, i = [], 0
+def _read(args: list[str]):
+    """A wrangler command line as wrangler's parser (yargs-parser 21) reads it, up to `--`: (name, value) for each
+    option it sets (value None when it takes none, or none was given) and (None, word) for each command word.
+    Short options come in groups: `-ec FILE` sets e and c, and the letter c takes the rest of `-c/abs/w.toml`,
+    `-c~/w.toml` or `-c=w.toml` (an attached value starting with `=`, a non-word character or a number)."""
+    i = 0
     while i < len(args):
-        arg = args[i]
-        if arg == "--":
-            break
-        name, eq, value = arg.partition("=")
-        if name in OPTIONS:
-            if not eq:
-                value = args[i + 1] if i + 1 < len(args) else None
-                i += 1
-            found.append((OPTIONS[name], value))
+        arg, nxt = args[i], args[i + 1] if i + 1 < len(args) else None
         i += 1
-    return found
+        if arg == "--":
+            return
+        if not arg.startswith("-") or arg == "-" or NEGATIVE.fullmatch(arg) or re.fullmatch(r"---+(=.*)?", arg, re.S):
+            yield None, arg
+        elif arg.startswith("--"):
+            name, eq, value = arg[2:].partition("=")
+            if name in ARRAYS:  # every argument up to the next option: `--env-file a.env b.env`
+                values = [value] if eq else []
+                while i < len(args) and (not args[i].startswith("-") or NEGATIVE.fullmatch(args[i])):
+                    values.append(args[i])
+                    i += 1
+                yield from ((name, v or None) for v in values or [None])
+                continue
+            if not eq and not name.startswith("no-") and nxt is not None and (
+                    name in VALUED and (not nxt.startswith("-") or NEGATIVE.fullmatch(nxt)) or nxt in ("true", "false")):
+                value, i = nxt, i + 1
+            yield name, value or None
+        elif re.match(r"-.\..+=", arg):  # `-c.x=1`: a dotted key (wrangler gets an object, not a path)
+            yield arg[1:].partition("=")[0], None
+        elif re.match(r"-.\..+", arg):  # `-c./w.toml VALUE` too: the next argument is the object's value
+            if nxt is not None and not nxt.startswith("-"):
+                i += 1
+            yield arg[1:], None
+        else:
+            letters, broken = arg[1:-1], False
+            for j, letter in enumerate(letters):
+                rest, after = arg[j + 2:], letters[j + 1:j + 2]
+                if after == "=":
+                    yield letter, arg[j + 3:] or None
+                    broken = True
+                    break
+                if rest == "-":
+                    yield letter, rest
+                    continue
+                if re.fullmatch(r"[A-Za-z]", letter) and NUMBER.fullmatch(rest) or re.fullmatch(r"[^A-Za-z0-9_]", after):
+                    yield letter, rest
+                    broken = True
+                    break
+                yield letter, None
+            last = arg[-1]
+            if not broken and last != "-":
+                value = None
+                if nxt is not None and (last in VALUED and (not re.match(r"(-|--)[^-]", nxt) or NEGATIVE.fullmatch(nxt))
+                                        or nxt in ("true", "false")):
+                    value, i = nxt, i + 1
+                yield last, value or None
+
+
+def options(args: list[str]) -> list[tuple[str, str | None]]:
+    """(long name, value) of each --profile, --config and --cwd option, in every spelling wrangler's parser takes:
+    `--config FILE`, `--config=FILE`, `--c FILE`, `-c FILE`, `-c=FILE`, `-cFILE` (FILE starting with a non-word
+    character: `-c/abs/w.toml`, `-c~/w.toml`) and a group of short options with c in it (`-ec FILE`, `-ec./w.toml`)."""
+    return [(OPTIONS[name], value) for name, value in _read(args) if name in OPTIONS]
 
 
 def words(args: list[str]) -> list[str]:
-    """The command words and arguments, without options and the values of VALUED options."""
-    out, i = [], 0
-    while i < len(args):
-        arg = args[i]
-        if arg == "--":
-            break
-        if arg.startswith("-") and len(arg) > 1:
-            i += 2 if arg in VALUED else 1
-            continue
-        out.append(arg)
-        i += 1
-    return out
+    """The command words and arguments, without options and their values (read as in options())."""
+    return [word for name, word in _read(args) if name is None]
 
 
 def _json(text: str):
