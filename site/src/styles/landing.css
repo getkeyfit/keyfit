@@ -436,10 +436,9 @@ code {
 	letter-spacing: -0.02em;
 	color: color-mix(in srgb, var(--text) 88%, transparent);
 }
-/* Thirteen tiles: 7 + 6 on desktop, 4 + 4 + 4 + 1 on tablets, 3 + 3 + 3 + 3 + 1 on phones (13 is prime, so a last
-   row of one is centred there until the next tool). Rows wrap and a shorter last row is centred. Each tile draws its
-   whole border and overlaps its neighbours' by 1px, so the lines stay single and every tile is closed, also where a
-   last row is offset. */
+/* Fourteen tiles: 7 + 7 on desktop, 4 + 4 + 4 + 2 on tablets, 3 + 3 + 3 + 3 + 2 on phones. Rows wrap and a shorter
+   last row is centred, should the count change again. Each tile draws its whole border and overlaps its neighbours'
+   by 1px, so the lines stay single and every tile is closed, also where a last row is offset. */
 .tools-grid {
 	list-style: none;
 	margin: 2.25rem auto 0;

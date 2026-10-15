@@ -80,7 +80,7 @@ keyfit: claude not started, acme-api needs attention
   (bypass once: KEYFIT_DISABLE=1 claude …)
 ```
 
-When you started the tool yourself in a terminal and the fix is only a sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `opencode auth login … --standalone`, `vercel login`, `wrangler auth create NAME`, `wrangler login`, `npx convex login --force`, `gcloud auth login EMAIL`, `firebase login`, `firebase login:add`, `firebase login --reauth`), Keyfit asks `Sign in now? [Y/n]`: press Enter, sign in, and the tool starts once the checks pass. When the fix is `wrangler auth activate NAME FOLDER` for a folder of the project, or `firebase login:use EMAIL` for the folder you are in, it asks `Bind this folder now? [Y/n]` the same way (both questions, one after the other, when both are needed). Agents and scripts are never asked. Otherwise, run the command after `→`. Sign-in commands always go through, even while checks fail, and they run with the project's environment. That way they sign in the account the project needs. Then start the tool again; failed checks are never cached.
+When you started the tool yourself in a terminal and the fix is only a sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `opencode auth login … --standalone`, `vercel login`, `wrangler auth create NAME`, `wrangler login`, `npx convex login --force`, `gcloud auth login EMAIL`, `gemini --prompt-interactive /quit`, `firebase login`, `firebase login:add`, `firebase login --reauth`), Keyfit asks `Sign in now? [Y/n]`: press Enter, sign in, and the tool starts once the checks pass. When the fix is `wrangler auth activate NAME FOLDER` for a folder of the project, or `firebase login:use EMAIL` for the folder you are in, it asks `Bind this folder now? [Y/n]` the same way (both questions, one after the other, when both are needed). Agents and scripts are never asked. Otherwise, run the command after `→`. Sign-in commands always go through, even while checks fail, and they run with the project's environment. That way they sign in the account the project needs. Then start the tool again; failed checks are never cached.
 
 | Message | What to do |
 |---|---|
@@ -103,6 +103,15 @@ When you started the tool yourself in a terminal and the fix is only a sign-in (
 | `this folder belongs to acme-api; refusing --enable-mcp-server globex_cloud` | that MCP server belongs to another project, so Keyfit switched it off for the session. Leave the option out |
 | `copilot not started: ~/code/globex belongs to globex, this folder to acme-api` | `copilot -C DIR` would work in DIR with this folder's accounts. Start it there: `cd ~/code/globex && copilot` |
 | `copilot mcp list` shows another project's servers | Copilot's own commands (`mcp`, `config`, `plugin`, …) run as typed. Sessions (`copilot`, `copilot -p …`) start with those servers switched off (`--disable-mcp-server`; see `KEYFIT_DRY_RUN=1 copilot`) |
+| **Gemini CLI** `not signed in with Google in ~/.config/keyfit/gemini/acme/.gemini` | the project's Gemini CLI folder has no sign-in yet. `GEMINI_CLI_HOME=… gemini --prompt-interactive /quit`, as printed (in a terminal, Keyfit offers it): Gemini CLI opens its own sign-in dialog there, with Sign in with Google selected; sign in as the project's Google account, press R when Gemini CLI asks to restart, and it quits. Then start `gemini` again |
+| **Gemini CLI** `Gemini CLI is signed in as someone@gmail.com, the project's Google account is me@acme.com` | the folder holds the other Google account's sign-in. In a folder Keyfit made: remove that sign-in (`rm …/oauth_creds.json`, as printed) and sign in again. In your own `~/.gemini`, Keyfit never suggests removing your sign-in: give the project a folder of its own with `keyfit add gemini --new` and sign in there |
+| **Gemini CLI** `Gemini CLI is set to a Gemini API key in …/settings.json, not Sign in with Google` (or Vertex AI, …) | that folder's Gemini CLI uses another sign-in method (`/auth` changed it). Set `"security": {"auth": {"selectedType": "oauth-personal"}}` in that file, as printed (`gemini-api-key` for a key account) |
+| **Gemini CLI** `Google does not accept the sign-in's token (signed out or revoked)` | the sign-in was revoked (in your Google account's security settings, say). Sign in again, as printed (in a terminal, Keyfit offers it): Gemini CLI replaces a sign-in that no longer works |
+| **Gemini CLI** `Google does not accept the API key`, `the API key may not use the Gemini API` | create a key at aistudio.google.com/apikey (or allow the Generative Language API for this one), then `keyfit add gemini --key` |
+| **Gemini CLI** `not confirmed online (the token has expired; Gemini CLI renews it)` | not a problem: the sign-in's token is renewed by Gemini CLI when it starts, and Keyfit doesn't renew it for it. The local check (the email in the sign-in) decides until then |
+| **Gemini CLI** says this account needs `GOOGLE_CLOUD_PROJECT` | a Workspace account using Gemini Code Assist needs a Google Cloud project, and Keyfit removes the one inherited from your shell. Give the account one: `keyfit add gemini --cloud-project ID` (with the other options you used), or put `GOOGLE_CLOUD_PROJECT=ID` in the project's `.env` |
+| `this folder belongs to acme-api; refusing --allowed-mcp-server-names globex_cloud` | that MCP server belongs to another project. Leave it out of the list |
+| `gemini mcp list` shows another project's servers | Gemini CLI's own commands (`mcp`, `extensions`, `skills`, …) run as typed. Sessions (`gemini`, `gemini -p …`) start with `--allowed-mcp-server-names` naming only the servers they keep (see `KEYFIT_DRY_RUN=1 gemini`) |
 | **Claude** `not signed in` | `claude auth login`. For an account in another config folder, use `CLAUDE_CONFIG_DIR=… claude auth login`, as printed |
 | **Claude** `signed in with api_key instead of a Claude subscription` | remove `ANTHROPIC_API_KEY` or `apiKeyHelper` from your Claude settings, or sign in again |
 | **Claude** `signed in to org 'X', project expects 'Y'` | sign in to the expected organization (`claude auth login`) |
@@ -179,6 +188,7 @@ Successful online checks are reused for 30 minutes (see [the verification cache]
 - a new AWS SSO or console sign-in
 - a different Linear key, GitHub token (also the one for Copilot CLI), Vercel login, Supabase token or Convex login, a different linked Supabase project or Convex deployment, a new (or renewed) wrangler sign-in, a new gcloud sign-in or a change to the project's gcloud configuration, a new firebase sign-in, and any `gh auth login`, `logout` or `switch`
 - a different Claude organization
+- a new Gemini CLI sign-in (also a renewed token) or settings change in the project's Gemini CLI folder, or a different Gemini API key
 - a new, removed or switched OpenCode sign-in in the project's database, and a new `…_API_KEY` or `…_TOKEN` variable in your shell (by name)
 - a connection changed with `keyfit add`
 
@@ -192,11 +202,11 @@ Deleting `~/.config/keyfit/cache/checks.json` is also safe; the next launch simp
 
 ## Starts feel slow
 
-With the checks cached, a shim adds about 0.1 s, and about 0.2 s for `gh`, `claude`, `codex`, `opencode` and `copilot` in a project with a GitHub or Copilot CLI account (see [Speed](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/../README.md#speed)). If every start takes longer:
+With the checks cached, a shim adds about 0.1 s, and about 0.2 s for `gh`, `claude`, `codex`, `opencode`, `copilot` and `gemini` in a project with a GitHub or Copilot CLI account (see [Speed](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/../README.md#speed)). If every start takes longer:
 
 - **A check goes online every time.** Only successful checks are cached. A check that fails, or that is accepted only from the last 24 hours because the service did not answer (`could not re-check now`), is tried online again at the next start, with one retry. Run `keyfit status` and fix what it shows.
 - **The cache can't be written.** Keyfit keeps it in `~/.config/keyfit/cache/checks.json`. If that folder isn't writable, every start checks online.
-- **gh answers slowly.** In a project with a GitHub or Copilot CLI account, every `gh`, `claude`, `codex`, `opencode` and `copilot` start runs `gh auth token`. Time it with `time gh auth token --hostname github.com --user <login> >/dev/null`; it should take about 0.1 s.
+- **gh answers slowly.** In a project with a GitHub or Copilot CLI account, every `gh`, `claude`, `codex`, `opencode`, `copilot` and `gemini` start runs `gh auth token`. Time it with `time gh auth token --hostname github.com --user <login> >/dev/null`; it should take about 0.1 s.
 
 To see what a start costs, run `time KEYFIT_DRY_RUN=1 gh` in the project. It runs the checks and starts nothing.
 
@@ -248,9 +258,9 @@ pipx uninstall keyfit            # last, or: brew uninstall keyfit
 
 - **Which startup files.** `--remove` takes Keyfit's line, and the blank line before it, out of `~/.zshrc` (and `$ZDOTDIR/.zshrc`), `~/.bash_profile`, `~/.bash_login`, `~/.profile` and `~/.bashrc`. If you used `keyfit setup --rc PATH` for another file, run `keyfit setup --remove --rc PATH`.
 - **What stays.** Without `--purge`, the registry stays, and `keyfit setup --rc` turns everything back on.
-- **What `--purge` deletes:** the registry, the check cache, the Claude config folders made by `keyfit add claude --new`, the Vercel login folders made by `keyfit add vercel --new` and the OpenCode databases made by `keyfit add opencode --new` (with the logins in them). It refuses if `~/.config/keyfit` holds files Keyfit didn't write; delete those yourself if you are sure. Without a terminal it needs `--yes`.
+- **What `--purge` deletes:** the registry, the check cache, the Claude config folders made by `keyfit add claude --new`, the Vercel login folders made by `keyfit add vercel --new`, the OpenCode databases made by `keyfit add opencode --new` and the Gemini CLI folders made by `keyfit add gemini --new` or `--key` (with the logins in them). It refuses if `~/.config/keyfit` holds files Keyfit didn't write; delete those yourself if you are sure. Without a terminal it needs `--yes`.
 - **Keychain items** Keyfit stored (service `keyfit`) are never deleted; `--purge` prints their names. Delete them in Keychain Access, or with `security delete-generic-password -s keyfit -a NAME`.
-- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `opencode`, `copilot`, `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` then run directly again.
+- **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `opencode`, `copilot`, `gemini`, `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` then run directly again.
 
 If `keyfit` itself no longer runs, do it by hand:
 

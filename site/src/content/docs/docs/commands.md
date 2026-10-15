@@ -21,6 +21,7 @@ keyfit add claude                  # the Claude login in ~/.claude; for a second
 keyfit add codex                   # the Codex login in ~/.codex; another one: --codex-home PATH
 keyfit add opencode                # the providers signed in in OpenCode's database; another set: --new --name NAME
 keyfit add copilot                 # Copilot CLI runs as the project's GitHub account; another one: --login LOGIN
+keyfit add gemini                  # Gemini CLI's Google sign-in in ~/.gemini; another one: --new; a Gemini API key: --key
 keyfit add vercel                  # the login the vercel CLI has now, and its team; another login: --new --name NAME
 keyfit add supabase                # paste a Supabase token (hidden): checked, stored in the Keychain; or --cli
 keyfit add cloudflare              # the wrangler profile bound to this folder and its Cloudflare account

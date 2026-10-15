@@ -28,7 +28,7 @@ The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkou
 ## Quickstart
 
 ```bash
-keyfit setup --rc     # shims for claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler, convex, gcloud and firebase, plus one line in your shell startup file
+keyfit setup --rc     # shims for claude, codex, opencode, copilot, gemini, aws, gh, vercel, supabase, wrangler, convex, gcloud and firebase, plus one line in your shell startup file
 ```
 
 Open a new terminal, then go to a repository of one of your clients (a repository, not your home folder: everything under the folder you register belongs to that project):
@@ -50,9 +50,10 @@ claude                # starts with this project's accounts, checked
 - **Supabase:** whether to use the login the `supabase` CLI has now. Keyfit keeps a copy of its token in the macOS Keychain (macOS may ask once to allow that).
 - **Cloudflare:** the wrangler sign-in (auth profile) bound to the repository's folder, and the Cloudflare account it deploys to. Keyfit keeps no Cloudflare token: wrangler keeps the sign-in, Keyfit checks it.
 - **Convex:** whether to use the login the `convex` CLI has now (`npx convex login`). Keyfit records the team the project's deployment belongs to.
-- **Google:** the project's one Google account, the work or the personal email, picked from the accounts `gcloud` and the firebase CLI are signed in to. Every Google tool of the project is checked against it: `gcloud` and the firebase CLI now, Gemini CLI later.
+- **Google:** the project's one Google account, the work or the personal email, picked from the accounts `gcloud` and the firebase CLI are signed in to. Every Google tool of the project is checked against it: `gcloud`, the firebase CLI and Gemini CLI.
 - **Google Cloud:** a gcloud configuration signed in as that account, and the Google Cloud project it works on. Keyfit keeps no Google token: gcloud keeps the sign-in, Keyfit checks it.
 - **Firebase:** the Firebase project the repository's `.firebaserc` names. The firebase CLI keeps the sign-in and binds the folder to it (`firebase login:use`); Keyfit checks both.
+- **Gemini CLI:** whether to use the Google sign-in in `~/.gemini` (when it is that account), or else a Gemini CLI folder of the project's own, where you sign in once (asked when `gemini` is installed and the project has a Google account).
 - **Linear:** a personal API key, typed at a hidden prompt. Keyfit checks it with Linear, then stores it in the macOS Keychain.
 
 Skipped accounts are simply not checked, with one catch: inside the project, `aws`, `gh` and `vercel` start only once it has an AWS, GitHub or Vercel account. Skip GitHub, and `gh` waits in that repository until you run `keyfit add github --login <login>`. `keyfit status` lists what is still unmapped. `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` are the exceptions: many projects use them only locally (`supabase start`, `wrangler dev`, an anonymous local Convex deployment, `gcloud components`, the Firebase emulators), so without a Supabase, Cloudflare, Convex, Google Cloud or Firebase account they run as before.
@@ -75,6 +76,7 @@ acme-api
   ✔ codex     ChatGPT pro   subscription login, no API key
   ✔ opencode  default   anthropic, openai signed in · confirmed by OpenCode
   ✔ copilot   octocat   login confirmed
+  ✔ gemini    me@acme.com   Google sign-in in ~/.config/keyfit/gemini/acme · confirmed by Google
 ```
 
 When a check fails, the tool does not start:
