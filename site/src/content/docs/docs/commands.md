@@ -27,6 +27,7 @@ keyfit add cloudflare              # the wrangler profile bound to this folder a
 keyfit add convex --cli            # the login the convex CLI has now, and the team of the folder's deployment
 keyfit add google --email me@acme.com   # the project's Google account (work or personal), for every Google tool
 keyfit add gcloud                  # the gcloud configuration signed in as that account, and its project
+keyfit add firebase                # the Firebase project the folder uses; the firebase CLI's sign-in there must be that account
 keyfit add mcp 'globex_cloud_*'    # these MCP servers belong to this project; every other project stops seeing them
 keyfit run -- terraform plan       # run any other command with the project's accounts (checked first)
 keyfit secret set NAME             # store a key from a hidden prompt; prints keychain:keyfit/NAME to use

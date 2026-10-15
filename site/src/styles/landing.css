@@ -436,9 +436,10 @@ code {
 	letter-spacing: -0.02em;
 	color: color-mix(in srgb, var(--text) 88%, transparent);
 }
-/* Twelve tiles: 6 + 6 on desktop, 4 + 4 + 4 on tablets, 3 + 3 + 3 + 3 on phones. Rows wrap and a shorter last row
-   would be centred, should the count change again. Each tile draws its whole border and overlaps its neighbours' by
-   1px, so the lines stay single and every tile is closed, also where a last row is offset. */
+/* Thirteen tiles: 7 + 6 on desktop, 4 + 4 + 4 + 1 on tablets, 3 + 3 + 3 + 3 + 1 on phones (13 is prime, so a last
+   row of one is centred there until the next tool). Rows wrap and a shorter last row is centred. Each tile draws its
+   whole border and overlaps its neighbours' by 1px, so the lines stay single and every tile is closed, also where a
+   last row is offset. */
 .tools-grid {
 	list-style: none;
 	margin: 2.25rem auto 0;
@@ -450,7 +451,7 @@ code {
 }
 .tools-grid li {
 	box-sizing: border-box;
-	flex: 0 0 calc(100% / 6);
+	flex: 0 0 calc(100% / 7);
 	margin: -1px 0 0 -1px;
 	display: flex;
 	flex-direction: column;
