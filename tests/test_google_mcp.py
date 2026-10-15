@@ -19,8 +19,8 @@ from unittest import mock
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
-from keyfit import mcp  # noqa: E402
-from keyfit.adapters import gemini, google_mcp  # noqa: E402
+from keyfit import cli, mcp  # noqa: E402
+from keyfit.adapters import ADAPTERS, gemini, google_mcp  # noqa: E402
 from keyfit.adapters.google_mcp import GMAIL_PROFILE, PRIMARY_CALENDAR, TOKENINFO, GoogleMcpAdapter  # noqa: E402
 from keyfit.cli import main  # noqa: E402
 from keyfit.registry import Registry  # noqa: E402
@@ -422,6 +422,148 @@ class HidingTests(unittest.TestCase):
         self.assertIn("gmail[[]work]", claims)
         self.assertTrue(mcp._matches("gmail[work]", claims))
         self.assertFalse(mcp._matches("gmailw", claims))
+
+
+class CliTests(unittest.TestCase):
+    """`keyfit add google-mcp`, init's offer and the doctor's line, in a temporary HOME with project acme (me@acme.io)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+        self.config = self.tmp / "keyfit"
+        self.repo, self.other = self.tmp / "acme", self.tmp / "acme-web"
+        for folder in (self.repo, self.other):
+            folder.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=folder, check=True)
+        self.google = Google()
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config)}
+        for patcher in (mock.patch.dict(os.environ, env, clear=True),
+                        mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+                        mock.patch.object(ADAPTERS["google-mcp"], "fetch", self.google),
+                        mock.patch.object(gemini, "SYSTEM", self.tmp / "no-system")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        old = os.getcwd()
+        os.chdir(self.repo)
+        self.addCleanup(os.chdir, old)
+        self.gmail = self.home / ".gmail-mcp" / "work.json"
+        self.claude(gmail_work={**GMAIL, "env": {"GMAIL_CREDENTIALS_PATH": "~/.gmail-mcp/work.json"}})
+        self.keyfit("init", "--yes", "--name", "acme")
+        self.keyfit("init", "--yes", "--name", "acme-web", "--root", str(self.other))
+        for project in ("acme", "acme-web"):
+            self.keyfit("add", "google", "--email", ACME, "--project", project)
+
+    def claude(self, **servers):
+        write(self.home / ".claude.json", {"mcpServers": servers})
+
+    def keyfit(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def registry(self) -> dict:
+        import tomllib
+
+        return tomllib.loads((self.config / "registry.toml").read_text())
+
+    def test_add_takes_the_login_its_definition_reads(self):
+        write(self.gmail, tokens(ACME))  # past its first hour: recorded, with a note that its account is not confirmed
+        code, out, err = self.keyfit("add", "google-mcp", "--server", "gmail_work")
+        self.assertEqual(code, 0, err)
+        reg = self.registry()
+        self.assertEqual(reg["projects"]["acme"]["google-mcp"], "acme")
+        self.assertEqual(reg["accounts"]["google-mcp"]["acme"],
+                         {"servers": {"gmail_work": {"type": "gmail-autoauth", "login": "~/.gmail-mcp/work.json"}}})
+        self.assertIn(f"acme: google-mcp 'acme' → gmail_work (Gmail AutoAuth MCP, ~/.gmail-mcp/work.json), signed in "
+                      f"as {ACME}; hidden in every other project\n", out)
+        self.assertIn("  note: account not confirmed: ~/.gmail-mcp/work.json names no account, and its saved token has "
+                      "expired\n", out)
+        self.assertEqual(self.google.calls, [])
+        self.assertEqual(Registry.load(self.config / "registry.toml").mcp_owners(), {"acme": ["gmail_work"]})
+
+    def test_a_fresh_login_is_confirmed_and_another_account_refused(self):
+        write(self.gmail, tokens(PERSONAL, valid=True))
+        code, out, err = self.keyfit("add", "google-mcp", "--server", "gmail_work")
+        self.assertEqual(code, 1)
+        self.assertIn(f"the token in ~/.gmail-mcp/work.json belongs to {PERSONAL}, the project's Google account is "
+                      f"{ACME}\n  → give gmail_work a login of its own", err)
+        self.assertNotIn("google-mcp", self.registry()["projects"]["acme"])
+        write(self.gmail, tokens(ACME, valid=True))
+        code, out, err = self.keyfit("add", "google-mcp", "--server", "gmail_work")
+        self.assertEqual((code, "note:" in out), (0, False), err)
+        self.assertEqual(self.google.calls, [GMAIL_PROFILE, GMAIL_PROFILE])
+
+    def test_servers_of_one_account_are_shared_by_its_projects(self):
+        workspace(self.home / ".google_workspace_mcp" / "credentials", ACME)
+        self.claude(gmail_work={**GMAIL, "env": {"GMAIL_CREDENTIALS_PATH": "~/.gmail-mcp/work.json"}}, ws=WORKSPACE,
+                    gcal=CALENDAR)
+        self.assertEqual(self.keyfit("add", "google-mcp", "--server", "gmail_work")[0], 0)
+        code, out, _ = self.keyfit("add", "google-mcp", "--server", "ws")
+        self.assertEqual(code, 0)
+        self.assertIn("acme's sessions no longer see the other Google Workspace servers: gcal\n", out)
+        code, out, _ = self.keyfit("add", "google-mcp", "--server", "ws", "--project", "acme-web")
+        self.assertIn("  account 'acme' is shared: acme takes ws too\n", out)
+        self.assertEqual(sorted(self.registry()["accounts"]["google-mcp"]["acme"]["servers"]), ["gmail_work", "ws"])
+        self.assertEqual(Registry.load(self.config / "registry.toml").mcp_owners(),
+                         {"acme": ["gmail_work", "ws"], "acme-web": ["gmail_work", "ws"]})
+
+    def test_any_other_server_by_its_login_file(self):
+        login = write(self.home / "tokens" / "x.json", tokens(None, id_token=id_token(ACME)))
+        self.claude(x={"command": "python3", "args": ["-m", "my_gmail_server"]})
+        code, out, err = self.keyfit("add", "google-mcp", "--server", "x")
+        self.assertEqual(code, 1)
+        self.assertIn("x is not a Google Workspace server Keyfit knows in your agents' MCP configs (workspace-mcp, "
+                      "gmail-autoauth, google-calendar-mcp, google-drive-mcp).\n  Name its login file: keyfit add "
+                      "google-mcp --server x --login PATH\n", err)
+        code, out, err = self.keyfit("add", "google-mcp", "--server", "x", "--login", str(login))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.registry()["accounts"]["google-mcp"]["acme"]["servers"]["x"],
+                         {"type": "other", "login": "~/tokens/x.json"})
+
+    def test_what_add_refuses(self):
+        self.claude(gmail=REMOTE, **{"gmail.work": GMAIL})
+        code, _, err = self.keyfit("add", "google-mcp", "--server", "gmail")
+        self.assertEqual(code, 1)
+        self.assertIn("gmail is one of Google's own remote servers: its sign-in is the agent's, out of Keyfit's reach.\n"
+                      "  To give it to acme only (hidden in every other project): keyfit add mcp gmail\n", err)
+        code, _, err = self.keyfit("add", "google-mcp", "--server", "gmail.work")
+        self.assertIn("gmail.work: Keyfit takes servers named with letters, digits, '_' and '-'", err)
+        code, _, err = self.keyfit("add", "google-mcp")  # no terminal: nothing to pick from
+        self.assertEqual(code, 1)
+        self.assertIn("name the server: keyfit add google-mcp --server <its name in your agents' MCP config> (your "
+                      "agents have gmail.work)\n", err)
+        (self.tmp / "solo").mkdir()
+        self.keyfit("init", "--yes", "--name", "solo", "--root", str(self.tmp / "solo"))
+        code, _, err = self.keyfit("add", "google-mcp", "--server", "gmail.work", "--project", "solo")
+        self.assertIn("solo has no Google account yet, which its Google Workspace servers are checked against.", err)
+        self.assertEqual(self.registry()["accounts"].get("google-mcp"), None)
+
+    def test_init_offers_the_servers_signed_in_as_the_projects_account(self):
+        write(self.gmail, tokens(ACME))
+        cal = write(self.home / ".config" / "google-calendar-mcp" / "tokens.json",
+                    {"normal": tokens(None, cached_email=PERSONAL)})
+        self.claude(gmail_work={**GMAIL, "env": {"GMAIL_CREDENTIALS_PATH": "~/.gmail-mcp/work.json"}}, gcal=CALENDAR)
+        asked = []
+        with mock.patch.object(cli, "_ask", lambda prompt: asked.append(prompt) or "y"):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cli._offer_google_mcp("acme", {"registry": None, "project": "acme"})
+        self.assertIn(f"  gcal (Google Calendar MCP, {cal.relative_to(self.home).as_posix().join(['~/', ''])}: "
+                      f"{PERSONAL}) — not offered\n", out.getvalue())
+        self.assertEqual(asked, ["  Use gmail_work (Gmail AutoAuth MCP, ~/.gmail-mcp/work.json: names no account) for "
+                                 "acme? [y/N] "])
+        self.assertEqual(list(self.registry()["accounts"]["google-mcp"]["acme"]["servers"]), ["gmail_work"])
+
+    def test_doctor_names_server_login_and_account(self):
+        workspace(self.home / ".google_workspace_mcp" / "credentials", ACME)
+        self.claude(ws=WORKSPACE)
+        self.keyfit("add", "google-mcp", "--server", "ws")
+        project = Registry.load(self.config / "registry.toml").get("acme")
+        check = cli._doctor_google_mcp(project, project.connections["google-mcp"], dict(os.environ))
+        self.assertEqual(check.lines(), [f"  ✔ google-mcp ws   ws: ~/.google_workspace_mcp/credentials (workspace-mcp, "
+                                         f"{ACME})"])
 
 
 FAKE_CLAUDE = """#!/usr/bin/env python3
