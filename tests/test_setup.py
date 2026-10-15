@@ -64,10 +64,11 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(sorted(p.name for p in self.config.iterdir()), ["bin", "shell.sh", "shell.zsh"])
         self.assertEqual(sorted(p.name for p in (self.config / "bin").iterdir()),
-                         [".keyfit-shims", "aws", "claude", "codex", "convex", "copilot", "firebase", "gcloud", "gh", "opencode",
-                          "supabase", "vercel", "wrangler"])
+                         [".keyfit-shims", "aws", "claude", "codex", "convex", "copilot", "firebase", "gcloud", "gemini", "gh",
+                          "opencode", "supabase", "vercel", "wrangler"])
         self.assertIn("Shims written to", out)
-        self.assertIn(": claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler, convex, gcloud, firebase\n", out)
+        self.assertIn(": claude, codex, opencode, copilot, gemini, aws, gh, vercel, supabase, wrangler, convex, gcloud, firebase\n",
+                      out)
         self.assertEqual(sorted(p.name for p in self.home.iterdir()), [".superset"])
         self.assertIn("add this as the LAST line of ~/.zshrc (or run: keyfit setup --rc)", out)
         entry = Path(cli.__file__).resolve().parent / "_shim_entry.py"
