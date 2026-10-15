@@ -5,7 +5,8 @@ Three outcomes only:
   folder not registered      → run the real tool unchanged
   registered, all checks ok  → run it with the project's environment (silently)
   a check fails              → do not run it; print what is wrong and the fix (in a terminal, when the fix
-                               is only a sign-in, offer to run it and then start the tool)
+                               is only a sign-in or binding a folder of the project to its wrangler profile,
+                               offer to run it and then start the tool)
 
 Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel`, `supabase`, `wrangler` and
 `convex` stay on that session's project even after `cd` elsewhere; `claude`, `codex`, `opencode` and
@@ -683,35 +684,123 @@ def sign_in_command(fix: str) -> tuple[dict, list[str]] | None:
     return None
 
 
-def offer_sign_in(failed: list, project: Project, env: dict) -> bool | None:
-    """In a terminal, when every failed check is fixed by a sign-in, ask and run them. True: they all finished;
-    False: one failed; None: nothing was offered or the answer was no. Never asked without a terminal (agents,
-    scripts, CI), so nothing waits for an answer that cannot come."""
-    commands = [sign_in_command(check.fix) for check in failed]
-    if not commands or None in commands or env.get("KEYFIT_DRY_RUN") == "1" or env.get("CI"):
+def binding_command(check, project: Project, registry: Registry, env: dict) -> tuple[str, str] | None:
+    """(profile, folder) when the check's fix is exactly `wrangler auth activate NAME FOLDER` for the project's own
+    wrangler profile and a folder Keyfit may bind: one of this project's (never another project's, nor a folder outside
+    every project), not the home folder or a folder above it, and one whose binding fixes the folder you are in."""
+    import shlex
+
+    conn = project.connections.get("cloudflare")
+    if check.kind != "cloudflare" or not isinstance(conn, dict):
+        return None
+    try:
+        words = shlex.split(check.fix)
+    except ValueError:
+        return None
+    if words[:3] != ["wrangler", "auth", "activate"] or len(words) != 5 or words[3] != conn.get("profile"):
+        return None
+    profile, folder = words[3], os.path.expanduser(words[4])
+    if profile == cloudflare.DEFAULT or not os.path.isabs(folder) or not bindable(profile, folder, env):
+        return None
+    there = resolve(folder, registry).project
+    return (profile, folder) if there is not None and there.name == project.name else None
+
+
+def bindable(profile: str, folder: str, env: dict) -> bool:
+    """True when *folder* is a folder, not the home folder or one above it (everything under it would follow), and
+    binding it makes wrangler use *profile* in the folder you are in."""
+    home = canonical(env.get("HOME") or Path.home())
+    target = canonical(folder)
+    if not target.is_dir() or target == home or target in home.parents:
+        return False
+    return cloudflare.bound(os.getcwd(), {**cloudflare.bindings(env), folder: profile})[0] == profile
+
+
+def superset_folder(profile: str, folder: str, project: Project, registry: Registry, env: dict) -> str | None:
+    """The folder that holds *folder* when it is a Superset worktree and that folder may be bound to the project's
+    profile instead: nothing in it belongs to another project (each worktree there resolves to this project or to
+    none, and no other project's root lies inside), and it does not belong to another project itself."""
+    parent = cloudflare.superset_parent(folder, env)
+    if parent is None or not bindable(profile, parent, env):
+        return None
+    inside = canonical(parent)
+    for other in registry.projects().values():
+        if other.name != project.name and any(root == inside or inside in root.parents
+                                              for root in other.canonical_roots()):
+            return None
+    try:
+        entries = [entry.path for entry in os.scandir(parent) if entry.is_dir()]
+    except OSError:
+        return None
+    for path in (parent, *entries):
+        there = resolve(path, registry).project
+        if there is not None and there.name != project.name:
+            return None
+    return parent
+
+
+def _confirm(question: str) -> bool:
+    sys.stderr.write(f"  {question} [Y/n] ")
+    sys.stderr.flush()
+    answer = sys.stdin.readline()
+    return bool(answer) and answer.strip().lower() in ("", "y", "yes")  # end of input counts as no
+
+
+def offer_fixes(failed: list, project: Project, env: dict, registry: Registry, tried: set) -> str | bool | None:
+    """In a terminal, when every failed check is fixed by a sign-in or by binding a folder of the project to its wrangler
+    profile, ask (`Sign in now?`, then `Bind this folder now?`) and run them. What ran ("signed in", "bound …") when
+    they all finished; False: one failed; None: nothing was offered or an answer was no. Never asked without a
+    terminal (agents, scripts, CI), so nothing waits for an answer that cannot come, and never for a fix in *tried*
+    (the fixes offered before, which are added to it): a fix that ran and did not help is only printed."""
+    if not failed or env.get("KEYFIT_DRY_RUN") == "1" or env.get("CI") or any(c.fix in tried for c in failed):
         return None
     if not (sys.stdin.isatty() and sys.stderr.isatty()):
         return None
-    sys.stderr.write("  Sign in now? [Y/n] ")
-    sys.stderr.flush()
-    answer = sys.stdin.readline()
-    if not answer or answer.strip().lower() not in ("", "y", "yes"):  # end of input counts as no
-        return None
-    import subprocess
+    sign_ins, binds = [], []
+    for check in failed:
+        command = sign_in_command(check.fix)
+        bind = None if command else binding_command(check, project, registry, env)
+        if command is None and bind is None:
+            return None
+        if command:
+            sign_ins.append(command)
+        elif bind not in binds:
+            binds.append(bind)
+    tried.update(check.fix for check in failed)
+    done = []
+    if sign_ins:
+        if not _confirm("Sign in now?"):
+            return None
+        import subprocess
 
-    for assignments, words in {(tuple(a.items()), tuple(w)): None for a, w in commands}:
-        name = words[0]
-        real = cloudflare.wrangler_bin(env, os.getcwd()) if name == "wrangler" else \
-            find_real(name, env, skip_wrappers=True)
+        for assignments, words in {(tuple(a.items()), tuple(w)): None for a, w in sign_ins}:
+            name = words[0]
+            real = cloudflare.wrangler_bin(env, os.getcwd()) if name == "wrangler" else \
+                find_real(name, env, skip_wrappers=True)
+            if real is None:
+                _say([f"keyfit: {name} is not installed. Install it: {INSTALL[name]}"])
+                return False
+            login_env = login_environment(name, project, env)  # as when you type the sign-in
+            login_env.update(assignments)
+            if subprocess.run(list(words), executable=real, env=login_env).returncode != 0:
+                _say([f"keyfit: {name} sign-in did not finish"])
+                return False
+        done.append("signed in")
+    for profile, folder in binds:
+        wider = superset_folder(profile, folder, project, registry, env)
+        if not _confirm(f"Bind {tilde(wider)} now, for every Superset worktree of {project.name}?" if wider
+                        else "Bind this folder now?"):
+            return None
+        real = cloudflare.wrangler_bin(env, os.getcwd())  # the project's own wrangler, as npx would run it
         if real is None:
-            _say([f"keyfit: {name} is not installed. Install it: {INSTALL[name]}"])
+            _say([f"keyfit: wrangler is not installed. Install it: {INSTALL['wrangler']}"])
             return False
-        login_env = login_environment(name, project, env)  # as when you type the sign-in
-        login_env.update(assignments)
-        if subprocess.run(list(words), executable=real, env=login_env).returncode != 0:
-            _say([f"keyfit: {name} sign-in did not finish"])
+        reason = ADAPTERS["cloudflare"].activate(real, profile, wider or folder, env)
+        if reason:
+            _say([f"keyfit: wrangler auth activate did not finish: {reason}"])
             return False
-    return True
+        done.append(f"bound {tilde(wider or folder)} to wrangler profile {profile}")
+    return ", ".join(done)
 
 
 def main(argv: list[str]) -> int:
@@ -783,16 +872,19 @@ def main(argv: list[str]) -> int:
             _say([f"keyfit: {tool} not started, {project.name} needs attention"])
             for check in failed:
                 _say(check.lines())
-            if offer_sign_in(failed, project, env):
+            tried: set[str] = set()
+            done = offer_fixes(failed, project, env, registry, tried)
+            while done:  # a binding lets the online check run, which may then ask for a sign-in
                 run_env = environment.build(project, env, kinds=relevant)
                 checks = environment.verify(project, run_env, remote=True, kinds=relevant, use_cache=True)
                 failed = [c for c in checks if c.failed]
-                if failed:
-                    _say([f"keyfit: {tool} not started, {project.name} still needs attention"])
-                    for check in failed:
-                        _say(check.lines())
-                else:
-                    _say([f"keyfit: signed in, starting {tool}"])
+                if not failed:
+                    _say([f"keyfit: {done}, starting {tool}"])
+                    break
+                _say([f"keyfit: {tool} not started, {project.name} still needs attention"])
+                for check in failed:
+                    _say(check.lines())
+                done = offer_fixes(failed, project, env, registry, tried)
             if failed:
                 _say([f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"])
                 return 1

@@ -19,6 +19,7 @@ os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the re
 from keyfit import cli, environment, secrets, shim  # noqa: E402
 from keyfit.adapters import ADAPTERS, cloudflare  # noqa: E402
 from keyfit.adapters.cloudflare import CloudflareAdapter  # noqa: E402
+from keyfit.checks import Check  # noqa: E402
 from keyfit.cli import main  # noqa: E402
 from keyfit.registry import Project, Registry  # noqa: E402
 from test_vercel import Executed, executable  # noqa: E402
@@ -42,6 +43,13 @@ exit 0
 """
 
 
+class Terminal(io.StringIO):
+    """stdin or stderr as a terminal: Keyfit asks its questions only there."""
+
+    def isatty(self):
+        return True
+
+
 def wrangler_profile(bindings: dict, cwd: str) -> str:
     """How wrangler picks a profile without --profile: the longest bound folder at or above cwd, else default."""
     found = [d for d in bindings if cwd == d or cwd.startswith(d + "/")]
@@ -49,12 +57,14 @@ def wrangler_profile(bindings: dict, cwd: str) -> str:
 
 
 class FakeWrangler:
-    """Stands in for `wrangler whoami --json` and `wrangler auth token --json --profile NAME`: each profile has a
-    state (ok, signed-out, expired, unreachable, hang) and reaches the accounts in REACH."""
+    """Stands in for `wrangler whoami --json`, `wrangler auth token --json --profile NAME` and `wrangler auth activate
+    NAME DIR`: each profile has a state (ok, signed-out, expired, unreachable, hang) and reaches the accounts in REACH;
+    activate binds DIR in the temporary store (activation "ok"), fails ("error") or does nothing ("ignored")."""
 
     def __init__(self, store: Path):
         self.store = store
         self.state = {}
+        self.activation = "ok"
         self.calls = []
 
     def __call__(self, argv, cwd, env, timeout):
@@ -63,6 +73,20 @@ class FakeWrangler:
             bindings = json.loads((self.store / "profiles" / "directory-bindings.json").read_text())
         except OSError:
             bindings = {}
+        if argv[1:3] == ["auth", "activate"]:
+            name, folder = argv[3], os.path.abspath(os.path.join(cwd, argv[4]))
+            if "CLOUDFLARE_API_TOKEN" in env:  # as wrangler does
+                return 1, "", "✘ [ERROR] Cannot manage auth profiles while CLOUDFLARE_API_TOKEN is set.\n"
+            if self.activation == "error" or not any((self.store / "config" / f"{name}.{ext}").exists()
+                                                      for ext in ("toml", "enc")):
+                return 1, " ⛅️ wrangler 4.147.0\n───────────────────\n", (
+                    f'✘ [ERROR] Profile "{name}" does not exist. Run `wrangler auth create {name}` first.\n\n\n'
+                    f'🪵  Logs were written to "{self.store}/logs/wrangler.log"\n')
+            if self.activation == "ok":
+                bindings[folder] = name
+                (self.store / "profiles").mkdir(exist_ok=True)
+                (self.store / "profiles" / "directory-bindings.json").write_text(json.dumps(bindings, indent="\t"))
+            return 0, f'Profile "{name}" activated for "{folder}".\n', ""
         if argv[1:3] == ["auth", "token"]:
             profile = argv[argv.index("--profile") + 1]
         else:
@@ -545,6 +569,191 @@ class ShimTests(CloudflareCase):
         self.assertEqual(ran, [(["wrangler", "auth", "create", "acme"], False)])
         self.assertIn("keyfit: signed in, starting wrangler", err.getvalue())
 
+    # Bind this folder now? (KEY-58) ---------------------------------------------------------------------------
+
+    def run_in_terminal(self, *args, answers="\n", cwd=None, **extra):
+        """The shim as when you type the command: a terminal on stdin and stderr, *answers* typed into it."""
+        seen = {}
+
+        def execve(path, argv, env):
+            seen.update(argv=argv)
+            raise Executed()
+        os.chdir(cwd or self.repos["client"])
+        err = Terminal()
+        with mock.patch.dict(os.environ, extra), mock.patch.object(sys, "stdin", Terminal(answers)), \
+                mock.patch("os.execve", execve), contextlib.redirect_stderr(err):
+            try:
+                code = shim.main(["wrangler", *args])
+            except Executed:
+                code = None
+        self.stderr = err.getvalue()
+        return code, seen.get("argv")
+
+    def activations(self):
+        return [call for call in self.wrangler.calls if call["argv"][:2] == ["auth", "activate"]]
+
+    def superset_worktree(self, repo: str, name: str, holder: str | None = None) -> Path:
+        """A Superset workspace of *repo*: a worktree at ~/.superset/worktrees/<holder, default repo>/<name>."""
+        folder = self.home / ".superset" / "worktrees" / (holder or repo) / name
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
+        subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], cwd=self.repos[repo], check=True)
+        subprocess.run([*git, "worktree", "add", "-q", "-b", name, str(folder)], cwd=self.repos[repo], check=True)
+        return folder
+
+    def test_bind_this_folder_now_binds_it_and_starts_wrangler(self):
+        client = self.repos["client"]
+        self.bind({str(self.repos["mine"]): "globex"})
+        code, argv = self.run_in_terminal("deploy", CLOUDFLARE_API_TOKEN="inherited")
+        self.assertEqual((code, argv), (None, ["wrangler", "deploy"]), self.stderr)
+        self.assertIn(f"    → wrangler auth activate acme {client}\n  Bind this folder now? [Y/n] ", self.stderr)
+        self.assertEqual(self.bindings(), {str(self.repos["mine"]): "globex", str(client): "acme"})
+        call, = self.activations()
+        self.assertEqual(call["argv"], ["auth", "activate", "acme", str(client)])
+        self.assertNotEqual(call["cwd"], str(client))  # away from the folder: no CLOUDFLARE_API_TOKEN from its .env
+        self.assertNotIn("CLOUDFLARE_API_TOKEN", call["env"])
+        self.assertIn(f"keyfit: bound {client} to wrangler profile acme, starting wrangler\n", self.stderr)
+        self.assertNotIn("Sign in now?", self.stderr)
+
+    def test_declined_binding_changes_nothing(self):
+        self.bind({})
+        code, argv = self.run_in_terminal("deploy", answers="n\n")
+        self.assertEqual((code, argv), (1, None))
+        self.assertEqual((self.bindings(), self.activations()), ({}, []))
+        self.assertIn("Bind this folder now? [Y/n]   (bypass once: KEYFIT_DISABLE=1 wrangler …)\n", self.stderr)
+
+    def test_agents_and_scripts_get_the_printed_fix(self):
+        self.bind({})
+        code, argv, _ = self.run_shim("deploy")  # no terminal
+        self.assertEqual((code, argv), (1, None))
+        self.assertTrue(self.stderr.endswith(f"→ wrangler auth activate acme {self.repos['client']}\n"
+                                             f"  (bypass once: KEYFIT_DISABLE=1 wrangler …)\n"), self.stderr)
+        code, argv = self.run_in_terminal("deploy", CI="1")
+        self.assertEqual((code, argv), (1, None))
+        self.assertNotIn("Bind", self.stderr)
+        self.assertEqual((self.bindings(), self.activations()), ({}, []))
+
+    def test_another_projects_folder_is_never_bound(self):
+        # a session of client (KEYFIT_PROJECT) in mine's folder, in plain's (no Cloudflare) or outside every project
+        before = self.bindings()
+        for folder in (self.repos["mine"], self.repos["plain"], self.outside):
+            code, argv = self.run_in_terminal("deploy", cwd=folder, KEYFIT_PROJECT="client")
+            self.assertEqual((code, argv), (1, None), folder)
+            self.assertIn(f"→ wrangler auth activate acme {folder}\n", self.stderr)
+            self.assertNotIn("Bind", self.stderr)
+        code, argv = self.run_in_terminal("deploy", cwd=self.home, KEYFIT_PROJECT="client")
+        self.assertIn("→ run wrangler inside the project's folder", self.stderr)
+        self.assertNotIn("Bind", self.stderr)
+        self.assertEqual((self.bindings(), self.activations()), (before, []))
+
+    def test_only_the_projects_profile_on_its_own_folder_below_home(self):
+        client = self.repos["client"]
+        reg = Registry.load(self.config / "registry.toml")
+        project = reg.get("client")
+
+        def binding(fix, **env):
+            check = Check("cloudflare", "fail", "acme → Acme", "", fix)
+            with mock.patch.dict(os.environ, env):
+                return shim.binding_command(check, project, reg, dict(os.environ))
+        self.assertEqual(binding(f"wrangler auth activate acme {client}"), ("acme", str(client)))
+        for fix in (f"wrangler auth activate globex {client}", f"wrangler auth activate default {client}",
+                    f"wrangler auth activate acme {client} --x", "wrangler auth activate acme client",
+                    f"wrangler auth activate acme {client / 'missing'}", f"wrangler auth deactivate {client}",
+                    f"wrangler auth activate acme {self.repos['mine']}", "wrangler auth activate acme /",
+                    "wrangler auth create acme", f"wrangler auth activate acme '{client}"):
+            self.assertIsNone(binding(fix), fix)
+        sub = client / "home"
+        sub.mkdir()
+        # a home folder inside the project: neither it nor a folder above it (the project's own) is ever bound
+        for fix in ("wrangler auth activate acme ~", f"wrangler auth activate acme {client}"):
+            self.assertIsNone(binding(fix, HOME=str(sub)), fix)
+
+    def test_after_the_binding_an_expired_sign_in_is_offered_too(self):
+        self.bind({})
+        self.wrangler.state["acme"] = "expired"  # shows only once the folder is bound and the online check runs
+        ran = []
+        real_run = subprocess.run
+
+        def run(argv, *args, **kwargs):
+            if kwargs.get("executable") == str(self.bin / "wrangler"):
+                ran.append(list(argv))
+                self.wrangler.state["acme"] = "ok"
+                return subprocess.CompletedProcess(argv, 0)
+            return real_run(argv, *args, **kwargs)
+        with mock.patch("subprocess.run", run):
+            code, argv = self.run_in_terminal("deploy", answers="\n\n")
+        self.assertEqual((code, argv), (None, ["wrangler", "deploy"]), self.stderr)
+        self.assertIn("Bind this folder now? [Y/n] keyfit: wrangler not started, client still needs attention\n",
+                      self.stderr)
+        self.assertIn("    → wrangler auth create acme\n  Sign in now? [Y/n] keyfit: signed in, starting wrangler\n",
+                      self.stderr)
+        self.assertEqual(ran, [["wrangler", "auth", "create", "acme"]])
+
+    def test_a_fix_that_did_not_help_is_not_offered_again(self):
+        self.bind({})
+        self.wrangler.activation = "ignored"  # wrangler said yes and bound nothing
+        code, argv = self.run_in_terminal("deploy", answers="\n\n")
+        self.assertEqual((code, argv), (1, None))
+        self.assertEqual(self.stderr.count("Bind this folder now?"), 1)
+        self.assertIn("keyfit: wrangler not started, client still needs attention\n", self.stderr)
+
+    def test_failed_binding_is_reported(self):
+        self.bind({})
+        self.wrangler.activation = "error"
+        code, argv = self.run_in_terminal("deploy")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn('keyfit: wrangler auth activate did not finish: Profile "acme" does not exist. Run `wrangler auth '
+                      'create acme` first.\n  (bypass once: KEYFIT_DISABLE=1 wrangler …)\n', self.stderr)
+
+    def test_sign_ins_and_the_binding_are_asked_one_after_the_other(self):
+        client = self.repos["client"]
+        self.bind({})
+        executable(self.bin / "claude", "#!/bin/sh\nexit 0\n")
+        reg = Registry.load(self.config / "registry.toml")
+        failed = [Check("claude", "fail", "Work", "not signed in", "claude auth login"),
+                  Check("cloudflare", "fail", "acme → Acme", "not bound", f"wrangler auth activate acme {client}")]
+        ran = []
+        real_run = subprocess.run
+
+        def run(argv, *args, **kwargs):
+            if kwargs.get("executable") == str(self.bin / "claude"):
+                ran.append(list(argv))
+                return subprocess.CompletedProcess(argv, 0)
+            return real_run(argv, *args, **kwargs)
+        for answers, done, asked in (("n\n", None, "  Sign in now? [Y/n] "),
+                                     ("\n\n", f"signed in, bound {client} to wrangler profile acme",
+                                      "  Sign in now? [Y/n]   Bind this folder now? [Y/n] ")):
+            err = Terminal()
+            with mock.patch.object(sys, "stdin", Terminal(answers)), contextlib.redirect_stderr(err), \
+                    mock.patch("subprocess.run", run):
+                self.assertEqual(shim.offer_fixes(failed, reg.get("client"), dict(os.environ), reg, set()), done)
+            self.assertEqual(err.getvalue(), asked)
+        self.assertEqual(ran, [["claude", "auth", "login"]])
+        self.assertEqual(self.bindings(), {str(client): "acme"})
+
+    def test_superset_worktree_offers_the_folder_that_holds_them(self):
+        workspace = self.superset_worktree("client", "ws1")
+        holder = workspace.parent
+        code, argv = self.run_in_terminal("deploy", cwd=workspace)
+        self.assertEqual((code, argv), (None, ["wrangler", "deploy"]), self.stderr)
+        self.assertIn("    → wrangler auth activate acme ~/.superset/worktrees/client/ws1\n  Bind "
+                      "~/.superset/worktrees/client now, for every Superset worktree of client? [Y/n] ", self.stderr)
+        self.assertIn("keyfit: bound ~/.superset/worktrees/client to wrangler profile acme, starting wrangler\n",
+                      self.stderr)
+        self.assertEqual(self.bindings()[str(holder)], "acme")
+        self.assertNotIn(str(workspace), self.bindings())
+        code, argv, _ = self.run_shim("deploy", cwd=self.superset_worktree("client", "ws2"))  # the next one just starts
+        self.assertEqual((code, argv), (None, ["wrangler", "deploy"]), self.stderr)
+
+    def test_superset_folder_holding_another_projects_worktree_binds_only_this_one(self):
+        workspace = self.superset_worktree("client", "ws1")
+        self.superset_worktree("mine", "stray", holder="client")
+        code, argv = self.run_in_terminal("deploy", cwd=workspace)
+        self.assertEqual((code, argv), (None, ["wrangler", "deploy"]), self.stderr)
+        self.assertIn("    → wrangler auth activate acme ~/.superset/worktrees/client/ws1\n  Bind this folder now? [Y/n] ",
+                      self.stderr)
+        self.assertEqual(self.bindings()[str(workspace)], "acme")
+        self.assertNotIn(str(workspace.parent), self.bindings())
+
     def test_dry_run_names_only_the_variables(self):
         code, _, _ = self.run_shim("deploy", KEYFIT_DRY_RUN="1", CLOUDFLARE_API_TOKEN="inherited")
         self.assertEqual(code, 0)
@@ -599,22 +808,16 @@ class AddCloudflareTests(CloudflareCase):
         self.assertEqual(self.registry()["accounts"]["cloudflare"]["g"]["account_id"], GLOBEX_ID)
 
     def test_binding_is_offered_at_a_terminal(self):
+        client = self.repos["client"]
         self.bind({})
-        ran = []
-        real_run = subprocess.run
-
-        def run(argv, *args, **kwargs):
-            if argv[0] == str(self.bin / "wrangler"):
-                ran.append(argv)
-                return subprocess.CompletedProcess(argv, 0)
-            return real_run(argv, *args, **kwargs)
-        stdin = io.StringIO("")
-        stdin.isatty = lambda: True
-        with mock.patch.object(cli, "_ask", return_value="y"), mock.patch("subprocess.run", run), \
-                mock.patch.object(sys, "stdin", stdin), contextlib.redirect_stdout(io.StringIO()) as out:
+        with mock.patch.object(cli, "_ask", return_value="y"), mock.patch.object(sys, "stdin", Terminal("")), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(main(["add", "cloudflare", "--profile", "acme"]), 0)
-        self.assertIn(f"→ wrangler auth activate acme {self.repos['client']}", out.getvalue())
-        self.assertEqual(ran, [[str(self.bin / "wrangler"), "auth", "activate", "acme", str(self.repos["client"])]])
+        self.assertIn(f"→ wrangler auth activate acme {client}\n  bound {client} to wrangler profile acme\n", out.getvalue())
+        self.assertEqual(self.bindings(), {str(client): "acme"})
+        call = self.wrangler.calls[-1]  # the same runner as the shim's Bind this folder now?
+        self.assertEqual(call["argv"], ["auth", "activate", "acme", str(client)])
+        self.assertNotEqual(call["cwd"], str(client))
 
     def test_unknown_or_signed_out_profile_and_no_profiles(self):
         code, out, err = self.add("--profile", "nope")
