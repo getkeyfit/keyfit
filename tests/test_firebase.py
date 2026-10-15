@@ -509,6 +509,13 @@ class ShimTests(FirebaseCase):
         self.assertEqual(env["FIREBASE_TOKEN"], "1//mine")
         self.assertEqual((self.firebase.calls, self.fetched), ([], []))
 
+    def test_dry_run_prints_a_project_without_firebase_instead_of_running_it(self):
+        code, argv, _ = self.run_shim("deploy", cwd=self.repos["plain"], KEYFIT_DRY_RUN="1")
+        self.assertEqual((code, argv), (0, None), self.stderr)  # never started
+        self.assertIn("keyfit: project plain has no firebase account mapped: firebase runs without checks, as before "
+                      "Keyfit\n  would run: ", self.stderr)
+        self.assertIn("firebase deploy\n  environment changes (names only): ", self.stderr)
+
     def test_mismatch_blocks_with_the_fix(self):
         self.bind(self.repos["client"], GLOBEX)
         code, argv, _ = self.run_shim("deploy")
