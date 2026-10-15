@@ -14,7 +14,7 @@ from unittest import mock
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
 from keyfit import cli  # noqa: E402
-from keyfit.cli import NOT_MACOS, OLD_PATH_LINE, main  # noqa: E402
+from keyfit.cli import NOT_MACOS, OLD_COMMENT, OLD_PATH_LINE, main  # noqa: E402
 from keyfit.realbin import stable_path  # noqa: E402
 
 BASHES = sorted({b for b in ("/bin/bash", shutil.which("bash")) if b and os.access(b, os.X_OK)})  # 3.2 and current
@@ -85,6 +85,19 @@ class SetupTests(unittest.TestCase):
         self.assertNotIn("add this as the LAST line", out)
         self.assertEqual((self.home / ".zshrc").read_text(), before)
 
+    def test_line_of_an_earlier_version_still_counts(self):
+        # until KEY-64 the line's comment named four tools: `# keyfit: claude/codex/aws/gh shims on PATH`
+        old = f'source "{self.config}/shell.zsh"  {OLD_COMMENT}'
+        self.assertEqual(OLD_COMMENT, "# keyfit: claude/codex/aws/gh shims on PATH")
+        (self.home / ".zshrc").write_text(f"export A=1\n{old}\nexport B=2\n")
+        _, out, _ = self.setup()
+        self.assertIn("Already active: ~/.zshrc loads them", out)  # an upgrade: the file is left alone
+        self.assertIn(old, (self.home / ".zshrc").read_text())
+        _, out, _ = self.setup("--rc")  # rewritten in place, never a second line
+        line = f'source "{self.config}/shell.zsh"  # keyfit: tool shims on PATH'
+        self.assertEqual((self.home / ".zshrc").read_text(), f"export A=1\n{line}\nexport B=2\n")
+        self.assertIn(f"Updated the Keyfit line in ~/.zshrc:\n  {line}", out)
+
     def test_shim_whose_keyfit_is_gone_says_what_to_do(self):
         # `pipx uninstall keyfit` before `keyfit setup --remove`: no "No such file or directory" from sh, and the
         # tool still does not start unchecked
@@ -98,8 +111,9 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(out.stdout, "")
         self.assertIn(f"keyfit: claude not started: Keyfit is not installed where its shims expect it "
                       f"({self.tmp / 'gone' / '_shim_entry.py'}).\n  Upgraded or reinstalled Keyfit? Run: keyfit setup\n"
-                      "  Uninstalled it? Remove the line ending in '# keyfit: claude/codex/aws/gh shims on PATH' from "
-                      "your shell startup file, then open a new terminal.\n", out.stderr)
+                      "  Uninstalled it? Remove the line ending in '# keyfit: tool shims on PATH' (or, from an earlier "
+                      "version, '# keyfit: claude/codex/aws/gh shims on PATH') from your shell startup file, then open "
+                      "a new terminal.\n", out.stderr)
         self.assertNotIn("No such file", out.stderr)
 
     def test_not_macos(self):
@@ -151,7 +165,7 @@ class SetupTests(unittest.TestCase):
 
     def test_zsh_rc(self):
         _, out, _ = self.setup("--rc")
-        line = f'source "{self.config}/shell.zsh"  # keyfit: claude/codex/aws/gh shims on PATH'
+        line = f'source "{self.config}/shell.zsh"  # keyfit: tool shims on PATH'
         self.assertEqual((self.home / ".zshrc").read_text(), f"\n{line}\n")
         self.assertIn("Next: open a new terminal, go to a project's repository and run: keyfit init\n"
                       "Undo any time: keyfit setup --remove;", out)
@@ -163,11 +177,11 @@ class SetupTests(unittest.TestCase):
         rc = self.tmp / "custom-zshrc"
         rc.write_text(f"export A=1\n{OLD_PATH_LINE}\nexport B=2\n")
         self.setup("--zshrc", str(rc), shell="/bin/bash")  # --zshrc means zsh, whatever $SHELL says
-        self.assertEqual(rc.read_text(), f'export A=1\nsource "{self.config}/shell.zsh"  # keyfit: claude/codex/aws/gh '
-                                         f'shims on PATH\nexport B=2\n')
+        self.assertEqual(rc.read_text(), f'export A=1\nsource "{self.config}/shell.zsh"  # keyfit: tool shims on PATH\n'
+                                         f'export B=2\n')
 
     def test_bash_rc_goes_to_the_login_profile(self):
-        line = f'. "{self.config}/shell.sh"  # keyfit: claude/codex/aws/gh shims on PATH'
+        line = f'. "{self.config}/shell.sh"  # keyfit: tool shims on PATH'
         self.setup("--rc", shell="/bin/bash")
         self.assertEqual((self.home / ".bash_profile").read_text(), f"\n{line}\n")
         self.assertFalse((self.home / ".bashrc").exists())
@@ -247,18 +261,19 @@ class SetupTests(unittest.TestCase):
         self.assertIsNone(self.keyfit_files())  # nothing of Keyfit's was left: the folder is gone too
 
     def test_remove_takes_out_only_keyfit_lines(self):
-        line = f'source "{self.config}/shell.zsh"  # keyfit: claude/codex/aws/gh shims on PATH'
+        line = f'source "{self.config}/shell.zsh"  # keyfit: tool shims on PATH'
+        old = f'source "{self.config}/shell.zsh"  {OLD_COMMENT}'  # the line of an earlier version
         mine = f'source "{self.config}/shell.zsh"  # my own copy'
         rc = self.tmp / "rc"
         rc.write_text(f"{mine}\n{OLD_PATH_LINE}\nexport B=2\n\n{line}\n")
-        (self.home / ".zshrc").write_text(f"\n{line}\n")
+        (self.home / ".zshrc").write_text(f"\n{old}\n")
         self.setup()
         (self.config / "bin" / "notes.txt").write_text("mine\n")
         (self.config / "bin" / "gh").write_text("#!/bin/sh\necho not a keyfit shim\n")
         code, out, _ = self.remove("--rc", str(rc))
         self.assertEqual(code, 0)
         self.assertEqual(rc.read_text(), f"{mine}\nexport B=2\n")
-        self.assertIn(line, (self.home / ".zshrc").read_text())  # --rc PATH: only that file
+        self.assertIn(old, (self.home / ".zshrc").read_text())  # --rc PATH: only that file
         self.assertEqual(self.keyfit_files(), ["bin", "bin/gh", "bin/notes.txt"])  # files Keyfit did not write stay
         _, out, _ = self.remove()
         self.assertEqual((self.home / ".zshrc").read_text(), "")
