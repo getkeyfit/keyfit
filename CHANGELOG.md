@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Bind this folder now? [Y/n]`.** When you start a tool yourself in a terminal and a Cloudflare check
+  fails only because the project's folder isn't bound to its wrangler profile (a new worktree, say),
+  Keyfit offers to run `wrangler auth activate NAME FOLDER` with the project's wrangler, checks again
+  and starts the tool, like `Sign in now?` (both are asked, one after the other, when a sign-in is
+  needed too). In a Superset worktree it offers the folder that holds the repository's worktrees
+  (`~/.superset/worktrees/<repository>`), so later workspaces start without a question, unless a
+  worktree of another project is in it. Only the project's own profile, and only for a folder of the
+  project: never another project's folder or one outside every project, never the home folder or a
+  folder above it. Agents and scripts still get the printed command. `keyfit add cloudflare`'s
+  `Run it now?` runs the binding the same way, away from the folder, so a `CLOUDFLARE_API_TOKEN` in
+  its `.env` no longer makes wrangler refuse.
 - **Copilot CLI, the fourth agent (tenth tool).** `copilot` starts with the project's accounts, checked,
   like `claude`, `codex` and `opencode`, and as the project's GitHub account. Copilot CLI signs in to
   GitHub and takes `COPILOT_GITHUB_TOKEN` before `GH_TOKEN`, `GITHUB_TOKEN`, its own login and gh's, so
