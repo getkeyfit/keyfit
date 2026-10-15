@@ -14,14 +14,17 @@ the environment of the start that launched it, so the shim starts them with --st
 session's environment), as it starts Codex without its daemon.
 
 inject  — point OPENCODE_DB at the account's database. The provider keys OpenCode would take from the shell next to
-          the database's sign-ins (Anthropic, OpenAI, Google, GitHub Copilot, OpenCode Zen) are removed only where
-          OpenCode starts (scrub: the shim and the remote check), so other agents' sessions keep them.
+          the database's sign-ins are removed only where OpenCode starts (scrub: the shim and the remote check), so
+          other agents' sessions keep them: always those of Anthropic, OpenAI, Google, GitHub Copilot and OpenCode
+          Zen, and every other key OpenCode's own report named at the last check (OpenRouter, Groq, xAI, …).
 forget  — in a project without an OpenCode account, the OPENCODE_DB Keyfit set for another project goes.
 local   — the database holds a sign-in, and one for each provider recorded with the account (read with SQLite,
           read-only: provider and label, never a credential).
 remote  — `opencode auth list --standalone` in that environment (with no configuration loaded, so no MCP server
-          starts) must list those sign-ins as stored, and no shell variable next to them. No provider is asked: there
-          is no cheap call that confirms a sign-in without using it, so this checks what OpenCode would use.
+          starts) must list those sign-ins as stored. Every key or token it lists as coming from the environment is
+          from your shell, not the project's account: the check warns, naming it, and the shim leaves it out. No
+          provider is asked: there is no cheap call that confirms a sign-in without using it, so this checks what
+          OpenCode would use.
 """
 
 from __future__ import annotations
@@ -42,15 +45,23 @@ from .base import Adapter
 
 MARK = "KEYFIT_OPENCODE"  # set next to the OPENCODE_DB Keyfit injected: the account's name
 # Shell variables OpenCode 2.0.25 takes as sign-ins of Anthropic, OpenAI, Google, GitHub Copilot and OpenCode Zen/Go
-# (`opencode auth list` shows them as "environment").
+# (`opencode auth list` shows them as "environment"), removed without asking. Keys of the other providers it knows
+# (OpenRouter, Groq, Bedrock, Cloudflare, GitLab, …) are removed once the check has seen them in its report.
 PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
                  "GOOGLE_API_KEY", "GITHUB_TOKEN", "OPENCODE_API_KEY")
 
 
-def scrub(env: dict) -> None:
-    """Remove the provider keys an OpenCode of a project with an OpenCode account must not take from the shell."""
-    for var in PROVIDER_KEYS:
+def scrub(env: dict, seen=()) -> None:
+    """Remove the provider keys an OpenCode of a project with an OpenCode account must not take from the shell: the
+    fixed ones, and those the check *seen* in OpenCode's report."""
+    for var in (*PROVIDER_KEYS, *seen):
         env.pop(var, None)
+
+
+def key_like(name: str) -> bool:
+    """A variable that can hold a key or token (OPENROUTER_API_KEY, HF_TOKEN, AWS_BEARER_TOKEN_BEDROCK). OpenCode also
+    lists settings such as CLOUDFLARE_ACCOUNT_ID, which Keyfit sets for the project's Cloudflare account: no sign-in."""
+    return ("KEY" in name or "TOKEN" in name) and not name.startswith("KEYFIT_")
 
 
 def default_db(env: dict) -> Path:
@@ -107,7 +118,7 @@ def auth_list(env: dict, timeout: float = 30) -> tuple[list | None, str]:
         return None, "opencode not found on PATH"
     with tempfile.TemporaryDirectory(prefix="keyfit-opencode-") as empty:
         quiet = {k: v for k, v in env.items() if k not in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT")}
-        scrub(quiet)  # as the shim starts OpenCode
+        scrub(quiet)  # as the shim starts OpenCode, before it knows what else this report names
         quiet.update(OPENCODE_CONFIG_DIR=empty, OPENCODE_DISABLE_PROJECT_CONFIG="1", OPENCODE_DISABLE_MODELS_FETCH="1",
                      OPENCODE_DISABLE_AUTOUPDATE="1")
         try:
@@ -165,9 +176,10 @@ class OpenCodeAdapter(Adapter):
 
     def fingerprint(self, conn, env: dict) -> str:
         """Changes with the sign-ins (a new one, one removed, another selected) and with the names of key-like
-        variables in the environment, so a cached check never vouches for another sign-in or a new competing key."""
+        variables in the environment, so a cached check never vouches for another sign-in, and the shell keys it
+        names (which the shim removes) are those of this environment."""
         rows, _ = _rows(database(conn, env), "id, integration_id, label, active")
-        keys = sorted(k for k in env if k.endswith(("_API_KEY", "_TOKEN")))
+        keys = sorted(k for k in env if key_like(k))
         return hashlib.sha256(json.dumps([rows or [], keys]).encode()).hexdigest()[:16]
 
     def remote(self, conn, env: dict) -> Check:
@@ -179,17 +191,18 @@ class OpenCodeAdapter(Adapter):
                 "see why inside the project: opencode auth list   (Keyfit adds --standalone)"
             return Check(self.kind, "fail", label, reason, fix, transient="did not answer" in reason)
         stored: dict[str, str] = {}
-        shell: list[tuple[str, str]] = []
+        shell: list[str] = []
         for entry in listing:
             if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
                 continue
             for item in entry.get("connections") or []:
                 if not isinstance(item, dict):
                     continue
+                var = item.get("name")
                 if item.get("type") == "credential":
                     stored[entry["id"]] = str(entry.get("name") or entry["id"])
-                elif item.get("type") == "env":
-                    shell.append((entry["id"], str(item.get("name"))))
+                elif item.get("type") == "env" and isinstance(var, str) and key_like(var) and var not in shell:
+                    shell.append(var)
         missing = [p for p in wanted if p not in stored]
         if missing:
             return Check(self.kind, "fail", label,
@@ -197,10 +210,7 @@ class OpenCodeAdapter(Adapter):
                          sign_in(db, env, missing[0]))
         if not stored:
             return Check(self.kind, "fail", label, f"OpenCode sees no sign-in in {tilde(db)}", sign_in(db, env))
-        competing = [(stored[p], var) for p, var in shell if p in stored]
-        if competing:
-            name, var = competing[0]
-            return Check(self.kind, "fail", label,
-                         f"{var} from your shell would compete with the project's {name} sign-in",
-                         f"unset {var} (or remove it from your shell startup file)")
+        if shell:  # the shim leaves them out: OpenCode would offer their providers, billed to your own keys
+            return Check(self.kind, "warn", label, f"confirmed by OpenCode · {', '.join(sorted(shell))} from your "
+                         "shell, not the project's account: left out of OpenCode sessions", scrub=tuple(sorted(shell)))
         return Check(self.kind, "ok", label, "confirmed by OpenCode")
