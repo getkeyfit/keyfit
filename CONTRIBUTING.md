@@ -17,8 +17,8 @@ python3 -m unittest discover -s tests -p 'test_shim.py'       # one file
 python3 -m unittest discover -s tests -k test_remote_timeout  # tests whose name matches
 ```
 
-The tests use fake `aws`, `claude`, `gh`, `opencode`, `copilot`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud`, `npx` and `security` binaries and a temporary config
-directory. They never reach the network, your accounts, `~/.config/keyfit`, wrangler's config folder, OpenCode's database, Copilot CLI's `~/.copilot`, gcloud's `~/.config/gcloud` or your Keychain.
+The tests use fake `aws`, `claude`, `gh`, `opencode`, `copilot`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud`, `firebase`, `npx` and `security` binaries and a temporary config
+directory. They never reach the network, your accounts, `~/.config/keyfit`, wrangler's config folder, OpenCode's database, Copilot CLI's `~/.copilot`, gcloud's `~/.config/gcloud`, the firebase CLI's `~/.config/configstore` or your Keychain.
 Keep it that way: a new test module sets `KEYFIT_CONFIG_DIR` to a temporary directory at the
 top, like the existing ones.
 
@@ -40,7 +40,7 @@ bin/keyfit status        # check every connection of that project
 
 The shims that `keyfit setup` writes run the checkout they were written from. If your own
 shims point at the checkout you are editing, every branch switch there changes what your
-`claude`, `codex`, `opencode`, `copilot`, `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex` and `gcloud` run. Work in a separate clone or worktree, and when you try
+`claude`, `codex`, `opencode`, `copilot`, `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` run. Work in a separate clone or worktree, and when you try
 `setup` itself, point Keyfit at throwaway folders:
 
 ```bash
@@ -73,7 +73,7 @@ bin/keyfit setup         # shims and shell files go into $KEYFIT_CONFIG_DIR; no 
    settings reach the tool through its environment or command line (for example Claude's
    `--settings`). Shell rc files change only when the user asks for it explicitly.
 
-4. **Keep the shims fast.** Every `claude`, `codex`, `opencode`, `copilot`, `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex` and `gcloud` call goes through a shim.
+4. **Keep the shims fast.** Every `claude`, `codex`, `opencode`, `copilot`, `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` call goes through a shim.
    With checks cached, a launch should cost at most a few tenths of a second.
    - In a folder that is not registered, the shim looks up the registry (and asks git which
      repository it is in) and hands over to the real tool. Nothing else.
