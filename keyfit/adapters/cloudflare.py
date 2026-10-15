@@ -278,6 +278,16 @@ def mismatch(conn, folder, env: dict, asked: str | None = None, config: Path | N
     return None
 
 
+def _takes(name: str, nxt: str | None, short: bool = False) -> bool:
+    """Whether option *name* takes the next argument as its value, as yargs-parser decides: one that takes a value,
+    unless the next argument is an option (for the last letter of a group, `-x` or `--x`; a negative number is not),
+    and any option followed by `true` or `false`."""
+    if nxt is None or nxt in ("true", "false"):
+        return nxt is not None
+    option = re.match(r"(-|--)[^-]", nxt) if short else nxt.startswith("-")
+    return name in VALUED and (not option or bool(NEGATIVE.fullmatch(nxt)))
+
+
 def _read(args: list[str]):
     """A wrangler command line as wrangler's parser (yargs-parser 21) reads it, up to `--`: (name, value) for each
     option it sets (value None when it takes none, or none was given) and (None, word) for each command word.
@@ -300,8 +310,7 @@ def _read(args: list[str]):
                     i += 1
                 yield from ((name, v or None) for v in values or [None])
                 continue
-            if not eq and not name.startswith("no-") and nxt is not None and (
-                    name in VALUED and (not nxt.startswith("-") or NEGATIVE.fullmatch(nxt)) or nxt in ("true", "false")):
+            if not eq and not name.startswith("no-") and _takes(name, nxt):  # `--no-x` is x = false
                 value, i = nxt, i + 1
             yield name, value or None
         elif re.match(r"-.\..+=", arg):  # `-c.x=1`: a dotted key (wrangler gets an object, not a path)
@@ -321,7 +330,8 @@ def _read(args: list[str]):
                 if rest == "-":
                     yield letter, rest
                     continue
-                if re.fullmatch(r"[A-Za-z]", letter) and NUMBER.fullmatch(rest) or re.fullmatch(r"[^A-Za-z0-9_]", after):
+                attached = re.fullmatch(r"[A-Za-z]", letter) and NUMBER.fullmatch(rest)  # `-c123`
+                if attached or re.fullmatch(r"[^A-Za-z0-9_]", after):  # `-c/abs/w.toml`, `-c~/w.toml`
                     yield letter, rest
                     broken = True
                     break
@@ -329,8 +339,7 @@ def _read(args: list[str]):
             last = arg[-1]
             if not broken and last != "-":
                 value = None
-                if nxt is not None and (last in VALUED and (not re.match(r"(-|--)[^-]", nxt) or NEGATIVE.fullmatch(nxt))
-                                        or nxt in ("true", "false")):
+                if _takes(last, nxt, short=True):
                     value, i = nxt, i + 1
                 yield last, value or None
 
