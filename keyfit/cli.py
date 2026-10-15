@@ -1035,7 +1035,6 @@ def cmd_add_cloudflare(args) -> int:
     """Record which wrangler profile (a sign-in wrangler keeps) and Cloudflare account a project uses. Keyfit keeps no
     token: the folder's binding picks wrangler's sign-in, Keyfit checks it and pins the account."""
     import shlex
-    import subprocess
 
     reg = Registry.load(args.registry)
     project = _project_from_args(reg, args)
@@ -1102,11 +1101,12 @@ def cmd_add_cloudflare(args) -> int:
     print(f"  next: {detail}\n  → {fix}")
     words = shlex.split(fix)
     if words[:3] == ["wrangler", "auth", "activate"] and len(words) == 5 and sys.stdin.isatty() and _yes("Run it now?"):
-        command = [binary, *words[1:4], os.path.expanduser(words[4])]
-        done = subprocess.run(command, env=cloudflare_adapter.wrangler_env(env), stdin=subprocess.DEVNULL, check=False)
-        if done.returncode != 0:
-            print(f"wrangler auth activate did not finish; run it yourself: {fix}", file=sys.stderr)
+        target = os.path.expanduser(words[4])
+        reason = ADAPTERS["cloudflare"].activate(binary, words[3], target, env)
+        if reason:
+            print(f"wrangler auth activate did not finish ({reason}); run it yourself: {fix}", file=sys.stderr)
             return 1
+        print(f"  bound {tilde(target)} to wrangler profile {words[3]}")
     return 0
 
 

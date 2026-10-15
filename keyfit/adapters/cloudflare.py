@@ -214,6 +214,16 @@ def shell_path(path) -> str:
     return re.sub(r"[^\w@%+=:,./~-]", lambda m: "\\" + m.group(), tilde(path))
 
 
+def superset_parent(folder, env: dict) -> str | None:
+    """The folder that holds *folder* when it is a Superset worktree (~/.superset/worktrees/<repository>/<name>, or
+    ~/.superset-*/… of another Superset build): binding it once covers every worktree of the repository."""
+    parent = os.path.dirname(os.path.abspath(folder))
+    worktrees = Path(parent).parent
+    if worktrees.name != "worktrees" or not re.fullmatch(r"\.superset(-.+)?", worktrees.parent.name):
+        return None
+    return parent if os.path.realpath(worktrees.parent.parent) == os.path.realpath(_home(env)) else None
+
+
 def sign_in(profile: str) -> str:
     return "wrangler login" if profile == DEFAULT else f"wrangler auth create {profile}"
 
@@ -430,6 +440,25 @@ class CloudflareAdapter(Adapter):
         return Check(self.kind, "ok", label, "profile and account confirmed")
 
     # helpers, shared with `keyfit add cloudflare` --------------------------------------------------------------
+
+    def activate(self, binary: str, profile: str, folder: str, env: dict) -> str:
+        """Bind *folder* and everything under it to *profile* (`wrangler auth activate`): "" when done, else why not.
+        It runs away from the folder, so no .env there hands wrangler a CLOUDFLARE_API_TOKEN (with one set, wrangler
+        refuses to change profiles); wrangler neither prompts nor reads a sign-in for it."""
+        import tempfile
+
+        try:
+            code, out, err = self.run([binary, "auth", "activate", profile, folder], tempfile.gettempdir(),
+                                      wrangler_env(env), self.cli_timeout)
+        except subprocess.TimeoutExpired:
+            return f"wrangler did not answer within {self.cli_timeout:g} s"
+        except OSError:
+            return f"{tilde(binary)} could not run"
+        if code == 0:
+            return ""
+        lines = [line.strip() for line in _plain(f"{out}\n{err}").splitlines() if line.strip()]
+        first = next((line for line in lines if "[ERROR]" in line), lines[-1] if lines else f"exit {code}")
+        return printable(re.sub(r"^.*?\[ERROR\]\s*", "", first))[:160]
 
     def whoami(self, binary: str, folder: str, env: dict) -> tuple[dict | None, str, str]:
         """({account id: name}, "", "ok") of the sign-in wrangler uses in *folder*, or (None, why, state) with state
