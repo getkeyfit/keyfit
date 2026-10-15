@@ -4,8 +4,10 @@ Your existing servers keep their names (linear_acme, …) because your agent
 guidance routes by those names. For a session in project P, a server is hidden when
 - it is a Linear server reading another key variable than P's (Linear servers in the
   folder's .mcp.json are hidden unless P names them — they carry unverified keys);
-- its name matches another project's `mcp_servers` patterns and none of P's.
-A server P owns (`keyfit add mcp`) is always visible in P, even when another
+- its name matches another project's `mcp_servers` patterns or Google Workspace servers, and none of P's;
+- it is a Google Workspace server (Gmail, Drive, Calendar: a known package, or Google's own remote
+  servers) and P has Google Workspace servers of its own (google-mcp) that do not include it.
+A server P owns (`keyfit add mcp`, `keyfit add google-mcp`) is always visible in P, even when another
 project owns it too — e.g. a server signed in to a team both projects share.
 Claude gets `--settings` with `deniedMcpServers` (user scope) and
 `disabledMcpjsonServers` (.mcp.json); Codex gets `-c mcp_servers.<name>.enabled=false`;
@@ -81,9 +83,71 @@ def hidden(name: str, spec: dict, project: Project, owners: dict | None = None,
         # so a server reading either one gets that key — also when the key lives in the Keychain.
         injected = {LINEAR_API_KEY, keep_var} - {None} if "linear" in project.connections else set()
         return not (verified and key_var in injected)
-    if _matches(name, project.mcp_servers):
+    if _matches(name, project.mcp_claims()):
         return False
+    if "google-mcp" in project.connections and google_type(spec):
+        return True  # another Google account's server, or one whose sign-in Keyfit never checked for this project
     return _owned_elsewhere(name, project, owners)
+
+
+# Google Workspace servers (Gmail, Drive, Calendar): the local ones by the package they run (any version, through npx,
+# uvx, a global install or node_modules), Google's own remote ones (developer preview since May 2026) by host. The
+# remote ones keep their sign-in inside each agent, out of Keyfit's reach: `keyfit add mcp NAME` can only give one to a
+# project.
+GOOGLE_PACKAGES = {"workspace-mcp": "workspace-mcp", "@gongrzhe/server-gmail-autoauth-mcp": "gmail-autoauth",
+                   "@cocal/google-calendar-mcp": "google-calendar-mcp",
+                   "@piotr-agier/google-drive-mcp": "google-drive-mcp"}
+GOOGLE_HOSTS = {f"{product}mcp.googleapis.com" for product in
+                ("gmail", "drive", "calendar", "docs", "sheets", "slides", "chat", "classroom")}
+GOOGLE_REMOTE = "remote"
+
+
+def _package(word: str) -> str:
+    """A command word as a package name: without its version (name@1.2, name==1.2) or the folder it is run from."""
+    word = re.split(r"[=<>~!]=|[<>]", word, maxsplit=1)[0]
+    if word.startswith("@"):
+        return "@" + word[1:].split("@", 1)[0]
+    return word.split("@", 1)[0].rsplit("/", 1)[-1]
+
+
+def spec_argv(spec: dict) -> list[str]:
+    """The command a stdio server runs: `command` + `args`, or OpenCode's `command` list."""
+    command, args = spec.get("command"), spec.get("args")
+    words = command if isinstance(command, list) else [command] if isinstance(command, str) else []
+    return [w for w in [*words, *(args if isinstance(args, list) else [])] if isinstance(w, str)]
+
+
+def spec_env(spec: dict) -> dict:
+    """The variables a server's definition sets (`env`, OpenCode's `environment`)."""
+    table = spec.get("env") if isinstance(spec.get("env"), dict) else spec.get("environment")
+    return {k: v for k, v in table.items() if isinstance(v, str)} if isinstance(table, dict) else {}
+
+
+def google_type(spec: dict) -> str | None:
+    """Which Google Workspace server a definition runs: a type of GOOGLE_PACKAGES, GOOGLE_REMOTE, or None."""
+    url = urllib.parse.urlparse(str(spec.get("url") or spec.get("httpUrl") or ""))
+    if url.netloc in GOOGLE_HOSTS or (url.netloc == "people.googleapis.com" and url.path.startswith("/mcp")):
+        return GOOGLE_REMOTE
+    for word in spec_argv(spec):
+        for package, kind in GOOGLE_PACKAGES.items():
+            if _package(word) == package or f"/{package}/" in word:  # node_modules/@cocal/google-calendar-mcp/…
+                return kind
+    return None
+
+
+def definitions(env: dict, cwd: Path) -> list[tuple[str, str, dict]]:
+    """(agent, name, spec) of every server the five agents load in *cwd*: the user's and the folder's."""
+    try:
+        local = json.loads((cwd / ".mcp.json").read_text()).get("mcpServers") or {}
+    except (OSError, ValueError, AttributeError):
+        local = {}
+    out = [("Claude", n, s) for table in (claude_user_servers(env), local) if isinstance(table, dict)
+           for n, s in table.items()]
+    out += [("Codex", n, s) for n, s in codex_servers(env).items()]
+    out += [("OpenCode", n, s) for n, s, _ in opencode_servers(env, cwd)]
+    out += [("Copilot CLI", n, s) for n, s, _ in copilot_servers(env, cwd)]
+    out += [("Gemini CLI", n, s) for n, s, _ in gemini_servers(env, cwd)]
+    return [(agent, n, s) for agent, n, s in out if isinstance(s, dict)]
 
 
 def claude_user_servers(env: dict) -> dict:

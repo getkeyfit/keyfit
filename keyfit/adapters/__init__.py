@@ -9,6 +9,7 @@ from .gcloud import GcloudAdapter
 from .gemini import GeminiAdapter
 from .github import GithubAdapter
 from .google import GoogleAdapter
+from .google_mcp import GoogleMcpAdapter
 from .linear import LinearAdapter
 from .opencode import OpenCodeAdapter
 from .supabase import SupabaseAdapter
@@ -30,4 +31,5 @@ ADAPTERS = {
     "google": GoogleAdapter(),
     "gcloud": GcloudAdapter(),
     "firebase": FirebaseAdapter(),
+    "google-mcp": GoogleMcpAdapter(),
 }
