@@ -474,8 +474,8 @@ class ThroughTheShimFileTests(VercelCase):
             self.assertEqual(main(["setup"]), 0)
         shims = self.config / "bin"
         self.assertEqual(sorted(p.name for p in shims.iterdir()),
-                         [".keyfit-shims", "aws", "claude", "codex", "convex", "copilot", "firebase", "gcloud", "gh", "opencode",
-                          "supabase", "vercel", "wrangler"])
+                         [".keyfit-shims", "aws", "claude", "codex", "convex", "copilot", "firebase", "gcloud", "gemini", "gh",
+                          "opencode", "supabase", "vercel", "wrangler"])
         reg = self.register()
         self.login(self.own, HUBOT)
         conn = reg.get("mine").connections["vercel"]

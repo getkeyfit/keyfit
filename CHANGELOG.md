@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Gemini CLI, the fifth agent (thirteenth tool), on the project's Google account.** `gemini` starts with
+  the project's accounts, checked, like the other agents, and signed in as the project's Google account
+  (the work or the personal email of `keyfit add google`). Gemini CLI keeps its settings, sessions and
+  Google sign-in in `~/.gemini`, and `GEMINI_CLI_HOME` moves that folder, so a Gemini CLI account is a
+  folder: `keyfit add gemini` takes your own `~/.gemini` when it is signed in as the project's account,
+  and `--new` makes one (`~/.config/keyfit/gemini/NAME`, with your `GEMINI.md`, commands, skills,
+  agents, policies and extensions linked in) that every project with the same Google account shares;
+  `--key` uses a Gemini API key instead (checked with the Gemini API, kept in the Keychain or where
+  `--key env:VAR` points, with a folder of its own set to the API-key method), and `--cloud-project`
+  hands a Workspace account its Google Cloud project. Every session of the project gets
+  `GEMINI_CLI_HOME` (and a key account's `GEMINI_API_KEY`); `gemini` itself starts without inherited
+  `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_APPLICATION_CREDENTIALS`,
+  `GOOGLE_GENAI_USE_VERTEXAI` and the other variables that would pick another key, sign-in method,
+  endpoint or credential store (`GEMINI_FORCE_ENCRYPTED_FILE_STORAGE` would move the sign-in into one
+  Keychain item every folder shares). Before a start, the folder's sign-in method must be Google's,
+  and the email Google wrote into its sign-in (`oauth_creds.json`) must be the project's Google
+  account; while the sign-in's token is still valid, Google's tokeninfo must name that account too (an
+  expired token isn't renewed: that takes Gemini CLI's own OAuth client). Gemini CLI has no sign-in
+  command, so `Sign in now?` runs `gemini --prompt-interactive /quit` in the project's folder: Gemini
+  CLI's own sign-in dialog, then it quits, and Keyfit checks the account before the session starts. A
+  wrong account names the sign-in file to remove in a folder Keyfit made, and a folder of the
+  project's own (`--new`) for your own `~/.gemini`. Sessions start with `--allowed-mcp-server-names`
+  naming every server they keep, when the project must not see one (from your settings, the folder's
+  `.gemini/settings.json`, the system's and your extensions, with your own `mcp.allowed` and
+  `mcp.excluded` carried over); an allowlist of your own that names another project's server is
+  refused, and Gemini CLI's own commands (`mcp`, `extensions`, …) run as typed. `keyfit init` offers it
+  after Firebase; `doctor` shows the folder and the sign-in (a key only by its name). Verified with
+  Gemini CLI 0.64.0.
 - **Firebase, the twelfth tool.** `firebase` and every agent session are checked against the
   project's Google account (the one `gcloud` uses too) and its Firebase project (`keyfit add
   firebase`: the project the CLI uses in the folder, `--project-id` for another; `keyfit add google`
@@ -33,8 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   project the CLI uses here. Verified with firebase-tools 15.26.0.
 - **Google Cloud, the eleventh tool, and the project's Google account.** A project now says once which
   Google account it uses, the work or the personal email (`keyfit add google --email`, or picked from
-  gcloud's sign-ins); every Google tool is checked against it: `gcloud` now, the firebase CLI and
-  Gemini CLI next. `gcloud` uses the project's gcloud configuration (`keyfit add gcloud`: the one
+  gcloud's sign-ins); every Google tool is checked against it (`gcloud` here; Firebase and Gemini CLI
+  above). `gcloud` uses the project's gcloud configuration (`keyfit add gcloud`: the one
   signed in as that account, and its Google Cloud project, `--project-id` for another). gcloud
   already keeps named configurations, so Keyfit keeps no Google token: sessions and `gcloud` get
   `CLOUDSDK_ACTIVE_CONFIG_NAME` (for that process only; the configuration active everywhere else is

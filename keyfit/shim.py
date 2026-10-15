@@ -1,5 +1,5 @@
-"""The shim in front of `claude`, `codex`, `opencode`, `copilot`, `aws`, `gh`, `vercel`, `supabase`, `wrangler`,
-`convex`, `gcloud` and `firebase` (ambient mode).
+"""The shim in front of `claude`, `codex`, `opencode`, `copilot`, `gemini`, `aws`, `gh`, `vercel`, `supabase`,
+`wrangler`, `convex`, `gcloud` and `firebase` (ambient mode).
 
 Three outcomes only:
   folder not registered      → run the real tool unchanged
@@ -10,7 +10,7 @@ Three outcomes only:
 
 Inside a project session (KEYFIT_PROJECT set), `aws`, `gh`, `vercel`, `supabase`, `wrangler`,
 `convex`, `gcloud` and `firebase` stay on that session's project even after `cd` elsewhere; `claude`, `codex`,
-`opencode` and `copilot` re-resolve from the folder, since starting a new agent elsewhere is deliberate.
+`opencode`, `copilot` and `gemini` re-resolve from the folder, since starting a new agent elsewhere is deliberate.
 Bypass once: KEYFIT_DISABLE=1 <tool> …
 """
 
@@ -22,17 +22,18 @@ import sys
 from pathlib import Path
 
 from . import cache, environment, mcp, secrets
-from .adapters import ADAPTERS, cloudflare, convex, copilot, firebase, gcloud, opencode, supabase, vercel
+from .adapters import ADAPTERS, cloudflare, convex, copilot, firebase, gcloud, gemini, opencode, supabase, vercel
 from .adapters.google import same
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
 from .resolve import resolve
 
-TOOLS = ("claude", "codex", "opencode", "copilot", "aws", "gh", "vercel", "supabase", "wrangler", "convex", "gcloud",
-         "firebase")
+TOOLS = ("claude", "codex", "opencode", "copilot", "gemini", "aws", "gh", "vercel", "supabase", "wrangler", "convex",
+         "gcloud", "firebase")
 INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "npm install -g @openai/codex",
            "opencode": "brew install opencode", "copilot": "npm install -g @github/copilot",
+           "gemini": "npm install -g @google/gemini-cli",
            "aws": "brew install awscli", "gh": "brew install gh", "vercel": "npm install -g vercel",
            "supabase": "brew install supabase/tap/supabase",
            "wrangler": "npm install -g wrangler   (projects that have it run their own: npx wrangler …)",
@@ -45,9 +46,9 @@ MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github
        "vercel": "keyfit add vercel"}
 RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",),
             "wrangler": ("cloudflare",), "convex": ("convex",), "gcloud": ("gcloud",), "firebase": ("firebase",),
-            "claude": None, "codex": None, "opencode": None, "copilot": None}
+            "claude": None, "codex": None, "opencode": None, "copilot": None, "gemini": None}
 # The agents: they start with all of the project's accounts, checked.
-AGENTS = ("claude", "codex", "opencode", "copilot")
+AGENTS = ("claude", "codex", "opencode", "copilot", "gemini")
 # Tools that run unchanged in a project without an account of their kind: Supabase is often used only locally
 # (supabase start), with no account at all, and so are wrangler (wrangler dev) and convex (an anonymous local
 # deployment). gcloud keeps its own configurations, and many of its commands (components, emulators, config) need none;
@@ -77,6 +78,10 @@ COPILOT_SUBCOMMANDS = {"app", "login", "help", "init", "config", "update", "vers
 COPILOT_SESSIONS = {None, "init", "workflow"}  # they run the agent: its MCP servers start
 # Copilot's options whose values matter to Keyfit (the folder it works in, where its servers come from).
 COPILOT_VALUED = ("-C", "--config-dir", "--additional-mcp-config", "--enable-mcp-server")
+# Gemini CLI's own commands (they change its settings or extensions, and start no session) and its sign-in: Gemini CLI
+# has no sign-in command, so Keyfit's is a session that signs in (its own dialog) and quits.
+GEMINI_SUBCOMMANDS = {"mcp", "extensions", "extension", "skills", "skill", "hooks", "hook", "gemma"}
+GEMINI_SIGN_INS = (["--prompt-interactive", "/quit"], ["-i", "/quit"], ["--prompt-interactive=/quit"], ["-i=/quit"])
 # Sign-in and setup commands always run — they are how a failed check gets fixed.
 LOGIN_COMMANDS = {
     "aws": (("sso", "login"), ("sso", "logout"), ("login",), ("logout",), ("configure",)),
@@ -99,7 +104,8 @@ LOGIN_COMMANDS = {
 }
 LOGIN_KINDS = {"aws": ("aws",), "claude": ("claude",), "codex": ("codex",), "gh": ("github",), "vercel": ("vercel",),
                "supabase": ("supabase",), "wrangler": ("cloudflare",), "convex": ("convex",), "npx": ("convex",),
-               "opencode": ("opencode",), "copilot": ("copilot",), "gcloud": ("gcloud",), "firebase": ("firebase",)}
+               "opencode": ("opencode",), "copilot": ("copilot",), "gemini": ("gemini",), "gcloud": ("gcloud",),
+               "firebase": ("firebase",)}
 # Variables sign-in commands run without: gh must manage its own tokens, Copilot CLI its own login (`copilot login`
 # takes a token from the environment instead of signing in), convex its own login (with the override set,
 # `convex login` would only say the injected token is valid), and gcloud's sign-in and `config set` write the
@@ -119,11 +125,13 @@ SIGN_INS = {
     "wrangler": (("auth", "create", None), ("login",)),
     "npx": (("convex", "login", "--force"),),  # a Convex account that is the convex CLI's own login
     "opencode": (("auth", "login", "--standalone"), ("auth", "login", None, "--standalone")),
+    "gemini": (tuple(gemini.SIGN_IN),),  # Gemini CLI's sign-in dialog in the account's home, then it quits
     "gcloud": (("auth", "login", None),),  # in the project's configuration, which it then uses
     # a first sign-in, another account, a renewed one; and binding the folder to the account (asked as a binding)
     "firebase": (("login",), ("login", "--reauth"), ("login:add",), ("login:add", None), ("login:use", None)),
 }
-SIGN_IN_VARS = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "opencode": "OPENCODE_DB"}
+SIGN_IN_VARS = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "opencode": "OPENCODE_DB",
+                "gemini": gemini.HOME_VAR}
 VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query", "--color", "--ca-bundle",
                  "--cli-read-timeout", "--cli-connect-timeout", "--sso-session", "-u", "--user", "-h", "--hostname",
                  "-c", "--config", "-m", "--model", "-Q", "--global-config", "-S", "--scope", "-T", "--team",
@@ -154,6 +162,8 @@ def positionals(args: list[str]) -> list[str]:
 
 
 def is_login_command(tool: str, args: list[str]) -> bool:
+    if tool == "gemini":
+        return args in GEMINI_SIGN_INS
     readers = {"supabase": supabase.words, "wrangler": cloudflare.words, "convex": convex.words, "gcloud": gcloud.words,
                "firebase": firebase.words}
     words = readers.get(tool, positionals)(args)
@@ -229,6 +239,8 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         return opencode_args(project, args, env, cwd, owners)
     if tool == "copilot":
         return copilot_args(project, args, env, cwd, owners)
+    if tool == "gemini":
+        return gemini_args(project, args, env, cwd, owners)
     return args
 
 
@@ -378,6 +390,30 @@ def copilot_args(project: Project, args: list[str], env: dict, cwd: Path, owners
                           f"{printable(value)}: that MCP server belongs to another project.\n"
                           f"  Bypass once: KEYFIT_DISABLE=1 copilot …")
     return [f"--disable-mcp-server={name}" for name in names] + args
+
+
+def gemini_args(project: Project, args: list[str], env: dict, cwd: Path, owners: dict | None = None) -> list[str]:
+    """With a Gemini CLI account, Gemini CLI starts without the variables that would pick another sign-in, key or Google
+    Cloud project (gemini.scrub). Sessions (`gemini`, `gemini QUERY`, `gemini -p …`, and the sign-in) start with
+    --allowed-mcp-server-names naming every server they keep when the project must not see one; an allowlist of your
+    own that names such a server is refused. Gemini CLI's own commands (mcp, extensions, …) run as typed."""
+    conn = project.connections.get("gemini")
+    if isinstance(conn, dict):
+        gemini.scrub(conn, env)
+    if subcommand(args, GEMINI_SUBCOMMANDS):
+        return args
+    hide, kept = mcp.gemini_hidden(project, env, cwd, owners)
+    if not hide:
+        return args
+    given = mcp.gemini_allowed(args)
+    clash = [name for name in given if name in hide]
+    if clash:
+        raise Refused(f"keyfit: this folder belongs to {project.name}; refusing --allowed-mcp-server-names "
+                      f"{printable(clash[0])}: that MCP server belongs to another project.\n"
+                      f"  Bypass once: KEYFIT_DISABLE=1 gemini …")
+    if given:  # your own allowlist already leaves them out
+        return args
+    return [f"--allowed-mcp-server-names={','.join(kept or [mcp.GEMINI_NONE])}"] + args
 
 
 def copilot_login_check(project: Project) -> None:
@@ -967,6 +1003,8 @@ def offer_fixes(failed: list, project: Project, env: dict, registry: Registry, t
                 return False
             login_env = login_environment(name, project, env)  # as when you type the sign-in
             login_env.update(assignments)
+            if name == "gemini":
+                words = (name, *gemini_args(project, list(words[1:]), login_env, Path.cwd(), registry.mcp_owners()))
             if subprocess.run(list(words), executable=real, env=login_env).returncode != 0:
                 _say([f"keyfit: {name} {'login:use' if binding else 'sign-in'} did not finish"])
                 return False
@@ -1048,6 +1086,8 @@ def main(argv: list[str]) -> int:
             if tool == "opencode":  # to the project's database, not a background server's
                 opencode_server_option(project, args)
                 args = opencode_standalone(args)
+            if tool == "gemini":  # a session, until it quits: without other projects' MCP servers
+                args = gemini_args(project, args, login_env, Path.cwd(), registry.mcp_owners())
             os.execve(real, [tool, *args], login_env)
         if relevant and not any(kind in project.connections for kind in relevant):
             if tool in OPTIONAL:  # no account of its kind: it runs as before Keyfit, minus other projects' tokens
