@@ -9,9 +9,13 @@ wrangler keeps named sign-ins since 4.106 (June 2026): `wrangler auth create NAM
 NAME DIR` binds a profile to a folder and its subfolders. Without --profile, wrangler uses the profile of the nearest
 bound folder (the folder it reads its config from), else the default profile. CLOUDFLARE_API_TOKEN (or
 CLOUDFLARE_API_KEY with CLOUDFLARE_EMAIL; older names CF_…) beats every profile, also from the folder's .env or
-.env.local, which wrangler loads when the variable is not set. The account is account_id in the
-wrangler config (wrangler.json, wrangler.jsonc, wrangler.toml, each looked for upwards in that order), else
-CLOUDFLARE_ACCOUNT_ID, else the one picked at sign-in; an account the sign-in cannot reach fails, it never falls back.
+.env.local, which wrangler loads into its environment for each variable not set already (with --env NAME also
+.env.NAME and .env.NAME.local; with --env-file, those files instead). The same files can set where the profile's
+sign-in goes: CLOUDFLARE_API_BASE_URL (the host of every API request, which carries the token) and wrangler's
+sign-in endpoints (WRANGLER_AUTH_DOMAIN, …_AUTH_URL, …_TOKEN_URL, …_REVOKE_URL, …_CLIENT_ID). The account is
+account_id in the wrangler config (wrangler.json, wrangler.jsonc, wrangler.toml, each looked for upwards in that
+order), else CLOUDFLARE_ACCOUNT_ID, else the one picked at sign-in; an account the sign-in cannot reach fails, it never
+falls back.
 Profiles live in wrangler's config folder (~/.wrangler when it exists, else ~/Library/Preferences/.wrangler):
 config/<profile>.toml, or .enc when wrangler keeps the key in the Keychain, and profiles/directory-bindings.json
 (folder → profile, compared as text). Keyfit reads the bindings and the profile names, never a sign-in, and keeps no
@@ -20,11 +24,13 @@ Cloudflare token of its own: wrangler switches, Keyfit checks and enforces.
 inject  — remove inherited credentials that would beat the profile (CLOUDFLARE_API_TOKEN, CLOUDFLARE_API_KEY,
           CLOUDFLARE_EMAIL and their CF_ names) and set CLOUDFLARE_ACCOUNT_ID to the account, so every wrangler the
           session starts (`npx wrangler` from node_modules too) works on it or fails loudly. The folder's binding
-          picks the sign-in.
+          picks the sign-in. CLOUDFLARE_API_BASE_URL is set to Cloudflare's own (a variable already set beats the
+          folder's .env) and inherited sign-in endpoints are removed.
 forget  — in a project without a Cloudflare account, the CLOUDFLARE_ACCOUNT_ID Keyfit set for another project goes.
-local   — the profile exists; the folder resolves to it (bound there or above, not shadowed by a subfolder's
-          binding); the wrangler config wrangler would read sets no other account_id (top level and env.*); the
-          wrangler `npx wrangler` would run here is new enough for profiles.
+local   — no .env file wrangler may load in the folder sets CLOUDFLARE_API_BASE_URL or a sign-in endpoint (only the
+          names are read); the profile exists; the folder resolves to it (bound there or above, not shadowed by a
+          subfolder's binding); the wrangler config wrangler would read sets no other account_id (top level and
+          env.*); the wrangler `npx wrangler` would run here is new enough for profiles.
 remote  — `wrangler whoami --json` in the folder (wrangler renews an expired sign-in first, as every command does)
           must list the account.
 """
@@ -44,7 +50,7 @@ from ..realbin import find_real
 from ..registry import tilde
 from .base import Adapter
 
-API = "https://api.cloudflare.com/client/v4"
+API = "https://api.cloudflare.com/client/v4"  # wrangler's API host when CLOUDFLARE_API_BASE_URL is not set
 ACCOUNT = re.compile(r"[0-9a-f]{32}")  # a Cloudflare account ID (use fullmatch)
 PROFILE = re.compile(r"[A-Za-z0-9_-]+")  # wrangler's profile names (use fullmatch)
 DEFAULT = "default"  # the profile of `wrangler login`; "staging" is reserved too
@@ -53,6 +59,14 @@ MARK = "KEYFIT_CLOUDFLARE"  # set next to the CLOUDFLARE_ACCOUNT_ID Keyfit injec
 # Credentials wrangler takes before any profile, and the account variable Keyfit sets itself (older CF_ names too).
 SCRUB = ("CLOUDFLARE_API_TOKEN", "CF_API_TOKEN", "CLOUDFLARE_API_KEY", "CF_API_KEY", "CLOUDFLARE_EMAIL", "CF_EMAIL",
          "CLOUDFLARE_ACCOUNT_ID", "CF_ACCOUNT_ID")
+# Where wrangler sends a profile's sign-in: the API host (pinned to API) and the sign-in endpoints, which renew it
+# (token URL), sign in (auth domain and URL, client ID) and sign out (revoke URL). Inherited ones are removed.
+HOST = "CLOUDFLARE_API_BASE_URL"
+ENDPOINTS = (HOST, "WRANGLER_AUTH_DOMAIN", "WRANGLER_AUTH_URL", "WRANGLER_TOKEN_URL", "WRANGLER_REVOKE_URL",
+             "WRANGLER_CLIENT_ID")
+# A variable set in a .env file, as the dotenv package wrangler uses reads one: `NAME=…`, `export NAME=…`, `NAME: …`
+# at the start of a line (anything that looks like one counts, also inside a quoted value: a false alarm, never a miss).
+DOTENV_LINE = re.compile(r"[\s\ufeff]*(?:export\s+)?([A-Za-z0-9_.-]+)\s*[=:]")
 CONFIGS = ("wrangler.json", "wrangler.jsonc", "wrangler.toml")
 BINDINGS = Path("profiles") / "directory-bindings.json"
 # Options that take a value (yargs: `--name value`, `--name=value`, `-c value`, `-cVALUE`, `-ec value`): wrangler's
@@ -372,11 +386,50 @@ def _plain(text: str) -> str:
 
 
 def wrangler_env(env: dict) -> dict:
-    """The environment Keyfit runs wrangler with for a check: no credentials that would beat the profile, no metrics,
-    no colours."""
-    run = {k: v for k, v in env.items() if k not in SCRUB or k == "CLOUDFLARE_ACCOUNT_ID"}
-    run.update(WRANGLER_SEND_METRICS="false", NO_COLOR="1", FORCE_COLOR="0")
+    """The environment Keyfit runs wrangler with for a check: no credentials that would beat the profile, Cloudflare's
+    own API host and sign-in endpoints (set, they beat the folder's .env), no metrics, no colours."""
+    run = {k: v for k, v in env.items() if (k not in SCRUB or k == "CLOUDFLARE_ACCOUNT_ID") and k not in ENDPOINTS}
+    run.update({HOST: API, "WRANGLER_SEND_METRICS": "false", "NO_COLOR": "1", "FORCE_COLOR": "0"})
     return run
+
+
+def dotenv_files(folder, named=()) -> list[Path]:
+    """The .env files wrangler may load in *folder*: those named with --env-file (relative to the folder), else
+    `.env`, `.env.local` and, for any --env NAME, `.env.NAME` and `.env.NAME.local` (every `.env.*` there)."""
+    if named:
+        return [Path(os.path.abspath(os.path.join(folder, name))) for name in named]
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return []
+    return [Path(folder) / name for name in names if name == ".env" or name.startswith(".env.")]
+
+
+def endpoints_set(folder, named=()) -> list[tuple[Path, list[str]]]:
+    """(file, variable names) for each .env file wrangler may load in *folder* that sets ENDPOINTS. Only names are
+    read: a value is never kept or shown."""
+    found = []
+    for path in dotenv_files(folder, named):
+        try:
+            if not path.is_file():  # not a folder, a pipe or a device: wrangler skips what it cannot read too
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        seen = {m.group(1) for m in map(DOTENV_LINE.match, text.splitlines()) if m}
+        names = [name for name in ENDPOINTS if name in seen]
+        if names:
+            found.append((path, names))
+    return found
+
+
+def endpoints_problem(found: list[tuple[Path, list[str]]]) -> tuple[str, str]:
+    """(detail, fix) for .env files that set ENDPOINTS: the files and the names, never the values."""
+    files = "; ".join(f"{printable(tilde(path))} sets {', '.join(names)}" for path, names in found)
+    names = ", ".join(name for name in ENDPOINTS if any(name in listed for _, listed in found))
+    where = printable(tilde(found[0][0])) if len(found) == 1 else "those files"
+    return (f"{files}, which would decide where wrangler sends the profile's sign-in",
+            f"remove {names} from {where}   (Keyfit keeps wrangler on Cloudflare's own API host and sign-in)")
 
 
 def _run(argv: list[str], cwd: str, env: dict, timeout: float) -> tuple[int, str, str]:
@@ -415,17 +468,20 @@ class CloudflareAdapter(Adapter):
         return f"{profile} → {account}" if account else profile
 
     def inject(self, conn, env: dict) -> None:
-        for var in SCRUB:
+        for var in (*SCRUB, *ENDPOINTS):
             env.pop(var, None)
+        env[HOST] = API
         account = conn.get("account_id")
         if isinstance(account, str) and ACCOUNT.fullmatch(account):
             env["CLOUDFLARE_ACCOUNT_ID"] = account
         env[MARK] = conn.get("name", "")
 
     def forget(self, env: dict) -> None:
-        if MARK in env:  # Keyfit set the account for another project
+        if MARK in env:  # Keyfit set the account (and the API host) for another project
             for var in ("CLOUDFLARE_ACCOUNT_ID", MARK):
                 env.pop(var, None)
+            if env.get(HOST) == API:
+                env.pop(HOST)
 
     def fingerprint(self, conn, env: dict) -> str:
         """Changes with the profile's sign-in file (a new sign-in, or one wrangler renewed), so a cached check never
@@ -447,6 +503,9 @@ class CloudflareAdapter(Adapter):
         if not isinstance(expected, str) or not ACCOUNT.fullmatch(expected):
             return Check(self.kind, "fail", label, "the expected account must be a 32-character Cloudflare account ID",
                          add_command(conn))
+        found = endpoints_set(os.getcwd())  # first: no sign-in is offered in such a folder
+        if found:
+            return Check(self.kind, "fail", label, *endpoints_problem(found))
         if not has_profile(env, profile):
             what = "wrangler is not signed in (no default profile)" if profile == DEFAULT else \
                 f"wrangler has no profile {profile} on this Mac"
