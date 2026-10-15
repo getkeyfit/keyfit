@@ -16,6 +16,7 @@ from .adapters import cloudflare as cloudflare_adapter
 from .adapters import convex as convex_adapter
 from .adapters import firebase as firebase_adapter
 from .adapters import gcloud as gcloud_adapter
+from .adapters import gemini as gemini_adapter
 from .adapters import google as google_adapter
 from .adapters import linear as linear_adapter
 from .adapters import opencode as opencode_adapter
@@ -76,8 +77,8 @@ def _not_active() -> str:
 
     folder = canonical(shim_dir())
     if not (folder / MARKER).is_file():
-        return "Keyfit is not set up yet, so claude, codex, opencode, copilot, aws, gh, vercel, supabase, wrangler, " \
-               "convex, gcloud and firebase still run without checks.\n" \
+        return "Keyfit is not set up yet, so claude, codex, opencode, copilot, gemini, aws, gh, vercel, supabase, " \
+               "wrangler, convex, gcloud and firebase still run without checks.\n" \
                "  Set it up: keyfit setup --rc, then open a new terminal"
     if folder not in [canonical(e) for e in os.environ.get("PATH", "").split(os.pathsep) if e]:
         return f"{tilde(folder)} is not on PATH in this terminal, so tools here still run without checks.\n" \
@@ -390,6 +391,30 @@ def _offer_firebase(name: str, base: dict) -> None:
         cmd_add_firebase(argparse.Namespace(**base, project_id=picked, name=None, guided=True))
 
 
+def _offer_gemini(name: str, base: dict) -> None:
+    from .realbin import find_real
+
+    if find_real("gemini", dict(os.environ), skip_wrappers=True) is None:
+        print("Gemini CLI: gemini not found on PATH — skipped")
+        return
+    email = google_adapter.email_of(Registry.load(base["registry"]).get(name).connections.get("google"))
+    if email is None:
+        print(f"Gemini CLI: its Google sign-in is checked against {name}'s Google account, and it has none yet — "
+              "later: keyfit add google --email <email>, then: keyfit add gemini")
+        return
+    login, _ = gemini_adapter.read_login(Path.home())
+    offer = dict(base, name=None, home=None, new=False, key=None, cloud_project=None)
+    if login and google_adapter.same(login["email"], email):
+        print(f"Gemini CLI: signed in as {email} in ~/.gemini")
+        if _yes(f"Use this Gemini CLI sign-in for {name}?"):
+            cmd_add_gemini(argparse.Namespace(**offer))
+        return
+    who = f"signed in as {login['email']}" if login and login["email"] else "not signed in with Google"
+    print(f"Gemini CLI: ~/.gemini is {who}, not {email}.")
+    if _yes(f"Give {name} a Gemini CLI folder of its own (you sign in there as {email} once)?"):
+        cmd_add_gemini(argparse.Namespace(**dict(offer, new=True)))
+
+
 def _offer_linear(name: str, base: dict) -> None:
     if not secrets.can_store():
         print("Linear: later, with a key in an environment variable: keyfit add linear --key env:<VARIABLE>")
@@ -406,6 +431,7 @@ GUIDED = (("aws", "AWS", _offer_aws), ("github", "GitHub", _offer_github), ("cla
           ("supabase", "Supabase", _offer_supabase), ("cloudflare", "Cloudflare", _offer_cloudflare),
           ("convex", "Convex", _offer_convex), ("google", "Google", _offer_google),
           ("gcloud", "Google Cloud", _offer_gcloud), ("firebase", "Firebase", _offer_firebase),
+          ("gemini", "Gemini CLI", _offer_gemini),
           ("linear", "Linear", _offer_linear))
 
 
@@ -469,7 +495,7 @@ def cmd_status(args) -> int:
     checks = []
     if not r.project.connections:
         print("  no accounts yet — keyfit init offers the ones on this Mac, or map one: keyfit add aws|github|"
-              "claude|codex|opencode|copilot|vercel|supabase|cloudflare|convex|google|gcloud|firebase|linear …")
+              "claude|codex|opencode|copilot|gemini|vercel|supabase|cloudflare|convex|google|gcloud|firebase|linear …")
     else:
         env = environment.build(r.project)
         checks = environment.verify(r.project, env, remote=not args.offline)  # fresh; refreshes the cache
@@ -661,7 +687,8 @@ def cmd_add_mcp(args) -> int:
     reg.save()
     found = {**{n: "claude" for n in mcp.claude_user_servers(dict(os.environ))},
              **{n: "codex" for n in mcp.codex_servers(dict(os.environ))},
-             **{n: "opencode" for n, _, _ in mcp.opencode_servers(dict(os.environ), Path.cwd())}}
+             **{n: "opencode" for n, _, _ in mcp.opencode_servers(dict(os.environ), Path.cwd())},
+             **{n: "gemini" for n, _, _ in mcp.gemini_servers(dict(os.environ), Path.cwd())}}
     print(f"{project.name}: owns MCP servers {', '.join(owned)} — hidden in every other project")
     for pattern in args.servers:
         hits = sorted(n for n in found if fnmatch.fnmatchcase(n, pattern))
@@ -1320,7 +1347,7 @@ def _google_accounts(env: dict) -> tuple[list[str], str]:
 def cmd_add_google(args) -> int:
     """Record the project's one Google account (the work or the personal email). Keyfit keeps no Google token: every
     Google tool of the project is checked against this email (gcloud's configuration, the firebase CLI's sign-in,
-    later Gemini CLI)."""
+    Gemini CLI's sign-in)."""
     reg = Registry.load(args.registry)
     project = _project_from_args(reg, args)
     if project is None:
@@ -1360,12 +1387,154 @@ def cmd_add_google(args) -> int:
     others = sorted(p for p, body in reg.data["projects"].items() if p != project.name and body.get("google") == name)
     if before and others and not google_adapter.same(before.get("email"), email):
         print(f"  account '{name}' was {before.get('email')}; it changed for {', '.join(others)} too")
-    for kind in GOOGLE_TOOLS:  # the tools that check against it right away
+    for kind in GOOGLE_TOOLS:  # the tools that check against it right away (a Gemini API key does not)
         conn = reg.get(project.name).connections.get(kind)
-        if isinstance(conn, dict) and not getattr(args, "guided", False):
+        if isinstance(conn, dict) and not conn.get("key") and not getattr(args, "guided", False):
             check = ADAPTERS[kind].local(conn, environment.build(reg.get(project.name), kinds=(kind,)))
             if check.failed:
                 print(f"  next: {check.detail}\n  → {check.fix}")
+    return 0
+
+
+def _gemini_name(reg: Registry, base: str, record) -> str:
+    """The account's name: *base*, else base-2, … — never another account's record. *record* gives the record a name
+    would have (a new home is named after its account)."""
+    taken = reg.data["accounts"].get("gemini", {})
+    name, n = base, 1
+    while isinstance(taken.get(name), dict) and \
+            {k: v for k, v in taken[name].items() if k != "cloud_project"} != record(name):
+        n += 1
+        name = f"{base}-{n}"
+    return name
+
+
+def _save_gemini(reg: Registry, project: Project, name: str, record: dict) -> list[str]:
+    """Record the account for the project; the other projects whose account changed with it."""
+    taken = reg.data["accounts"].get("gemini", {})
+    before = taken.get(name) if isinstance(taken.get(name), dict) else None
+    reg.set_account("gemini", name, record)
+    reg.set_connection(project.name, "gemini", name)
+    reg.save()
+    others = sorted(p for p, body in reg.data["projects"].items() if p != project.name and body.get("gemini") == name)
+    return others if before and before != record else []
+
+
+def cmd_add_gemini(args) -> int:
+    """Record which Gemini CLI home (and so which Google sign-in) a project's Gemini CLI uses, or which Gemini API key.
+    Default: your own home (~/.gemini), when it is signed in as the project's Google account."""
+    reg = Registry.load(args.registry)
+    project = _project_from_args(reg, args)
+    if project is None:
+        return 1
+    if args.name and (secrets.looks_like_key(args.name) or not secrets.NAME.fullmatch(f"gemini-{args.name}")):
+        print("a name is letters, digits, '.', '_' and '-' (at most 57)", file=sys.stderr)
+        return 1
+    if args.cloud_project and not gcloud_adapter.PROJECT.fullmatch(args.cloud_project):
+        print(f"{printable(args.cloud_project)} is not a Google Cloud project ID", file=sys.stderr)
+        return 1
+    env = dict(os.environ)
+    extra = {"cloud_project": args.cloud_project} if args.cloud_project else {}
+    if args.key is not None:
+        return _add_gemini_key(reg, project, args, env, extra)
+    email = google_adapter.email_of(project.connections.get("google"))
+    if email is None:
+        print(f"{project.name} has no Google account yet, which Gemini CLI's sign-in is checked against.\n"
+              "  → keyfit add google --email <the project's work or personal email>, then: keyfit add gemini",
+              file=sys.stderr)
+        return 1
+    google = reg.data["projects"][project.name].get("google")
+    base = args.name or (google if isinstance(google, str) else google_adapter.default_name(email))
+    if args.new:
+        name = args.name or _gemini_name(reg, base, lambda n: {"home": tilde(config_dir() / "gemini" / n)})
+        path = config_dir() / "gemini" / name
+        made = gemini_adapter.seed(path, env)
+        others = _save_gemini(reg, project, name, {"home": tilde(path), **extra})
+        print(f"Created {tilde(path)}" + (f" ({', '.join(made)} from ~/.gemini)" if made else "") + ".")
+        print(f"{project.name}: gemini account '{name}' → Gemini CLI in {tilde(path)}, signed in as {email}")
+        if others:
+            print(f"  account '{name}' changed for {', '.join(others)} too")
+        login, _ = gemini_adapter.read_login(path)
+        if not (login and google_adapter.same(login["email"], email)):
+            print(f"Sign in there once as {email} (Gemini CLI's own dialog, then it quits):\n"
+                  f"  {gemini_adapter.sign_in(path, env)}   (or start gemini in {project.name}: it offers to)")
+        return 0
+    path = canonical(args.home) if args.home else canonical(Path.home())
+    if not path.is_dir():
+        print(f"no folder {printable(args.home)}", file=sys.stderr)
+        return 1
+    login, reason = gemini_adapter.read_login(path)
+    if login is None or not google_adapter.same(login["email"], email):
+        said = reason if login is None else \
+            f"Gemini CLI in {tilde(gemini_adapter.folder(path))} is signed in as {login['email'] or 'an unknown account'}"
+        print(f"{said}, and {project.name}'s Google account is {email}.\n"
+              f"  → a Gemini CLI folder of the project's own: keyfit add gemini --new   (then sign in there as {email})",
+              file=sys.stderr)
+        return 1
+    record = {"home": tilde(path)}  # "~" for your own home
+    name = args.name or _gemini_name(reg, base, lambda n: record)
+    others = _save_gemini(reg, project, name, {**record, **extra})
+    print(f"{project.name}: gemini account '{name}' → Gemini CLI in {tilde(gemini_adapter.folder(path))}, signed in as "
+          f"{email}")
+    if others:
+        print(f"  account '{name}' changed for {', '.join(others)} too")
+    return 0
+
+
+GEMINI_KEY = re.compile(r"[\x21-\x7e]{20,200}")  # Google API keys are AIza…; anything printable is let through to Google
+
+
+def _add_gemini_key(reg: Registry, project: Project, args, env: dict, extra: dict) -> int:
+    """A Gemini API key instead of a Google sign-in: checked with Google, kept in the Keychain (or where --key points),
+    with a Gemini CLI folder of its own that uses the API-key method."""
+    if args.new or args.home:
+        print("--key goes without --new and --home: a key account gets a Gemini CLI folder of its own", file=sys.stderr)
+        return 1
+    ref = None
+    if args.key:
+        if secrets.looks_like_key(args.key):
+            print("--key takes where the key lives (env:VAR or keychain:service/account), not the key itself: run "
+                  "`keyfit add gemini --key` to paste it at a hidden prompt (the key may now be in your shell history)",
+                  file=sys.stderr)
+            return 1
+        ref = secrets.normalise(args.key)
+        key = secrets.resolve(ref, env)
+        if not key:
+            print(f"{secrets.describe(ref)} is empty or missing in this shell.\n  Set it first, or paste the key instead "
+                  "(stored in the Keychain): keyfit add gemini --key", file=sys.stderr)
+            return 1
+    else:
+        if not secrets.can_store():
+            print(secrets.NOT_MACOS, file=sys.stderr)
+            return 1
+        key = (_read_secret("Gemini API key (input hidden): ") or "").strip()
+        if not key:
+            print("no key given — paste it at the prompt, or pipe it on stdin", file=sys.stderr)
+            return 1
+    if not GEMINI_KEY.fullmatch(key):
+        print("that is not a Gemini API key, so it was not sent to Google — create one at aistudio.google.com/apikey",
+              file=sys.stderr)
+        return 1
+    check = ADAPTERS["gemini"].remote({"key": ref or "pasted", "name": args.name or project.name}, {"GEMINI_API_KEY": key})
+    if check.failed:
+        print(f"{check.detail}\n  → {check.fix}", file=sys.stderr)
+        return 1
+    name = args.name or _account_name(project.name, "gemini")
+    path = config_dir() / "gemini" / name
+    if ref is None:
+        reason = secrets.store(secrets.SERVICE, f"gemini-{name}", key)
+        if reason:
+            print(f"could not store the key in the Keychain: {reason}", file=sys.stderr)
+            return 1
+        reg.add_stored_secret(f"gemini-{name}")
+        ref = f"keychain:{secrets.SERVICE}/gemini-{name}"
+    del key
+    made = gemini_adapter.seed(path, env, key=True)
+    others = _save_gemini(reg, project, name, {"home": tilde(path), "key": ref, **extra})
+    print(f"Created {tilde(path)}" + (f" ({', '.join(made)} from ~/.gemini)" if made else "") + ".")
+    print(f"{project.name}: gemini account '{name}' → a Gemini API key via {secrets.describe(ref)}, Gemini CLI in "
+          f"{tilde(path)}")
+    if others:
+        print(f"  account '{name}' changed for {', '.join(others)} too")
     return 0
 
 
@@ -1570,7 +1739,7 @@ NOT_MACOS = "Keyfit supports macOS for now (it stores keys in the Keychain); Lin
 # is Superset wrapper → Keyfit shim → real tool (Superset finds "the next claude"). Both move to the very front:
 # a login profile that prepends another folder after Superset set PATH (e.g. `brew shellenv` in ~/.zprofile)
 # must not put real tools ahead of the shims.
-SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/copilot/aws/gh/vercel/supabase/wrangler/convex/gcloud/firebase
+SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/copilot/gemini/aws/gh/vercel/supabase/wrangler/convex/gcloud/firebase
 # shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 () {
@@ -1581,7 +1750,7 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/copilot/aws/gh/vercel/sup
 
 # The same rule in POSIX sh, for bash (macOS ships 3.2): no arrays or `local`, so _kf_ variables unset at the
 # end; PATH is walked with parameter expansion (never word-split or globbed). Like zsh, it drops empty entries.
-SHELL_SH = """# Keyfit: put the claude/codex/opencode/copilot/aws/gh/vercel/supabase/wrangler/convex/gcloud/firebase
+SHELL_SH = """# Keyfit: put the claude/codex/opencode/copilot/gemini/aws/gh/vercel/supabase/wrangler/convex/gcloud/firebase
 # shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 _kf="@SHIMS@"; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
@@ -1720,7 +1889,7 @@ def cmd_setup(args) -> int:
 
 # What Keyfit itself keeps in its config dir; --purge deletes the folder only when it holds nothing else.
 KEYFIT_FILES = {"registry.toml", "registry.toml.tmp", "cache", "bin", "shell.zsh", "shell.sh", "claude", "vercel",
-                "opencode", ".DS_Store"}
+                "opencode", "gemini", ".DS_Store"}
 
 
 def _drop_lines(rc: Path, lines: set[str]) -> bool:
@@ -1754,7 +1923,8 @@ def _purge_confirmed(folder: Path, args) -> bool:
         print(f"--purge deletes {tilde(folder)}; confirm with --yes — nothing changed", file=sys.stderr)
         return False
     accounts = [(title, sorted(p.name for p in (folder / kind).glob("*") if p.is_dir()))
-                for kind, title in (("claude", "Claude"), ("vercel", "Vercel"), ("opencode", "OpenCode"))]
+                for kind, title in (("claude", "Claude"), ("vercel", "Vercel"), ("opencode", "OpenCode"),
+                                    ("gemini", "Gemini CLI"))]
     extra = "".join(f" and the {title} account folders {', '.join(names)}" for title, names in accounts if names)
     if _yes(f"Delete {tilde(folder)}: the registry of your projects{extra}?"):
         return True
@@ -1813,7 +1983,7 @@ def _remove_setup(args) -> int:
             folder.rmdir()  # only when nothing else is left in it
         except OSError:
             pass
-    print("Open a new terminal (or run: hash -r): claude, codex, opencode, copilot, aws, gh, vercel, supabase, "
+    print("Open a new terminal (or run: hash -r): claude, codex, opencode, copilot, gemini, aws, gh, vercel, supabase, "
           "wrangler, convex, gcloud and firebase run directly again.")
     return 0
 
@@ -1900,7 +2070,7 @@ def cmd_doctor(args) -> int:
             checks.append(Check(tool, "ok", _short(real)))
         elif tool == "convex":  # projects run it through npx, which gets the account in agent sessions
             checks.append(Check(tool, "ok", "not installed globally", "npx convex gets its account from claude, "
-                                "codex, opencode and copilot sessions"))
+                                "codex, opencode, copilot and gemini sessions"))
         else:
             checks.append(Check(tool, "warn", "not found on PATH", "needed only if you use it", INSTALL[tool]))
     path = Path(args.registry) if args.registry else default_path()
@@ -1949,6 +2119,9 @@ def cmd_doctor(args) -> int:
                     db = opencode_adapter.database(conn, env)
                     check = Check("opencode", "ok", check.label, f"{check.detail} · {tilde(db)}")
                 checks.append(check)
+            conn = r.project.connections.get("gemini")
+            if isinstance(conn, dict):  # which home Gemini CLI gets and whose sign-in it holds; a key only by its name
+                checks.append(_doctor_gemini(r.project, conn, env))
             conn = r.project.connections.get("copilot")
             if isinstance(conn, dict):  # which account and config folder Copilot gets, from the registry (no token)
                 github = r.project.connections.get("github")
@@ -1972,9 +2145,23 @@ def cmd_doctor(args) -> int:
     return 1 if failed else 0
 
 
+def _doctor_gemini(project: Project, conn: dict, env: dict) -> Check:
+    """The doctor's Gemini CLI line: the home and its sign-in from the files; a key's Keychain item by its name only."""
+    path = gemini_adapter.home(conn, env)
+    where = f"home {tilde(gemini_adapter.folder(path))}"
+    if gemini_adapter.is_key(conn):
+        label = ADAPTERS["gemini"].label(conn)
+        if not secrets.exists(conn["key"], env):
+            return Check("gemini", "fail", label, f"{secrets.describe(conn['key'])} is missing",
+                         "keyfit add gemini --key")
+        return Check("gemini", "ok", label, f"{secrets.describe(conn['key'])} · {where}")
+    check = ADAPTERS["gemini"].local(conn, environment.build(project, env, kinds=("gemini",)))
+    return check if check.failed else Check("gemini", "ok", check.label, f"Google sign-in · {where}")
+
+
 START = """start here:
-  keyfit setup --rc     put Keyfit in front of claude, codex, opencode, copilot, aws, gh, vercel, supabase,
-                        wrangler, convex, gcloud and firebase, then open a new terminal
+  keyfit setup --rc     put Keyfit in front of claude, codex, opencode, copilot, gemini, aws, gh, vercel,
+                        supabase, wrangler, convex, gcloud and firebase, then open a new terminal
   keyfit init           inside a project's repository: register it and pick its accounts
   claude                starts with that project's accounts, checked
 something off? keyfit doctor
@@ -1991,8 +2178,8 @@ def build_parser() -> argparse.ArgumentParser:
     def command(parent, name: str, text: str):  # the one-line help is also the command's own --help description
         return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
 
-    p = command(sub, "setup", "write the shims for claude, codex, opencode, copilot, aws, gh, vercel, supabase, "
-                              "wrangler, convex, gcloud and firebase; with --rc also put them on PATH")
+    p = command(sub, "setup", "write the shims for claude, codex, opencode, copilot, gemini, aws, gh, vercel, "
+                              "supabase, wrangler, convex, gcloud and firebase; with --rc also put them on PATH")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
     p.add_argument("--rc", nargs="?", const="", metavar="FILE",
@@ -2004,14 +2191,14 @@ def build_parser() -> argparse.ArgumentParser:
                         "~/.bash_profile, ~/.bash_login, ~/.profile and ~/.bashrc (or only --rc FILE); "
                         "the registry stays")
     p.add_argument("--purge", action="store_true",
-                   help="with --remove: also delete ~/.config/keyfit (registry, cache, Claude, Vercel and OpenCode "
-                        "account folders it made), after asking; Keychain items stay")
+                   help="with --remove: also delete ~/.config/keyfit (registry, cache, Claude, Vercel, OpenCode and "
+                        "Gemini CLI account folders it made), after asking; Keychain items stay")
     p.add_argument("-y", "--yes", action="store_true", help="with --purge: do not ask")
     p.set_defaults(func=cmd_setup)
 
     p = command(sub, "init", "register the current repository as a project, then offer the AWS, GitHub, Claude, "
                              "Codex, OpenCode, Copilot CLI, Vercel, Supabase, Cloudflare, Convex, Google, Google "
-                             "Cloud, Firebase and Linear accounts found on this Mac (imports `use aws` / "
+                             "Cloud, Firebase, Gemini CLI and Linear accounts found on this Mac (imports `use aws` / "
                              "LINEAR_API_KEY lines from its .envrc, if any)")
     p.add_argument("--name", help="project name (default: folder name of the main checkout)")
     p.add_argument("--root", help="path inside the repository (default: current folder)")
@@ -2136,6 +2323,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help="short account name, reusable across projects (default: the project ID)")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_firebase)
+    p = command(kinds, "gemini", "Gemini CLI's Google sign-in (its home folder) or Gemini API key for this project")
+    p.add_argument("--name", help="short account name, reusable across projects (default: the project's Google "
+                                  "account's name, e.g. work; with --key the project's name)")
+    where = p.add_mutually_exclusive_group()
+    where.add_argument("--home", help="the folder Gemini CLI keeps .gemini in, signed in as the project's Google account "
+                                      "(default: your home folder, ~/.gemini)")
+    where.add_argument("--new", action="store_true",
+                       help="create a folder for another sign-in (~/.config/keyfit/gemini/NAME); sign in afterwards")
+    p.add_argument("--key", nargs="?", const="", metavar="REF",
+                   help="a Gemini API key instead of a Google sign-in: env:VAR or keychain:service/account, or nothing "
+                        "to paste it (checked with Google, then stored in the Keychain)")
+    p.add_argument("--cloud-project", help="Google Cloud project Gemini CLI gets as GOOGLE_CLOUD_PROJECT (Gemini Code "
+                                           "Assist with a Workspace account needs one)")
+    p.add_argument("--project", **project)
+    p.set_defaults(func=cmd_add_gemini)
     p = command(kinds, "linear", "Linear workspace and where its API key lives")
     p.add_argument("--key", help="env:VAR, keychain:service/account, or a bare variable name "
                                  "(default: paste the key; it is verified, then stored in the Keychain)")

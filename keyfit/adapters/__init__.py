@@ -6,6 +6,7 @@ from .convex import ConvexAdapter
 from .firebase import FirebaseAdapter
 from .copilot import CopilotAdapter
 from .gcloud import GcloudAdapter
+from .gemini import GeminiAdapter
 from .github import GithubAdapter
 from .google import GoogleAdapter
 from .linear import LinearAdapter
@@ -20,6 +21,7 @@ ADAPTERS = {
     "codex": CodexAdapter(),
     "opencode": OpenCodeAdapter(),
     "copilot": CopilotAdapter(),
+    "gemini": GeminiAdapter(),
     "github": GithubAdapter(),
     "vercel": VercelAdapter(),
     "supabase": SupabaseAdapter(),
