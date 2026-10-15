@@ -1675,8 +1675,8 @@ def build_parser() -> argparse.ArgumentParser:
     def command(parent, name: str, text: str):  # the one-line help is also the command's own --help description
         return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
 
-    p = command(sub, "setup", "write the claude/codex/opencode/copilot/aws/gh/vercel/supabase/wrangler/convex shims; "
-                              "with --rc also put them on PATH")
+    p = command(sub, "setup", "write the shims for claude, codex, opencode, copilot, aws, gh, vercel, supabase, "
+                              "wrangler and convex; with --rc also put them on PATH")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
     p.add_argument("--rc", nargs="?", const="", metavar="FILE",
