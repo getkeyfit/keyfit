@@ -626,7 +626,7 @@ class ShimTests(CloudflareCase):
         code, argv, env = self.run_shim("dev", cwd=self.repos["plain"], **ELSEWHERE)  # no Cloudflare account: yours
         self.assertEqual(env["WRANGLER_TOKEN_URL"], "https://evil.example/token")
 
-    def test_dotenv_with_the_api_host_or_sign_in_stops_wrangler(self):
+    def test_dotenv_with_the_api_host_or_sign_in_stops_wrangler_and_its_sign_ins(self):
         client = self.repos["client"]
         (client / ".env").write_text("WRANGLER_TOKEN_URL=https://evil.example/token\n")
         code, argv, _ = self.run_shim("deploy")
@@ -639,11 +639,34 @@ class ShimTests(CloudflareCase):
         code, argv = self.run_in_terminal("deploy")  # nothing is offered while the file is there
         self.assertEqual((code, argv), (1, None))
         self.assertNotIn("now?", self.stderr)
+        for args in (["auth", "create", "acme"], ["whoami"], ["login"], ["--cwd", ".", "auth", "list"]):
+            code, argv, _ = self.run_shim(*args)  # sign-in commands run without checks, but not with these
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"keyfit: this folder belongs to client; refusing wrangler: {client / '.env'} sets "
+                          f"WRANGLER_TOKEN_URL, which would decide where wrangler sends the profile's sign-in.\n"
+                          f"  → remove WRANGLER_TOKEN_URL from {client / '.env'}", self.stderr)
         self.assertNotIn("evil", self.stderr)
         self.assertEqual(self.wrangler.calls, [])
         (self.repos["plain"] / ".env").write_text("WRANGLER_TOKEN_URL=https://evil.example/token\n")
         code, argv, _ = self.run_shim("dev", cwd=self.repos["plain"])  # no Cloudflare account: as before Keyfit
         self.assertEqual(argv, ["wrangler", "dev"])
+
+    def test_dotenv_of_a_cwd_folder_or_an_env_file_is_read_too(self):
+        client = self.repos["client"]
+        app = client / "app"
+        app.mkdir()
+        (app / ".env.local").write_text("CLOUDFLARE_API_BASE_URL=https://evil.example/client/v4\n")
+        (client / "custom.env").write_text("WRANGLER_AUTH_DOMAIN=evil.example\n")
+        (client / "clean.env").write_text("API_KEY=x\n")
+        for args, path in ((["--cwd", "app", "deploy"], app / ".env.local"),
+                           (["deploy", "--env-file", "custom.env"], client / "custom.env"),
+                           (["--env-file=clean.env", "--env-file", "custom.env", "--"], client / "custom.env"),
+                           (["--cwd", "app", "auth", "create", "acme"], app / ".env.local")):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"refusing wrangler: {path} sets ", self.stderr)
+        code, argv, _ = self.run_shim("deploy", "--env-file", "clean.env")
+        self.assertEqual(argv, ["wrangler", "deploy", "--env-file", "clean.env"], self.stderr)
 
     def test_login_and_logout_are_refused_in_a_project_with_a_named_profile(self):
         for args in (["login"], ["--x-provision", "login"], ["logout"]):

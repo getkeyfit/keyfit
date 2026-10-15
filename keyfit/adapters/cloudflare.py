@@ -74,7 +74,8 @@ BINDINGS = Path("profiles") / "directory-bindings.json"
 # Every other option is read as a flag, so `wrangler --x-provision login` is still `login`.
 VALUED = {"c", "config", "cwd", "e", "env", "profile", "scopes", "callback-host", "callbackHost", "callback-port",
           "callbackPort", "account"}
-OPTIONS = {"c": "--config", "config": "--config", "cwd": "--cwd", "profile": "--profile"}
+OPTIONS = {"c": "--config", "config": "--config", "cwd": "--cwd", "profile": "--profile", "env-file": "--env-file",
+           "envFile": "--env-file"}
 ARRAYS = {"env-file", "envFile"}  # options that take every following argument up to the next option
 NEGATIVE = re.compile(r"-([0-9]+(\.[0-9]+)?|\.[0-9]+)")  # a negative number: an argument, not options (fullmatch)
 NUMBER = re.compile(r"-?[0-9]+(\.[0-9]*)?(e-?[0-9]+)?")  # taken by the letter it is attached to (fullmatch)
@@ -359,8 +360,8 @@ def _read(args: list[str]):
 
 
 def options(args: list[str]) -> list[tuple[str, str | None]]:
-    """(long name, value) of each --profile, --config and --cwd option, in every spelling wrangler's parser takes:
-    `--config FILE`, `--config=FILE`, `--c FILE`, `-c FILE`, `-c=FILE`, `-cFILE` (FILE starting with a non-word
+    """(long name, value) of each --profile, --config, --cwd and --env-file option, in every spelling wrangler's parser
+    takes: `--config FILE`, `--config=FILE`, `--c FILE`, `-c FILE`, `-c=FILE`, `-cFILE` (FILE starting with a non-word
     character: `-c/abs/w.toml`, `-c~/w.toml`) and a group of short options with c in it (`-ec FILE`, `-ec./w.toml`)."""
     return [(OPTIONS[name], value) for name, value in _read(args) if name in OPTIONS]
 
