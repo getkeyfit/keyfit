@@ -1,7 +1,7 @@
 """Gemini CLI: which Google sign-in (or Gemini API key) a project's Gemini CLI sessions run on.
 
 Account:  [accounts.gemini.work]
-          home = "~/.config/keyfit/gemini/work"   (optional: Gemini CLI's home, which holds .gemini/; absent: your own)
+          home = "~/.config/keyfit/gemini/work"   (Gemini CLI's home, which holds .gemini/; "~" is your own)
           key = "keychain:keyfit/gemini-work"     (optional: a Gemini API key instead of a Google sign-in)
           cloud_project = "acme-ai"               (optional: GOOGLE_CLOUD_PROJECT for Gemini Code Assist)
 Project:  gemini = "work"   and   google = "work"   (the project's Google account: its email reaches this connection
@@ -199,8 +199,8 @@ def scrub(conn, env: dict) -> None:
 def seed(path: Path, env: dict, key: bool = False) -> list[str]:
     """Create a home for an account: Gemini CLI's folder, owner-only (it keeps the sign-in and the sessions), with your
     context file, commands, skills, agents, policies and extensions symlinked from your own (never the sign-in or your
-    settings, which name your sign-in method and servers). A key account's settings pick the API-key method, so Gemini
-    CLI never asks for the key and never stores it in its own Keychain item."""
+    settings, which name your sign-in method and servers); returns what it linked. A key account's settings pick the
+    API-key method, so Gemini CLI never asks for the key and never stores it in its own Keychain item."""
     from ..registry import write_private
 
     target = folder(path)
@@ -216,7 +216,6 @@ def seed(path: Path, env: dict, key: bool = False) -> list[str]:
     settings = target / "settings.json"
     if key and not settings.exists():
         write_private(settings, json.dumps({"security": {"auth": {"selectedType": API_KEY}}}, indent=2) + "\n")
-        made.append("settings.json (API key)")
     return made
 
 

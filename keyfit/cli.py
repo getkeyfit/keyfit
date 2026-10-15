@@ -1470,7 +1470,7 @@ def cmd_add_gemini(args) -> int:
               f"  → a Gemini CLI folder of the project's own: keyfit add gemini --new   (then sign in there as {email})",
               file=sys.stderr)
         return 1
-    record = {} if gemini_adapter.is_default(path, env) else {"home": tilde(path)}
+    record = {"home": tilde(path)}  # "~" for your own home
     name = args.name or _gemini_name(reg, base, lambda n: record)
     others = _save_gemini(reg, project, name, {**record, **extra})
     print(f"{project.name}: gemini account '{name}' → Gemini CLI in {tilde(gemini_adapter.folder(path))}, signed in as "
@@ -1530,8 +1530,9 @@ def _add_gemini_key(reg: Registry, project: Project, args, env: dict, extra: dic
     del key
     made = gemini_adapter.seed(path, env, key=True)
     others = _save_gemini(reg, project, name, {"home": tilde(path), "key": ref, **extra})
+    print(f"Created {tilde(path)}" + (f" ({', '.join(made)} from ~/.gemini)" if made else "") + ".")
     print(f"{project.name}: gemini account '{name}' → a Gemini API key via {secrets.describe(ref)}, Gemini CLI in "
-          f"{tilde(path)}" + (f" ({', '.join(made)})" if made else ""))
+          f"{tilde(path)}")
     if others:
         print(f"  account '{name}' changed for {', '.join(others)} too")
     return 0
