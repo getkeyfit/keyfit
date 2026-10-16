@@ -41,6 +41,7 @@ const session: Line[] = [
 	{ t: '  ✔ google     you@lumen.dev', k: 'ok' },
 	{ t: '  ✔ gcloud     lumen → lumen-prod   you@lumen.dev · account and project confirmed', k: 'ok' },
 	{ t: '  ✔ firebase   lumen-prod   you@lumen.dev, bound at ~/code/lumen-web · account and project confirmed', k: 'ok' },
+	{ t: '  ✔ google-mcp gmail_lumen, gcal_lumen   you@lumen.dev · confirmed by Google', k: 'ok' },
 	{ t: 'claude', k: 'cmd' },
 ];
 
@@ -92,12 +93,13 @@ const features: { label: string; title: string; text: string; term: string; line
 	{
 		label: 'Project-scoped MCP',
 		title: 'Each project sees its own servers.',
-		text: 'Agents only get the Linear workspace of the repo they are in. MCP servers you claim for one client stay out of every other session.',
+		text: 'Agents only get the Linear workspace of the repo they are in, and only the Gmail, Drive and Calendar servers signed in as its Google account. MCP servers you claim for one client stay out of every other session.',
 		term: 'codex  /mcp',
 		lines: [
 			{ t: 'linear_lumen:  connected (59 tools)', k: 'ok' },
+			{ t: 'gmail_lumen:   connected (19 tools)', k: 'ok' },
 			{ t: 'linear_harbor: disabled (0 tools)', k: 'dim' },
-			{ t: 'linear_atlas:  disabled (0 tools)', k: 'dim' },
+			{ t: 'gmail_harbor:  disabled (0 tools)', k: 'dim' },
 			{ t: 'harbor_cloud:  disabled (0 tools)', k: 'dim' },
 			{ t: 'buffer:        connected (12 tools)', k: 'ok' },
 		],
@@ -105,7 +107,7 @@ const features: { label: string; title: string; text: string; term: string; line
 	{
 		label: 'No new habits',
 		title: 'Keep typing claude.',
-		text: 'Keyfit knows the project from the folder, including git worktrees and Superset workspaces. Claude Code, Codex, OpenCode and Copilot CLI start with its accounts. Folders you haven’t registered work exactly as before.',
+		text: 'Keyfit knows the project from the folder, including git worktrees and Superset workspaces. Claude Code, Codex, OpenCode, Copilot CLI and Gemini CLI start with its accounts. Folders you haven’t registered work exactly as before.',
 		term: '~/code/harbor-api',
 		lines: [
 			{ t: 'cd ~/code/harbor-api', k: 'cmd' },
