@@ -1,4 +1,4 @@
-"""Draw the Keyfit wordmark as SVG paths from the Sixtyfour font (SIL OFL 1.1), and the favicon as pixel blocks.
+"""Draw the Keyfit wordmark as SVG paths from the Sixtyfour font (SIL OFL 1.1), and the favicon: a check in corners.
 
     python3 site/scripts/make_logo_svgs.py
 
@@ -17,11 +17,8 @@ from fontTools.ttLib import TTFont
 
 SITE = Path(__file__).resolve().parents[1]
 FONT = SITE / "node_modules/@fontsource/sixtyfour/files/sixtyfour-latin-400-normal.woff"
-AMBER, INK, PAPER = "#f59e0b", "#111111", "#fafafa"
+INK, PAPER, GREY = "#111111", "#fafafa", "#8a8a8a"
 TRACKING = -0.02  # em, as on the logo options page
-# Sixtyfour's K as solid pixels. The font draws each pixel row as a separate scanline, which turns
-# into stripes at 16px, so the favicon uses the same glyph without the gaps.
-K_PIXELS = ("##..##", "##.##.", "####..", "###...", "####..", "##.##.", "##..##")
 
 
 def outline(text: str, font: TTFont, size: float) -> tuple[str, tuple[float, float, float, float]]:
@@ -52,19 +49,14 @@ def wordmark(path_data: str, bounds, fill: str, pad: float = 2) -> str:
             f'role="img" aria-label="Keyfit"><path fill="{fill}" d="{path_data}"/></svg>\n')
 
 
-def tile(background: str, fill: str, size: int = 32, cell: int = 3) -> str:
-    # Whole-number cells and offsets keep every edge on a device pixel at 32px (a 16px tab on Retina).
-    x0, y0 = (size - len(K_PIXELS[0]) * cell) // 2, (size - len(K_PIXELS) * cell) // 2
-    runs = []
-    for row, line in enumerate(K_PIXELS):
-        col = 0
-        for run in line.split("."):
-            if run:
-                runs.append(f"M{x0 + col * cell} {y0 + row * cell}h{len(run) * cell}v{cell}h-{len(run) * cell}z")
-            col += len(run) + 1
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">'
-            f'<rect width="{size}" height="{size}" rx="{size * 0.22:.1f}" fill="{background}"/>'
-            f'<path fill="{fill}" d="{"".join(runs)}"/></svg>\n')
+def frame() -> str:
+    # A check inside the corner brackets of the homepage headline: the right account, verified. Picked on
+    # 2026-10-16 over the pixel K. The faint edge keeps the dark tile visible in dark browser tabs.
+    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+            f'<rect x="0.5" y="0.5" width="31" height="31" rx="6.5" fill="{INK}" stroke="#ffffff" stroke-opacity="0.16"/>'
+            f'<path d="M7 12V7h5M20 7h5v5M25 20v5h-5M12 25H7v-5" fill="none" stroke="{GREY}" stroke-width="2.6"/>'
+            f'<path d="M11 16.5l3.4 3.4L21 13" fill="none" stroke="{PAPER}" stroke-width="2.8" stroke-linecap="round" '
+            'stroke-linejoin="round"/></svg>\n')
 
 
 def main() -> None:
@@ -74,8 +66,8 @@ def main() -> None:
         SITE / "src/assets/wordmark-on-dark.svg": wordmark(words, wbounds, PAPER),
         SITE / "src/assets/wordmark-on-light.svg": wordmark(words, wbounds, INK),
         SITE / "public/logo/keyfit-wordmark.svg": wordmark(words, wbounds, "currentColor"),
-        SITE / "public/favicon.svg": tile(AMBER, INK),
-        SITE / "public/logo/keyfit-icon-dark.svg": tile(INK, PAPER),
+        SITE / "public/favicon.svg": frame(),
+        SITE / "public/logo/keyfit-icon-dark.svg": frame(),
     }
     for path, svg in out.items():
         path.parent.mkdir(parents=True, exist_ok=True)
