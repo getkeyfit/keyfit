@@ -244,6 +244,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Every error names the next command.** A tool that isn't installed shows how to install it; an
   unmapped `gh` shows `keyfit add github --login <login>`; `keyfit add aws` lists the profiles there
   are; a rejected AWS access key points at `aws configure --profile P`, which runs inside the project.
+- **A shorter README.** It now covers what Keyfit is, install, a first project, everyday commands
+  and limits. Everything about each kind of account (what the tool gets, what is checked and refused,
+  how to set it up, its limits) moved to one section per account in `docs/accounts.md`.
 
 ### Fixed
 
