@@ -1,5 +1,6 @@
-# Draft of the formula for the Homebrew tap (not created yet). Copy it to Formula/keyfit.rb in the tap
-# repository and set url/sha256 to the PyPI release (see RELEASING.md). Users then run:
+# Template of the formula for the Homebrew tap (FlamurMaliqi/homebrew-keyfit). Copy it to Formula/keyfit.rb
+# there and set url/sha256 to the PyPI release: url is the sdist's "Source" link on PyPI's files page, not
+# this packages/source/ shortcut, which `brew audit` refuses (see RELEASING.md). Users then run:
 #   brew install <owner>/<tap>/keyfit && keyfit setup --rc
 class Keyfit < Formula
   include Language::Python::Virtualenv
