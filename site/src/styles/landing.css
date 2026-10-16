@@ -1,5 +1,6 @@
 /* Keyfit landing page, in the visual language of superset.sh: neutral near-black, faint borders,
-   Inter for text, IBM Plex Mono for labels and buttons, near-square corners, warm accent glows.
+   Inter for text, IBM Plex Mono for labels and buttons, near-square corners, soft neutral glows.
+   No accent hue: the grey corners and white check of the favicon are the highlight.
    Dark by default; light follows the system setting or the theme chosen in the docs. */
 
 :root {
@@ -13,9 +14,9 @@
 	--faint: #737373;
 	--btn-bg: #fafafa;
 	--btn-text: #111111;
-	--accent: #f59e0b;
-	--accent-text: #fbbf24;
-	--glow: rgb(245 120 20 / 0.13);
+	--accent: #8a8a8a;
+	--accent-text: #d4d4d4;
+	--glow: rgb(255 255 255 / 0.05);
 	--term-bg: #0b0b0b;
 	--term-line: rgb(255 255 255 / 0.1);
 	--radius: 4px;
@@ -37,8 +38,8 @@
 		--faint: #737373;
 		--btn-bg: #171717;
 		--btn-text: #fafafa;
-		--accent-text: #b45309;
-		--glow: rgb(245 120 20 / 0.09);
+		--accent-text: #404040;
+		--glow: rgb(0 0 0 / 0.035);
 		color-scheme: light;
 	}
 }
@@ -53,8 +54,8 @@
 	--faint: #737373;
 	--btn-bg: #171717;
 	--btn-text: #fafafa;
-	--accent-text: #b45309;
-	--glow: rgb(245 120 20 / 0.09);
+	--accent-text: #404040;
+	--glow: rgb(0 0 0 / 0.035);
 	color-scheme: light;
 }
 
@@ -99,7 +100,7 @@ code {
 	font-size: 0.9em;
 }
 :focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 2px solid var(--text);
 	outline-offset: 3px;
 }
 .wrap {
@@ -408,7 +409,7 @@ code {
 	color: #f87171;
 }
 .fix {
-	color: #fbbf24;
+	color: #d4d4d4;
 }
 .dim {
 	color: #8a8a8a;

@@ -6,9 +6,9 @@
 	--sl-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 :root[data-theme='dark'] {
-	--sl-color-accent-low: #3b2706;
-	--sl-color-accent: #f59e0b;
-	--sl-color-accent-high: #fde3a7;
+	--sl-color-accent-low: #262626;
+	--sl-color-accent: #a3a3a3;
+	--sl-color-accent-high: #fafafa;
 	--sl-color-black: #111111;
 	--sl-color-gray-6: #171717;
 	--sl-color-gray-5: #262626;
@@ -18,9 +18,9 @@
 	--sl-color-gray-1: #f0f0f0;
 }
 :root[data-theme='light'] {
-	--sl-color-accent-low: #fdecc8;
-	--sl-color-accent: #b45309;
-	--sl-color-accent-high: #451a03;
+	--sl-color-accent-low: #ececec;
+	--sl-color-accent: #262626;
+	--sl-color-accent-high: #0a0a0a;
 }
 .site-title img {
 	height: 1.15rem;
