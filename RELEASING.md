@@ -15,8 +15,10 @@
 6. **Check** <https://pypi.org/project/keyfit/> shows the version, then `pipx install keyfit` on a
    clean account works.
 7. **Homebrew.** In the tap repository, update `Formula/keyfit.rb` (template:
-   `packaging/homebrew/keyfit.rb`): `url` to the new sdist on files.pythonhosted.org and
-   `sha256` to `shasum -a 256 dist/keyfit-X.Y.Z.tar.gz` (the same value PyPI shows). Commit,
+   `packaging/homebrew/keyfit.rb`): `url` to the sdist's "Source" link on
+   <https://pypi.org/project/keyfit/#files> (the long `files.pythonhosted.org/packages/xx/yy/…` form;
+   `brew audit` refuses the `packages/source/k/keyfit/…` shortcut) and `sha256` to
+   `shasum -a 256 dist/keyfit-X.Y.Z.tar.gz` (the same value PyPI shows). Commit,
    push, then check it the way users get it:
    ```bash
    brew update && brew reinstall --build-from-source <owner>/<tap>/keyfit
