@@ -1,6 +1,6 @@
 # Demo video
 
-`record.sh` records the 33-second terminal video of keyfit.dev and the launch posts (`out/demo.mp4`, 1920×1080):
+`record.sh` records the 20-second terminal video of keyfit.dev and the launch posts (`out/demo.mp4`, 1920×1080):
 
 1. In `~/code/harbor-api`, `claude` starts. Keyfit's status line shows the project's accounts, and `/mcp` lists only
    harbor's Linear server.

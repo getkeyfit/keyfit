@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stand-in for the AWS CLI in the demo (build.sh installs it as bin/aws): answers the two commands Keyfit runs
 (sts get-caller-identity, sso login) for the invented profiles lumen-prod and harbor, from the SSO token files in
-the demo HOME. The sign-in opens no browser and finishes after two seconds."""
+the demo HOME. The sign-in opens no browser and finishes after a second."""
 
 import hashlib
 import json
@@ -46,7 +46,7 @@ if args[:2] == ["sts", "get-caller-identity"]:
 if args[:2] == ["sso", "login"]:
     session = option("--sso-session") or PROFILES.get(option("--profile") or "", ("",))[0]
     print("Attempting to automatically open the SSO authorization page in your default browser.", flush=True)
-    time.sleep(2.2)
+    time.sleep(1.2)
     token = {"startUrl": f"https://{session}.awsapps.com/start", "region": "eu-central-1",
              "accessToken": "stand-in", "refreshToken": "stand-in",
              "expiresAt": (now + timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%SZ"),
