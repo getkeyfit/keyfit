@@ -1,0 +1,6 @@
+# made by build.sh and record.sh
+/bin/
+/src/
+/zdot/
+/out/
+/env.zsh
