@@ -4,6 +4,10 @@
 
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey) ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue) ![zsh | bash](https://img.shields.io/badge/shell-zsh%20%7C%20bash-green) ![MIT](https://img.shields.io/badge/license-MIT-brightgreen)
 
+[![In harbor-api, claude starts with harbor's accounts and /mcp lists only harbor's Linear server. In lumen-web, the AWS sign-in has expired: Keyfit does not start Claude, offers the sign-in, then starts it, and /mcp lists only lumen's Linear server.](.github/demo.gif)](https://keyfit.dev/#demo-title)
+
+<sub>Real Keyfit and Claude Code with two made-up clients, whose AWS and Linear accounts are stand-ins (<a href="scripts/demo">scripts/demo</a> records it).</sub>
+
 After a one-time `keyfit setup`, you keep typing `claude`, `aws`, `gh` and the rest as usual. Keyfit works out which project the current folder belongs to and checks that project's accounts with the services themselves. If everything matches, the tool starts with only that project's credentials. If a check fails, the tool does not start, and you see the command that fixes it:
 
 ```
