@@ -209,11 +209,14 @@ class AdapterTests(FirebaseCase):
         return self.fb.verify(conn, env)
 
     def test_inject_scrubs_what_would_act_instead_of_the_sign_in(self):
+        away = {"FIREBASE_TOKEN_URL": "https://evil.example", "FIREBASE_GOOGLE_URL": "https://evil.example",
+                "FIREBASE_API_URL": "https://evil.example", "FIREBASE_CLIENT_ID": "theirs.apps.googleusercontent.com",
+                "FIREBASE_CLIENT_SECRET": "not-a-real-secret"}  # where the CLI sends the refresh token, its OAuth client
         env = dict(self.env, FIREBASE_TOKEN="1//theirs", GOOGLE_APPLICATION_CREDENTIALS="/keys/globex.json",
-                   GOOGLE_CLOUD_PROJECT="kept", XDG_CONFIG_HOME="/kept", FIREBASE_CLI_EXPERIMENTS="kept")
+                   GOOGLE_CLOUD_PROJECT="kept", XDG_CONFIG_HOME="/kept", FIREBASE_CLI_EXPERIMENTS="kept", **away)
         self.fb.inject(self.conn(), env)
-        self.assertNotIn("FIREBASE_TOKEN", env)
-        self.assertNotIn("GOOGLE_APPLICATION_CREDENTIALS", env)
+        for var in ("FIREBASE_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", *away):
+            self.assertNotIn(var, env)
         for var in ("GOOGLE_CLOUD_PROJECT", "XDG_CONFIG_HOME", "FIREBASE_CLI_EXPERIMENTS"):
             self.assertIn(var, env)
         self.assertEqual(set(env) - set(self.env), {"GOOGLE_CLOUD_PROJECT", "XDG_CONFIG_HOME",
@@ -350,6 +353,46 @@ class AdapterTests(FirebaseCase):
         self.firebase_folder(self.repos["client"], {"prod": "acme-prod"})  # the only alias is taken
         self.assertEqual(self.check().status, "ok")
 
+    def test_the_deprecated_firebase_key_of_firebase_json_counts(self):
+        (self.repos["client"] / "firebase.json").write_text('{\n  // deprecated, still read by the CLI\n  "firebase": '
+                                                            '"globex-app", "hosting": {"public": "dist"}\n}\n')
+        check = self.check()  # the CLI takes it before .firebaserc's default
+        self.assertEqual((check.detail, check.fix),
+                         (f'the firebase CLI works on globex-app in {self.repos["client"]} (the "firebase" key in '
+                          f'firebase.json), the project expects acme-prod', "firebase use acme-prod"))
+        (self.repos["client"] / "firebase.json").write_text('{"firebase": "staging"}\n')  # an alias in .firebaserc
+        self.assertIn("works on acme-staging", self.check().detail)
+        self.data["activeProjects"] = {str(self.repos["client"]): "default"}  # `firebase use` beats it
+        self.save()
+        self.assertEqual(self.check().status, "ok")
+        del self.data["activeProjects"]
+        self.save()
+        (self.repos["client"] / "firebase.json").write_text('{"firebase": "acme-prod"}\n')
+        (self.repos["client"] / "other.json").write_text('{"firebase": "globex-app"}\n')
+        self.assertEqual(self.check().status, "ok")
+        check = self.fb.at(self.conn(), self.env, str(self.repos["client"]), "other.json")  # --config other.json
+        self.assertIn('works on globex-app', check.detail)
+        self.assertIn('(the "firebase" key in other.json)', check.detail)
+
+    def test_without_firebase_json_the_firebaserc_here_must_pick_the_project(self):
+        os.chdir(self.repos["mono"])  # a monorepo's top: no firebase.json, but a .firebaserc
+        (self.repos["mono"] / ".firebaserc").write_text(json.dumps({"projects": {"default": "globex-app"}}))
+        check = self.check()  # `firebase firestore:delete` there would work on globex-app
+        self.assertEqual((check.status, check.detail, check.fix),
+                         ("fail", "no firebase.json here, and the firebase CLI works on globex-app here (the only "
+                                  "project in .firebaserc), the project expects acme-prod",
+                          f"make acme-prod the default in {self.repos['mono']}/.firebaserc"))
+        self.data["activeProjects"] = {str(self.tmp): "acme-staging"}  # picked for a folder above
+        self.save()
+        self.assertEqual((self.check().detail, self.check().fix),
+                         ("no firebase.json here, and the firebase CLI works on acme-staging here (picked with "
+                          "`firebase use`), the project expects acme-prod",
+                          "run firebase in the project's Firebase folder (where firebase.json is)"))
+        del self.data["activeProjects"]
+        self.save()
+        (self.repos["mono"] / ".firebaserc").write_text(json.dumps({"projects": {"default": "acme-prod"}}))
+        self.assertEqual(self.check().status, "warn")  # the default login is another account: Keyfit adds --account
+
     def test_outside_every_firebase_folder_only_the_default_login_counts(self):
         os.chdir(self.repos["mono"])
         check = self.check()
@@ -441,6 +484,9 @@ class AdapterTests(FirebaseCase):
         self.assertEqual(firebase.words(["-jP", "x", "use", "y"]), ["use", "y"])
         self.assertEqual(firebase.words(["-ji", "use", "y"]), ["use", "y"])
         self.assertEqual(firebase.words(["-m", "a message", "use", "y"]), [])  # an option Keyfit does not know
+        self.assertEqual(firebase.words(["use", "--", "globex-app"]), ["use", "globex-app"])  # after --: arguments
+        self.assertEqual(firebase.words(["login:use", "--", GLOBEX]), ["login:use", GLOBEX])
+        self.assertEqual(firebase.words(["--", "use", "--x"]), ["use", "--x"])
 
     def test_access_token_of_a_real_process(self):
         self.expire(ACME)
@@ -455,13 +501,16 @@ class AdapterTests(FirebaseCase):
         seen = self.tmp / "seen.json"
         (self.bin / "firebase").unlink()
         os.symlink(script, self.bin / "firebase")
-        env = dict(self.env, SEEN=str(seen), FIREBASE_TOKEN="1//theirs")
+        env = dict(self.env, SEEN=str(seen), FIREBASE_TOKEN="1//theirs", FIREBASE_TOKEN_URL="https://evil.example",
+                   FIREBASE_GOOGLE_URL="https://evil.example", FIREBASE_CLIENT_ID="theirs", FIREBASE_CLIENT_SECRET="x")
         token, reason, state = FirebaseAdapter(cli_timeout=30).access_token(ACME, env)
         self.assertEqual((token, state), (token_of(ACME), "ok"), reason)
         argv, cwd, names = json.loads(seen.read_text())
         self.assertEqual(argv, ["--account", ACME, "projects:list", "--json", "--non-interactive"])
         self.assertNotIn(str(self.repos["client"]), cwd)
-        self.assertNotIn("FIREBASE_TOKEN", names)
+        for var in ("FIREBASE_TOKEN", "FIREBASE_TOKEN_URL", "FIREBASE_GOOGLE_URL", "FIREBASE_CLIENT_ID",
+                    "FIREBASE_CLIENT_SECRET"):  # the renewal would post the refresh token there, with that client
+            self.assertNotIn(var, names)
         self.assertIn("NO_UPDATE_NOTIFIER", names)
 
 
@@ -499,6 +548,11 @@ class ShimTests(FirebaseCase):
         self.assertEqual(env["KEYFIT_PROJECT"], "client")
         code, argv, env = self.run_shim("deploy", cwd=self.repos["mine"])
         self.assertEqual((code, argv, self.stderr), (None, ["firebase", "deploy"], ""))
+        code, argv, env = self.run_shim("deploy", FIREBASE_TOKEN_URL="https://evil.example",
+                                        FIREBASE_CLIENT_SECRET="x")
+        self.assertIsNone(code, self.stderr)
+        self.assertNotIn("FIREBASE_TOKEN_URL", env)
+        self.assertNotIn("FIREBASE_CLIENT_SECRET", env)
 
     def test_project_without_firebase_and_unregistered_folders_run_as_before(self):
         code, argv, env = self.run_shim("emulators:start", cwd=self.repos["plain"], FIREBASE_TOKEN="1//mine")
@@ -568,6 +622,9 @@ class ShimTests(FirebaseCase):
                       "CLI's default login", self.stderr)
         code, argv, _ = self.run_shim("login:use", ACME, cwd=self.app)
         self.assertEqual(argv, ["firebase", "login:use", ACME])
+        code, argv, _ = self.run_shim("login:use", "--", GLOBEX)  # after --, the email is still the argument
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn(f"refusing `firebase login:use {GLOBEX}` for {self.repos['client']}", self.stderr)
 
     def test_using_another_firebase_project_is_refused(self):
         for target in ("globex-app", "staging"):
@@ -577,6 +634,19 @@ class ShimTests(FirebaseCase):
                       "use staging`.", self.stderr)
         code, argv, _ = self.run_shim("use", "acme-prod", "--alias", "prod")
         self.assertEqual(argv, ["firebase", "use", "acme-prod", "--alias", "prod"])
+        code, argv, _ = self.run_shim("use", "--", "globex-app")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn("refusing `firebase use globex-app`", self.stderr)
+
+    def test_a_project_the_check_used_to_miss_blocks(self):
+        (self.repos["client"] / "firebase.json").write_text('{"firebase": "globex-app"}\n')  # deprecated key
+        code, argv, _ = self.run_shim("deploy")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn('the firebase CLI works on globex-app', self.stderr)
+        (self.repos["mono"] / ".firebaserc").write_text(json.dumps({"projects": {"default": "globex-app"}}))
+        code, argv, _ = self.run_shim("firestore:delete", "--all-collections", cwd=self.repos["mono"])
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn("no firebase.json here, and the firebase CLI works on globex-app here", self.stderr)
 
     def test_reauth_that_would_replace_the_default_login_is_refused(self):
         code, argv, _ = self.run_shim("login", "--reauth")
