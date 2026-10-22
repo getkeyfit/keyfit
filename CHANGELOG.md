@@ -545,8 +545,8 @@ From the third pre-launch review:
 - **Linear: every other Linear key variable is removed, as documented.** Only names containing
   `LINEAR` and ending in `API_KEY` went, so `LINEAR_TOKEN`, `LINEAR_API_TOKEN`, `LINEAR_ACCESS_TOKEN`,
   `LINEAR_KEY`, `GLOBEX_LINEAR_KEY` and a lowercase `linear_api_key` reached the project's sessions.
-  Any name with `LINEAR` and `KEY` or `TOKEN`, in any case, now goes; the project's own variable is set
-  again.
+  Any name with `LINEAR` and `KEY` or `TOKEN`, in any case, now goes (LinearB's `LINEARB_…` stays); the
+  project's own variable is set again.
 
 ## [0.1.0] - 2026-10-12
 
