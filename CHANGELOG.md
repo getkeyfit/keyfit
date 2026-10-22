@@ -323,22 +323,6 @@ From the second pre-launch review:
   naming the file and the variable, never the value. wrangler's sign-in commands, a `--cwd` folder and
   `--env-file` files are held to the same. A project that deliberately uses another Cloudflare host
   (staging, a compliance region) isn't supported yet.
-- **Convex reads `.env.local`, `.env` and `--env-file` files the way the convex CLI does.** The CLI
-  parses them with dotenv, which skips a byte-order mark, reads invalid UTF-8 as replacement characters,
-  accepts `KEY: value` lines and lets a quoted value span several lines. Keyfit read them line by line,
-  so a file written any of these ways could point the folder at another team's deployment while the
-  check said "login and team confirmed". Keyfit now parses them with dotenv's own pattern. A file that
-  decides the deployment but can't be read fails the check (`.env.local cannot be read, …`), and an
-  `--env-file` Keyfit can't read is refused.
-- **A deploy key in `CONVEX_DEPLOYMENT` is never sent or printed.** A key put there (`prod:NAME|…`) went
-  to Convex in the deployment lookup's address and appeared in the failure line and in `keyfit add
-  convex` errors. Only a deployment name (like `happy-animal-123`) is now sent or printed: such a
-  `CONVEX_DEPLOYMENT` fails the check before the network, and `--team`, `--deployment` and
-  `--deployment-name` values holding a key, or a `--deployment-name` that isn't a deployment name, are
-  refused without being repeated.
-- **Inherited `CONVEX_SELF_HOSTED_URL` and `CONVEX_SELF_HOSTED_ADMIN_KEY` are removed** in a project with
-  a Convex account, unless the folder's own files set the same. The CLI takes them before
-  `CONVEX_DEPLOYMENT`, so another project's self-hosted deployment hid the folder's own, unchecked.
 
 From the third pre-launch review:
 
@@ -387,6 +371,22 @@ From the third pre-launch review:
   project, and Keyfit read only the older top-level `orgId`, so a repository linked to another team
   that way passed the check. It now takes the project whose directory holds the folder (else every
   project), like the CLI.
+- **Convex reads `.env.local`, `.env` and `--env-file` files the way the convex CLI does.** The CLI
+  parses them with dotenv, which skips a byte-order mark, reads invalid UTF-8 as replacement characters,
+  accepts `KEY: value` lines and lets a quoted value span several lines. Keyfit read them line by line,
+  so a file written any of these ways could point the folder at another team's deployment while the
+  check said "login and team confirmed". Keyfit now parses them with dotenv's own pattern. A file that
+  decides the deployment but can't be read fails the check (`.env.local cannot be read, …`), and an
+  `--env-file` Keyfit can't read is refused.
+- **A deploy key in `CONVEX_DEPLOYMENT` is never sent or printed.** A key put there (`prod:NAME|…`) went
+  to Convex in the deployment lookup's address and appeared in the failure line and in `keyfit add
+  convex` errors. Only a deployment name (like `happy-animal-123`) is now sent or printed: such a
+  `CONVEX_DEPLOYMENT` fails the check before the network, and `--team`, `--deployment` and
+  `--deployment-name` values holding a key, or a `--deployment-name` that isn't a deployment name, are
+  refused without being repeated.
+- **Inherited `CONVEX_SELF_HOSTED_URL` and `CONVEX_SELF_HOSTED_ADMIN_KEY` are removed** in a project with
+  a Convex account, unless the folder's own files set the same. The CLI takes them before
+  `CONVEX_DEPLOYMENT`, so another project's self-hosted deployment hid the folder's own, unchecked.
 
 ## [0.1.0] - 2026-10-12
 
