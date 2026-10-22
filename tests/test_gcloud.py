@@ -777,6 +777,27 @@ class AddTests(GcloudCase):
         self.assertIn(f"  2. acme  ({ACME} → acme-prod)\n", out)
         self.assertEqual(self.registry()["accounts"]["gcloud"]["acme"]["configuration"], "acme")
 
+    def test_another_accounts_configuration_is_never_taken(self):
+        for name in ("acme", "globex"):
+            (self.store / "configurations" / f"config_{name}").unlink()  # left: default, the personal account's
+        self.keyfit("add", "google", "--email", ACME)
+        for answers in (None, ["1"]):  # neither the only configuration nor one to pick at the terminal
+            code, out, err = self.keyfit("add", "gcloud", answers=answers)
+            self.assertEqual(code, 1)
+            self.assertEqual(err, f"no gcloud configuration uses {ACME} (gcloud has default), and Keyfit takes no other "
+                                  f"account's: gcloud uses it elsewhere\n  → gcloud config configurations create client "
+                                  f"--no-activate, then: keyfit add gcloud --configuration client --project-id ID\n")
+            self.assertNotIn("--configuration default", out)  # never `gcloud config set account … --configuration default`
+        self.assertNotIn("gcloud", self.registry()["projects"]["client"])
+        self.configure("globex", GLOBEX, "globex-app")
+        self.configure("acme", ACME, "acme-prod")
+        self.configure("acme-2", ACME, "acme-prod")
+        code, out, err = self.keyfit("add", "gcloud", answers=["2"])  # only the project's account's are offered
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"gcloud configurations on this Mac signed in as {ACME}:\n  1. acme  ({ACME} → acme-prod)\n"
+                      f"  2. acme-2  ({ACME} → acme-prod)\n", out)
+        self.assertEqual(self.registry()["accounts"]["gcloud"]["acme-2"]["configuration"], "acme-2")
+
     def test_another_project_id_is_recorded_with_the_next_step(self):
         self.keyfit("add", "google", "--email", ACME)
         code, out, err = self.keyfit("add", "gcloud", "--project-id", "acme-staging")
