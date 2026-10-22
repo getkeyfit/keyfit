@@ -370,6 +370,98 @@ class AdapterTests(ConvexCase):
         self.assertEqual(values["CONVEX_DEPLOY_KEY"], "prod:a#b|c")
         self.assertEqual((values["CONVEX_URL"], values["EMPTY"]), ("https://x", ""))
 
+    def test_env_files_are_parsed_like_the_clis_dotenv(self):
+        # dotenv 16.4.7's parse: a BOM, `KEY: value`, a quoted value over several lines, CRLF and invalid UTF-8
+        path = self.repos["client"] / ".env.local"
+        for raw, expected in ((b"\xef\xbb\xbfCONVEX_DEPLOYMENT=dev:brave-otter-456\n", "dev:brave-otter-456"),
+                              (b"CONVEX_DEPLOYMENT: dev:brave-otter-456\n", "dev:brave-otter-456"),
+                              (b"CONVEX_DEPLOYMENT=dev:brave-otter-456\nNOTES=\"moved from\nCONVEX_DEPLOYMENT=dev:happy-"
+                               b"animal-123\n\"\n", "dev:brave-otter-456"),
+                              (b"# caf\xe9\r\nCONVEX_DEPLOYMENT=dev:brave-otter-456\r\n", "dev:brave-otter-456")):
+            path.write_bytes(raw)
+            self.assertEqual(convex.read_env_file(path)["CONVEX_DEPLOYMENT"], expected, raw)
+        self.assertEqual(convex.read_env_file(path.with_name("missing")), {})
+        (self.repos["client"] / ".env").mkdir()  # a virtualenv called .env holds no variables, for dotenv too
+        self.assertEqual(convex.read_env_file(self.repos["client"] / ".env"), {})
+
+    def test_env_files_the_cli_reads_are_checked_however_they_are_written(self):
+        # each of these once hid another team's deployment: Keyfit asked only /api/teams and said "ok"
+        self.keychain({"keyfit/convex-acme": BOTH})
+        seen = []
+        self.convex.fetch = lambda path, tok, timeout: (seen.append(path), api(path, tok, timeout))[1]
+        for raw in (b"\xef\xbb\xbfCONVEX_DEPLOYMENT=dev:brave-otter-456\n", b"CONVEX_DEPLOYMENT: dev:brave-otter-456\n",
+                    b"CONVEX_DEPLOYMENT=dev:brave-otter-456\nNOTES='moved from\nCONVEX_DEPLOYMENT=dev:happy-animal-123'\n",
+                    b"# caf\xe9\nCONVEX_DEPLOYMENT=dev:brave-otter-456\n"):
+            (self.repos["client"] / ".env.local").write_bytes(raw)
+            seen.clear()
+            check = self.check(self.conn())
+            self.assertTrue(check.failed, raw)
+            self.assertEqual(check.detail, "CONVEX_DEPLOYMENT in .env.local points this folder at deployment "
+                                           "brave-otter-456 of another team (Globex), project expects Acme")
+            self.assertIn("/api/deployment/brave-otter-456/team_and_project", seen)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_an_env_file_keyfit_cannot_read_fails_closed(self):
+        self.keychain({"keyfit/convex-acme": BOTH})
+        local = self.repos["client"] / ".env.local"
+        self.env_local(self.repos["client"], "CONVEX_DEPLOYMENT=dev:brave-otter-456\n")
+        local.chmod(0)
+        self.addCleanup(local.chmod, 0o600)
+        env = dict(self.env, CONVEX_DEPLOYMENT="dev:happy-animal-123")  # inherited: the file may disagree
+        self.convex.inject(self.conn(), env)
+        self.assertNotIn("CONVEX_DEPLOYMENT", env)
+        check = self.convex.verify(self.conn(), env)
+        self.assertEqual((check.status, check.detail, check.fix),
+                         ("fail", ".env.local cannot be read, so the deployment the convex CLI would use is unknown",
+                          "make it readable: chmod u+r .env.local"))
+        local.chmod(0o600)  # a deploy key in .env.local decides, whatever an unreadable .env says
+        self.env_local(self.repos["client"], f"CONVEX_DEPLOY_KEY=prod:happy-animal-123|{SECRET}\n")
+        self.env_local(self.repos["client"], "CONVEX_DEPLOYMENT=dev:brave-otter-456\n", name=".env")
+        (self.repos["client"] / ".env").chmod(0)
+        self.addCleanup((self.repos["client"] / ".env").chmod, 0o600)
+        self.assertEqual(self.check(self.conn()).status, "ok")
+        self.env_local(self.repos["client"], "CONVEX_DEPLOYMENT=dev:happy-animal-123\n")  # .env may hold a deploy key
+        self.assertEqual(self.check(self.conn()).detail, ".env cannot be read, so the deployment the convex CLI would "
+                                                         "use is unknown")
+
+    def test_a_deploy_key_in_convex_deployment_is_never_sent_or_printed(self):
+        seen = []
+        self.convex.fetch = lambda path, tok, timeout: (seen.append(path), api(path, tok, timeout))[1]
+        for text, why in ((f"CONVEX_DEPLOYMENT=prod:happy-animal-123|{SECRET}\n",
+                           "CONVEX_DEPLOYMENT in .env.local holds a deploy key (…|…), not a deployment name"),
+                          (f"CONVEX_DEPLOYMENT=local:x|{SECRET}\n",
+                           "CONVEX_DEPLOYMENT in .env.local holds a deploy key (…|…), not a deployment name"),
+                          (f"CONVEX_DEPLOY_KEY=prod:old_style|{SECRET}\n",
+                           "CONVEX_DEPLOY_KEY in .env.local does not name a Convex deployment"),
+                          ("CONVEX_DEPLOYMENT=dev:Not A Name\n",
+                           "CONVEX_DEPLOYMENT in .env.local does not name a Convex deployment")):
+            self.env_local(self.repos["client"], text)
+            check = self.check(self.conn())
+            self.assertEqual((check.status, check.detail, check.fix),
+                             ("fail", why, "npx convex dev --configure existing --team acme"), text)
+        self.assertEqual(seen, [])  # decided without the network
+        found = self.convex.deployment(ACME, f"happy-animal-123|{SECRET}")
+        self.assertEqual(found, (None, "not a Convex deployment name (like happy-animal-123)", False))
+        self.assertEqual(seen, [])
+
+    def test_an_inherited_self_hosted_deployment_of_another_project_is_removed(self):
+        # the CLI takes CONVEX_SELF_HOSTED_URL and _ADMIN_KEY before CONVEX_DEPLOYMENT: kept, they hid the folder's own
+        self.keychain({"keyfit/convex-acme": BOTH})
+        self.env_local(self.repos["client"], "CONVEX_DEPLOYMENT=dev:brave-otter-456\n")
+        inherited = {"CONVEX_SELF_HOSTED_URL": "http://127.0.0.1:3210", "CONVEX_SELF_HOSTED_ADMIN_KEY": "other|secret"}
+        env = dict(self.env, **inherited)
+        self.convex.inject(self.conn(), env)
+        for var in inherited:
+            self.assertNotIn(var, env)
+        check = self.convex.verify(self.conn(), env)
+        self.assertTrue(check.failed)
+        self.assertIn("points this folder at deployment brave-otter-456 of another team (Globex)", check.detail)
+        self.env_local(self.repos["client"], "".join(f"{var}={value}\n" for var, value in inherited.items()))
+        same = dict(self.env, **inherited)  # what the folder says anyway: kept
+        self.convex.inject(self.conn(), same)
+        self.assertEqual({var: same[var] for var in inherited}, inherited)
+        self.assertIn("names a self-hosted deployment", self.convex.verify(self.conn(), same).detail)
+
     def test_words_and_options_are_read_like_the_cli(self):
         self.assertEqual(convex.words(["login", "--force"]), ["login"])
         self.assertEqual(convex.words(["--verbose", "login", "status"]), ["login", "status"])
@@ -471,10 +563,12 @@ class ShimTests(ConvexCase):
             code, argv, _ = self.run_shim(*args)
             self.assertEqual(argv, ["convex", *args], self.stderr)
 
-    def test_unusual_deployment_names_are_looked_up_and_project_keys_left_alone(self):
+    def test_unusual_deployment_names_are_refused_unsent_and_project_keys_left_alone(self):
         code, argv, _ = self.run_shim("deploy", "--deployment-name", "old_style")
         self.assertEqual(code, 1)
-        self.assertIn("refusing --deployment-name old_style: this login cannot reach it", self.stderr)
+        self.assertIn("refusing --deployment-name: not a Convex deployment name (like happy-animal-123).", self.stderr)
+        self.assertNotIn("old_style", self.stderr)
+        self.assertFalse([path for path in self.fetched if path.startswith("/api/deployment/")])
         self.env_local(self.repos["client"], f"CONVEX_DEPLOY_KEY=project:acme:web|{SECRET}\n")
         code, argv, env = self.run_shim("deploy", "--deployment-name", "brave-otter-456")
         self.assertEqual(argv, ["convex", "deploy", "--deployment-name", "brave-otter-456"], self.stderr)
@@ -486,6 +580,45 @@ class ShimTests(ConvexCase):
         code, argv, _ = self.run_shim("deploy", "--deployment-name", "happy-animal-123")
         self.assertIsNone(code, self.stderr)
         self.assertEqual(self.fetched, [])
+
+    def test_deploy_keys_in_options_and_env_files_are_refused_unsent_and_unprinted(self):
+        self.env_local(self.repos["client"], f"CONVEX_DEPLOYMENT=prod:happy-animal-123|{SECRET}\n", name="key.env")
+        for args, shown in ((["deploy", "--deployment-name", f"prod:happy-animal-123|{SECRET}"],
+                             "--deployment-name: its value holds a deploy key (…|…)."),
+                            (["deploy", f"--deployment=preview:globex:app|{SECRET}"],
+                             "--deployment: its value holds a deploy key (…|…)."),
+                            (["deploy", "--team", f"globex|{SECRET}"], "--team: its value holds a deploy key (…|…)."),
+                            (["deploy", "--env-file", "key.env"], "--env-file key.env: CONVEX_DEPLOYMENT in the "
+                                                                  "--env-file holds a deploy key (…|…), not a "
+                                                                  "deployment name.")):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"keyfit: this folder belongs to client (Convex team Acme); refusing {shown}", self.stderr)
+            self.assertNotIn(SECRET, self.stderr)
+        self.assertFalse([path for path in self.fetched if SECRET in path or "%7C" in path])
+
+    def test_env_files_named_on_the_command_line_are_read_like_the_cli(self):
+        self.keychain({"keyfit/convex-acme": BOTH})
+        (self.repos["client"] / "bom.env").write_bytes(b"\xef\xbb\xbfCONVEX_DEPLOYMENT=prod:brave-otter-456\n")
+        code, argv, _ = self.run_shim("deploy", "--env-file", "bom.env")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn("refusing --env-file bom.env (deployment brave-otter-456): it belongs to another team (globex)",
+                      self.stderr)
+        if os.geteuid() != 0:  # root reads any file
+            (self.repos["client"] / "bom.env").chmod(0)
+            code, argv, _ = self.run_shim("deploy", "--env-file", "bom.env")
+            self.assertEqual((code, argv), (1, None))
+            self.assertIn("refusing --env-file bom.env: Keyfit cannot read it, so it cannot check the deployment it "
+                          "names.", self.stderr)
+
+    def test_an_inherited_self_hosted_pair_does_not_reach_the_cli(self):
+        self.env_local(self.repos["client"], "CONVEX_DEPLOYMENT=dev:happy-animal-123\n")
+        code, argv, env = self.run_shim("deploy", CONVEX_SELF_HOSTED_URL="http://127.0.0.1:3210",
+                                        CONVEX_SELF_HOSTED_ADMIN_KEY="other|secret")
+        self.assertIsNone(code, self.stderr)
+        self.assertNotIn("CONVEX_SELF_HOSTED_URL", env)
+        self.assertNotIn("CONVEX_SELF_HOSTED_ADMIN_KEY", env)
+        self.assertIn("/api/deployment/happy-animal-123/team_and_project", self.fetched)
 
     def test_login_in_a_project_whose_token_keyfit_keeps_is_refused_with_the_fix(self):
         for args in (["login"], ["logout"], ["login", "--force"], ["--verbose", "login"]):
@@ -637,6 +770,18 @@ class AddConvexTests(ConvexCase):
             self.assertNotIn(ACME, out + err)
             self.assertNotIn(SECRET, out + err)
         self.assertEqual(self.fetched, [])
+
+    def test_a_deploy_key_in_the_folders_convex_deployment_is_never_sent_or_printed(self):
+        self.env_local(self.repos["client"], f"CONVEX_DEPLOYMENT=prod:happy-animal-123|{SECRET}\n")
+        os.environ["BOTH_TOKEN"] = BOTH
+        code, out, err = self.add("--token", "BOTH_TOKEN")
+        self.assertEqual(code, 1)
+        self.assertIn("pick one with --team SLUG", err)  # the folder names no deployment Keyfit can look up
+        code, out, err = self.add("--token", "GLOBEX_CONVEX_TOKEN")
+        self.assertEqual(code, 0, err)
+        for path in self.fetched:
+            self.assertFalse(SECRET in path or path.startswith("/api/deployment/"), path)
+        self.assertNotIn(SECRET, out + err + (self.config / "registry.toml").read_text())
 
     def test_guided_init_offers_the_clis_login(self):
         with mock.patch.object(cli, "_ask", return_value="y"), contextlib.redirect_stdout(io.StringIO()) as out:
