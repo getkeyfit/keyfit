@@ -440,6 +440,23 @@ From the third pre-launch review:
   old without the `could not re-check now` warning.
 - **No `Sign in now?` inside a session Keyfit started** (`KEYFIT_PROJECT` set): agents run commands
   in a terminal of their own, where an `aws` waited for an answer.
+- **MCP servers acting on another workspace are hidden wherever they are defined.** A Linear server was
+  recognised only by the exact address `mcp.linear.app` and the first `${VAR}` of its headers, so a
+  server with another workspace's key in its `env` (Claude's form and Codex's `env = {…}`),
+  `npx mcp-remote https://mcp.linear.app/mcp --header "Authorization: Bearer ${LINEAR_GLOBEX_API_KEY}"`
+  and `https://MCP.LINEAR.APP/mcp` or `https://mcp.linear.app:443/mcp` stayed visible in every project.
+  A Linear server is now one with `mcp.linear.app` in its address or command, or a `LINEAR_…` variable
+  or a Linear key in its `env`; it stays visible only when every variable it names holds the project's
+  key and a key written into it is the project's own. One signed in inside the agent (OAuth) is hidden
+  unless a project claims it: `keyfit add mcp NAME` now works for Linear servers too. Keyfit now also
+  reads Claude's local scope (`claude mcp add` without `--scope`: the folder's entry in `~/.claude.json`,
+  also for the repository's top and a worktree's main checkout), Codex's profile file
+  (`codex --profile NAME`: `NAME.config.toml` next to `config.toml`) and the `.codex/config.toml` of the
+  folders Codex trusts, so servers defined there are hidden, and a Google Workspace server defined
+  there is checked. A `.mcp.json`, `opencode.json`, Copilot CLI `mcp-config.json` or Gemini CLI
+  `settings.json` with a byte-order mark or a leading `//` comment counted as empty; it is read now,
+  and a config file an agent loads that still can't be parsed stops the agent with a message instead
+  of starting it with servers Keyfit couldn't see.
 
 ## [0.1.0] - 2026-10-12
 

@@ -312,7 +312,7 @@ keyfit add firebase                     # records the Firebase project the folde
 - **The tool gets:** `LINEAR_API_KEY`, plus the project's own variable when the key is an `env:` reference. Every other Linear key variable is removed.
 - **Checked before it starts:** the key is present, shaped like a Linear key and not pasted twice. Then Linear's API must report the expected workspace.
 
-**Linear MCP servers are matched by the key variable they read.** Keyfit puts each project's checked key into `LINEAR_API_KEY`, so one Linear server that reads `${LINEAR_API_KEY}` works in every project, always with that project's workspace. Servers that read another variable are hidden unless it is the project's own `env:` variable. To add such a server once:
+**Linear MCP servers are matched by the keys they read.** A Linear server is one with `mcp.linear.app` in its address or command (in any case, with any port; `npx mcp-remote https://mcp.linear.app/mcp` counts), or with a `LINEAR_…` variable or a Linear key in its `env`. Keyfit puts each project's checked key into `LINEAR_API_KEY`, so one Linear server that reads `${LINEAR_API_KEY}` works in every project, always with that project's workspace. A Linear server stays visible only if every variable it names is `LINEAR_API_KEY` or the project's own `env:` variable, and a key written into its definition is the project's own; a local server that names no key reads `LINEAR_API_KEY` and stays too. A server signed in inside the agent (OAuth, no key) could be on any workspace, so it is hidden unless you give it to a project with `keyfit add mcp NAME`. In a project without a Linear account, every Linear server is hidden. To add a server that works in every project once:
 
 ```bash
 claude mcp add --scope user --transport http linear https://mcp.linear.app/mcp --header 'Authorization: Bearer ${LINEAR_API_KEY}'
@@ -367,9 +367,10 @@ It reads where each keeps its login from the server's own definition (`env`), el
   - Copilot CLI gets `--disable-mcp-server=NAME`.
   - Gemini CLI gets `--allowed-mcp-server-names` with every server it keeps.
 - **What stays visible:**
-  - A Linear server (`mcp.linear.app`) in your user config stays visible only if it reads `LINEAR_API_KEY` or the project's own key variable, both of which hold the project's checked key; Linear servers in the folder's `.mcp.json` (or `opencode.json`, `.github/mcp.json` for Copilot CLI, `.gemini/settings.json` for Gemini CLI) are hidden.
+  - A [Linear](#linear) server in your own config stays visible only if every key it reads or carries is the project's checked key. One signed in inside the agent stays only in a project that claims it, and in a project without a Linear account no Linear server stays. Linear servers in the folder's `.mcp.json` (or `opencode.json`, `.github/mcp.json` for Copilot CLI, `.gemini/settings.json` for Gemini CLI) are hidden unless the project claims them.
   - Servers another project claimed (with `keyfit add mcp` or `keyfit add google-mcp`) are hidden unless this project claims them too.
   - In a project with Google Workspace servers, every other Gmail, Drive or Calendar server is hidden too.
   - All other servers stay visible.
+- **Where Keyfit looks:** each agent's own config and the folder's (see [security](security.md#what-keyfit-can-see)). For Claude that includes its local scope (`claude mcp add` without `--scope`), for the folder, the repository's top and a worktree's main checkout. For Codex it includes the profile file `codex --profile NAME` reads (`NAME.config.toml` next to `config.toml`) and the `.codex/config.toml` of the folders Codex trusts. If an agent loads a config file Keyfit can't parse, that agent doesn't start: Keyfit couldn't hide the servers in it.
 
 Nothing is written into your repository or into the tools' config files: the servers are hidden through each agent's command line or environment.

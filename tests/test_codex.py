@@ -13,6 +13,8 @@ os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the re
 
 from keyfit.adapters.codex import CodexAdapter  # noqa: E402
 from keyfit.cli import main  # noqa: E402
+from keyfit.registry import Project  # noqa: E402
+from keyfit.shim import Refused, adjust_args  # noqa: E402
 
 
 def jwt(claims: dict) -> str:
@@ -132,6 +134,94 @@ class AddCodexTests(unittest.TestCase):
             self.assertEqual(self.run_main("add", "codex", "--project", "acme", "--name", name),
                              (1, "", "a name is letters, digits, '.', '_' and '-' (at most 64)\n"))
         self.assertNotIn("codex", self.registry().get("accounts", {}))
+
+
+class McpConfigTests(unittest.TestCase):
+    """The servers a Codex session loads, and so may have to hide: a second Codex home's config.toml, the profile file
+    --profile names, and the .codex/config.toml of the folders Codex trusts. A server Codex doesn't load is never
+    named: `-c mcp_servers.NAME.enabled=false` alone would make Codex refuse its config."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.home = self.tmp / "home"
+        self.repo = self.tmp / "repo"
+        (self.repo / ".git").mkdir(parents=True)
+        self.acme = Project("acme", [str(self.repo)], {"linear": {"workspace": "acme", "key": "env:LINEAR_ACME_API_KEY"}})
+        self.env = {"HOME": str(self.home)}
+        self.write(self.home / ".codex" / "config.toml", '[mcp_servers.paper]\nurl = "http://127.0.0.1:29979/mcp"\n')
+
+    def write(self, path, text):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def trust(self, folder, level="trusted"):
+        with open(self.home / ".codex" / "config.toml", "a") as config:
+            config.write(f'[projects.{json.dumps(str(folder))}]\ntrust_level = "{level}"\n')
+
+    def hidden(self, *args, cwd=None, env=None):
+        out = adjust_args("codex", self.acme, ["exec", *args, "x"], dict(env or self.env), cwd or self.repo,
+                          {"globex": ["globex_cloud_*"]})
+        return sorted(a.split(".")[1] for a in out if a.startswith("mcp_servers."))
+
+    def test_a_second_codex_home(self):
+        work = self.tmp / "accounts" / "work-codex"
+        self.write(work / "config.toml", '[mcp_servers.globex_cloud_eu]\ncommand = "globex-mcp"\n')
+        self.write(self.home / ".codex" / "config.toml", '[mcp_servers.globex_cloud_home]\ncommand = "globex-mcp"\n')
+        self.assertEqual(self.hidden(env={**self.env, "CODEX_HOME": str(work)}), ["globex_cloud_eu"])
+
+    def test_the_profile_file_named_on_the_command_line(self):
+        self.write(self.home / ".codex" / "work.config.toml", '[mcp_servers.globex_cloud_eu]\ncommand = "globex-mcp"\n')
+        self.assertEqual(self.hidden(), [])
+        for given in (["-p", "work"], ["--profile", "work"], ["--profile=work"], ["-pwork"]):
+            self.assertEqual(self.hidden(*given), ["globex_cloud_eu"], given)
+        self.assertEqual(self.hidden("--", "-p", "work"), [])  # a prompt
+        self.write(self.tmp / "work.config.toml", '[mcp_servers.globex_cloud_up]\ncommand = "globex-mcp"\n')
+        self.assertEqual(self.hidden("-p", "../../work"), [])  # not a profile name Codex takes
+
+    def test_project_config_only_where_codex_trusts_it(self):
+        self.write(self.repo / ".codex" / "config.toml", '[mcp_servers.globex_cloud_eu]\ncommand = "globex-mcp"\n')
+        web = self.repo / "web"
+        self.write(web / ".codex" / "config.toml", '[mcp_servers.globex_cloud_web]\ncommand = "globex-mcp"\n')
+        self.assertEqual(self.hidden(), [])  # untrusted: Codex skips it
+        self.trust(self.repo)
+        self.assertEqual(self.hidden(), ["globex_cloud_eu"])
+        self.assertEqual(self.hidden(cwd=web), ["globex_cloud_eu", "globex_cloud_web"])  # the root's trust covers it
+        self.assertEqual(self.hidden("-C", "web"), ["globex_cloud_eu", "globex_cloud_web"])  # the folder Codex works in
+        self.trust(web, "untrusted")  # the folder's own entry comes first
+        self.assertEqual(self.hidden(cwd=web), ["globex_cloud_eu"])
+
+    def test_project_config_adds_to_your_servers_the_closest_winning(self):
+        self.write(self.home / ".codex" / "config.toml",
+                   '[mcp_servers.linear]\nurl = "https://mcp.linear.app/mcp"\nbearer_token_env_var = "LINEAR_API_KEY"\n')
+        self.trust(self.repo)
+        self.assertEqual(self.hidden(), [])
+        self.write(self.repo / ".codex" / "config.toml", '[mcp_servers.linear]\nbearer_token_env_var = "LINEAR_GLOBEX_API_KEY"\n')
+        self.assertEqual(self.hidden(), ["linear"])
+
+    def test_a_linked_worktree_is_trusted_through_its_main_checkout(self):
+        worktree = self.tmp / "worktrees" / "feature"
+        entry = self.repo / ".git" / "worktrees" / "feature"
+        self.write(entry / "gitdir", f"{worktree / '.git'}\n")
+        self.write(worktree / ".git", f"gitdir: {entry}\n")
+        self.write(worktree / ".codex" / "config.toml", '[mcp_servers.globex_cloud_eu]\ncommand = "globex-mcp"\n')
+        self.assertEqual(self.hidden(cwd=worktree), [])
+        self.trust(self.repo)
+        self.assertEqual(self.hidden(cwd=worktree), ["globex_cloud_eu"])
+
+    def test_config_files_with_a_byte_order_mark_and_ones_that_cannot_be_parsed(self):
+        config = self.home / ".codex" / "config.toml"
+        config.write_text('\ufeff[mcp_servers.globex_cloud_eu]\ncommand = "globex-mcp"\n', encoding="utf-8")
+        self.assertEqual(self.hidden(), ["globex_cloud_eu"])
+        self.write(self.repo / ".codex" / "config.toml", "[mcp_servers.broken\n")
+        self.assertEqual(self.hidden(), ["globex_cloud_eu"])  # untrusted: Codex doesn't read it either
+        self.trust(self.repo)
+        for path in (self.repo / ".codex" / "config.toml", config):
+            with self.assertRaises(Refused) as refused:
+                self.hidden()
+            self.assertIn(f"keyfit: codex not started: Keyfit can't parse {path}, so it can't hide the MCP servers "
+                          f"there that acme must not see.", str(refused.exception))
+            self.write(self.repo / ".codex" / "config.toml", "")
+            config.write_text("[mcp_servers.broken\n")
 
 
 if __name__ == "__main__":

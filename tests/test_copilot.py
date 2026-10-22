@@ -259,10 +259,24 @@ class McpTests(unittest.TestCase):
         self.assertEqual(self.hidden(additional=given),
                          ["globex_cloud_eu", "globex_cloud_file", "globex_cloud_json", "linear_b"])
 
-    def test_unreadable_files_hide_nothing_from_them(self):
+    def test_files_that_cannot_be_parsed_stop_the_start(self):
+        (self.repo / ".mcp.json").write_text(json.dumps({"mcpServers": ["a"]}))  # parsed: no servers in it
+        self.assertEqual(self.hidden(), ["globex_cloud_eu", "linear_b"])
         (self.home / ".copilot" / "mcp-config.json").write_text("{not json")
-        (self.repo / ".mcp.json").write_text(json.dumps({"mcpServers": ["a"]}))
-        self.assertEqual(self.hidden(), [])
+        with self.assertRaises(mcp.Unreadable):
+            self.hidden()
+
+    def test_files_with_a_byte_order_mark_or_comments(self):
+        (self.home / ".copilot" / "mcp-config.json").write_text(
+            "\ufeff// mine\n" + json.dumps({"mcpServers": {"globex_cloud_eu": {"command": "x"}}}), encoding="utf-8")
+        self.assertEqual(self.hidden(), ["globex_cloud_eu"])
+
+    def test_linear_through_mcp_remote(self):
+        remote = ["-y", "mcp-remote", "https://mcp.linear.app/mcp"]
+        self.user({"linear_b": {"command": "npx", "args": [*remote, "--header", "Authorization: Bearer ${LINEAR_B_API_KEY}"]},
+                   "linear_a": {"command": "npx", "args": [*remote, "--header", "Authorization: Bearer ${LINEAR_A_API_KEY}"]},
+                   "linear_oauth": {"command": "npx", "args": remote}})
+        self.assertEqual(self.hidden(), ["linear_b", "linear_oauth"])
 
 
 class ArgumentTests(unittest.TestCase):
@@ -301,6 +315,16 @@ class ArgumentTests(unittest.TestCase):
         self.assertIn("--disable-mcp-server=globex_cloud_web", self.args("-C", "web"))
         self.assertIn("--disable-mcp-server=globex_cloud_web", self.args(f"-C{web}", cwd=self.tmp))
         self.assertNotIn("--disable-mcp-server=globex_cloud_web", self.args())
+
+    def test_a_file_copilot_loads_that_cannot_be_parsed_stops_the_start(self):
+        (self.repo / ".github").mkdir()
+        (self.repo / ".github" / "mcp.json").write_text("{not json")
+        with self.assertRaises(Refused) as refused:
+            self.args()
+        self.assertEqual(str(refused.exception),
+                         f"keyfit: copilot not started: Keyfit can't parse {self.repo / '.github' / 'mcp.json'}, so it "
+                         f"can't hide the MCP servers there that demo must not see.\n"
+                         f"  Fix the file (bypass once: KEYFIT_DISABLE=1 copilot …)")
 
     def test_another_projects_server_cannot_be_enabled(self):
         for given in (["--enable-mcp-server", "globex_cloud_eu"], ["--enable-mcp-server=globex_cloud_eu"]):
