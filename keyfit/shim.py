@@ -294,6 +294,22 @@ def claude_background(args: list[str], env: dict, project: Project | None) -> No
                   f"one.\n  Bypass once, with your own environment: KEYFIT_DISABLE=1 claude …")
 
 
+def codex_private(args: list[str], env: dict) -> list[str]:
+    """Codex in a folder outside every project. In your terminal it runs unchanged. Inside a session Keyfit started
+    (KEYFIT_PROJECT set), the environment holds that project's accounts, which Codex's shared app server, started now,
+    would keep for every folder: sessions start without it (--no-daemon), and the commands that work on it are
+    refused."""
+    if not env.get("KEYFIT_PROJECT"):
+        return args
+    sub = subcommand(args, CODEX_SUBCOMMANDS)
+    if sub in CODEX_SHARED:
+        raise Refused(f"keyfit: codex not started: inside a session of {printable(env['KEYFIT_PROJECT'])}, "
+                      f"`codex {sub}` could start Codex's shared app server with that project's accounts, and every "
+                      f"folder would share them.\n  Run it in a terminal outside the session (bypass once: "
+                      f"KEYFIT_DISABLE=1 codex …)")
+    return ["--no-daemon"] + args if sub in CODEX_NO_DAEMON else args
+
+
 def opencode_standalone(args: list[str]) -> list[str]:
     """Add --standalone (OpenCode's private server, with this environment) where the command takes it, unless a
     server is named already. `opencode auth` and `opencode session` alone print their commands and take none."""
@@ -1133,6 +1149,8 @@ def main(argv: list[str]) -> int:
         if tool == "claude":  # before the checks, and inside a session outside every project too
             claude_background(args, env, project)
         if project is None:  # not a registered project: exactly as before Keyfit
+            if tool == "codex":
+                args = codex_private(args, env)
             return start(real, tool, opencode_private(args, env) if tool == "opencode" else args, env, env)
         if tool == "gcloud":  # before sign-in commands too: they write into configurations
             gcloud_guard(project, args, registry, env)
