@@ -489,6 +489,15 @@ class ShimTests(unittest.TestCase):
                 seen = json.loads(self.run_tool("claude", *args).stdout)
                 self.assertEqual((seen["argv"][0], seen["argv"][2:]), ("--settings", args))
 
+    def test_claude_takes_one_settings_with_your_own_merged_in(self):
+        # Claude keeps the last of a repeated option: a --settings of yours after Keyfit's would undo the hiding
+        given = json.dumps({"disableAgentView": False, "deniedMcpServers": [{"serverName": "noisy"}], "model": "opus"})
+        seen = json.loads(self.run_tool("claude", "--settings", '{"model": "x"}', "-p", "hi", "--settings", given).stdout)
+        self.assertEqual((seen["argv"].count("--settings"), seen["argv"][2:]), (1, ["-p", "hi"]))
+        settings = json.loads(seen["argv"][1])
+        self.assertEqual((settings["model"], settings["disableAgentView"]), ("opus", True))
+        self.assertEqual([s["serverName"] for s in settings["deniedMcpServers"]], ["noisy", "linear_a", "linear_b"])
+
     def test_claude_session_starts_with_background_sessions_off(self):
         seen = json.loads(self.run_tool("claude", "-p", "hello").stdout)
         self.assertIs(json.loads(seen["argv"][1])["disableAgentView"], True)

@@ -272,11 +272,16 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         if subcommand(tool, args, CLAUDE_SUBCOMMANDS):
             return args
         env["CLAUDE_CODE_DISABLE_AGENT_VIEW"] = "1"  # no background sessions, also from ← and /background
+        given, configs, rest = claude_given(args)  # one --settings: a repeated option keeps its last value
         try:
-            settings = mcp.claude_settings(project, env, cwd, owners)
+            settings = mcp.claude_settings(project, env, cwd, owners, given[-1] if given else None, configs)
         except mcp.Unreadable as error:
+            if error.option:
+                raise Refused(f"keyfit: claude not started: the JSON given to {error.option} is not a JSON object "
+                              f"Keyfit can read, so it can't hide the MCP servers {project.name} must not see.\n"
+                              f"  Fix it (bypass once: KEYFIT_DISABLE=1 claude …)") from None
             raise unreadable(tool, project, error) from None
-        return (["--settings", json.dumps(settings)] if settings else []) + args
+        return (["--settings", json.dumps(settings)] if settings else []) + rest
     if tool == "codex":
         sub = subcommand(tool, args, CODEX_SUBCOMMANDS)
         if sub in CODEX_SHARED:
@@ -411,6 +416,31 @@ def claude_background(args: list[str], env: dict, project: Project | None) -> No
                   f"supervisor, which keeps the environment it started with for every background session, in any "
                   f"folder: {project.name}'s accounts could reach other folders, or another project's accounts this "
                   f"one.\n  Bypass once, with your own environment: KEYFIT_DISABLE=1 claude …")
+
+
+def claude_given(args: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """(the values of your own --settings, those of --mcp-config, the command line without --settings): `--settings X`,
+    `--settings=X`, and every word after --mcp-config up to the next option. A word that looks like an option counts as
+    one; words after `--` are a prompt."""
+    end = args.index("--") if "--" in args else len(args)
+    settings, configs, rest = [], [], []
+    taking, i = False, 0
+    while i < end:
+        arg = args[i]
+        name, eq, value = arg.partition("=")
+        if arg.startswith("-"):
+            taking = arg == "--mcp-config"
+        elif taking:
+            configs.append(arg)
+        if name == "--mcp-config" and eq:
+            configs.append(value)
+        if name == "--settings" and (eq or i + 1 < end):
+            settings.append(value if eq else args[i + 1])
+            i += 1 if eq else 2
+            continue
+        rest.append(arg)
+        i += 1
+    return settings, configs, rest + args[end:]
 
 
 def codex_private(args: list[str], env: dict) -> list[str]:

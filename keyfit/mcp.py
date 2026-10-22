@@ -55,12 +55,14 @@ class Unhideable(Exception):
 
 
 class Unreadable(Exception):
-    """A config file an agent loads (*path*) can't be parsed, so its servers can't be hidden; without a path,
-    OPENCODE_CONFIG_CONTENT from the environment is not a JSON object, so no server can be added to it."""
+    """A config file an agent loads (*path*) can't be parsed, so its servers can't be hidden; with *option*, the JSON
+    given to that option on the command line is not an object; without either, OPENCODE_CONFIG_CONTENT from the
+    environment is not a JSON object, so no server can be added to it."""
 
-    def __init__(self, path: Path | None = None):
-        super().__init__(str(path or ""))
+    def __init__(self, path: Path | None = None, option: str | None = None):
+        super().__init__(str(path or option or ""))
         self.path = path
+        self.option = option
 
 
 def _read(path: Path, toml: bool = False, strict: bool = False) -> dict:
@@ -282,21 +284,48 @@ def _user_statusline(env: dict) -> bool:
         return False
 
 
-def claude_settings(project: Project, env: dict, cwd: Path, owners: dict | None = None) -> dict:
-    """Claude's --settings for a session of *project*. A name is denied when any of its definitions must be hidden (the
-    deny goes by name, for every scope). Unreadable: ~/.claude.json or the folder's .mcp.json can't be parsed."""
-    denied = list(dict.fromkeys(name for name, spec in claude_servers(env, cwd, strict=True)
-                                if hidden(name, spec, project, owners, env=env)))
+def _claude_given(value: str, cwd: Path, option: str) -> dict:
+    """The JSON object given to Claude's *option* on the command line: inline, or the file it names (from *cwd*)."""
+    if value.lstrip().startswith("{"):
+        try:
+            data = json.loads(value)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise Unreadable(option=option)
+        return data
+    path = cwd / Path(value).expanduser()
+    if not path.is_file():
+        raise Unreadable(path)
+    return _read(path, strict=True)
+
+
+def claude_settings(project: Project, env: dict, cwd: Path, owners: dict | None = None, given: str | None = None,
+                    configs=()) -> dict:
+    """Claude's --settings for a session of *project*: Keyfit's keys merged into *given*, your own --settings (the hidden
+    servers added to yours, background sessions off, the status line only where you set none). A name is denied when
+    any of its definitions must be hidden (the deny goes by name, for every scope), the servers of `--mcp-config` (the
+    files or JSON in *configs*) too. Unreadable: ~/.claude.json, the folder's .mcp.json, *given* or a config can't be
+    parsed."""
+    servers = claude_servers(env, cwd, strict=True)
+    for value in configs:
+        servers += [(name, spec) for name, spec in _table(_claude_given(value, cwd, "--mcp-config").get("mcpServers")).items()
+                    if isinstance(spec, dict)]
+    denied = list(dict.fromkeys(name for name, spec in servers if hidden(name, spec, project, owners, env=env)))
     local = _table(_read(cwd / ".mcp.json", strict=True).get("mcpServers"))
     disabled = [name for name, spec in local.items()
                 if isinstance(spec, dict) and hidden(name, spec, project, owners, verified=False, env=env)]
-    settings = {"disableAgentView": True}  # background sessions would run with their supervisor's first environment
-    if not _user_statusline(env):
+    settings = _claude_given(given, cwd, "--settings") if given is not None else {}
+    settings["disableAgentView"] = True  # background sessions would run with their supervisor's first environment
+    if "statusLine" not in settings and not _user_statusline(env):
         settings["statusLine"] = {"type": "command", "command": statusline_command()}
     if denied:
-        settings["deniedMcpServers"] = [{"serverName": name} for name in denied]
+        theirs = settings.get("deniedMcpServers") if isinstance(settings.get("deniedMcpServers"), list) else []
+        settings["deniedMcpServers"] = theirs + [entry for entry in ({"serverName": name} for name in denied)
+                                                 if entry not in theirs]
     if disabled:
-        settings["disabledMcpjsonServers"] = disabled
+        theirs = settings.get("disabledMcpjsonServers") if isinstance(settings.get("disabledMcpjsonServers"), list) else []
+        settings["disabledMcpjsonServers"] = theirs + [name for name in disabled if name not in theirs]
     return settings
 
 
