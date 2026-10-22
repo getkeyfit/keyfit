@@ -4,13 +4,16 @@ Connection:  aws = { profile = "acme", account = "123456789012" }
              optional: region = "eu-central-1", config_file = "~/.aws/config-acme"
 
 inject  — drop every inherited AWS credential/profile variable (they beat
-          AWS_PROFILE in the CLI's precedence), then set AWS_PROFILE and
-          AWS_EXPECTED_ACCOUNT_ID (what a direnv `use aws PROFILE ACCOUNT` sets).
+          AWS_PROFILE in the CLI's precedence; so does an AWS_BEARER_TOKEN_…, such
+          as Bedrock's API key), then set AWS_PROFILE and AWS_EXPECTED_ACCOUNT_ID
+          (what a direnv `use aws PROFILE ACCOUNT` sets).
 local   — profile exists; account hints in the config (sso_account_id,
           login_session / role ARN) match; SSO and console-sign-in caches
           tell whether you are signed in and for how long.
 remote  — `aws sts get-caller-identity` (needs no permissions) must return
-          the expected account. Never starts a login; prints the command.
+          the expected account, from AWS's own STS: endpoint overrides
+          (AWS_ENDPOINT_URL…, a profile's endpoint_url) are ignored. Never starts
+          a login; prints the command.
 """
 
 from __future__ import annotations
@@ -44,6 +47,8 @@ SCRUB = (
     "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_EXPECTED_ACCOUNT_ID",
     "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "AWS_REGION", "AWS_DEFAULT_REGION",
 )
+BEARER = "AWS_BEARER_TOKEN_"  # AWS_BEARER_TOKEN_<SIGNING NAME> (Bedrock's API key): first in the CLI's token chain
+ENDPOINT = "AWS_ENDPOINT_URL"  # AWS_ENDPOINT_URL and AWS_ENDPOINT_URL_<SERVICE>: send requests to another host
 
 
 @dataclass
@@ -186,8 +191,8 @@ class AwsAdapter(Adapter):
     # inject -----------------------------------------------------------------
 
     def inject(self, conn, env: dict) -> None:
-        for var in SCRUB:
-            env.pop(var, None)
+        for var in [v for v in env if v in SCRUB or v.startswith(BEARER)]:
+            env.pop(var)
         env["AWS_PROFILE"] = conn.get("profile", "")  # missing in a hand-edited registry: the local check says so
         env["AWS_EXPECTED_ACCOUNT_ID"] = str(conn.get("account", ""))
         if conn.get("config_file"):
@@ -294,8 +299,11 @@ class AwsAdapter(Adapter):
             return None, NO_CLI, False
         cmd = [aws, "sts", "get-caller-identity", "--profile", profile, "--query", "Account",
                "--output", "text", "--cli-connect-timeout", "5", "--cli-read-timeout", "10"]
+        # AWS's own STS answers, not an endpoint override's host (which would also get the signed request)
+        run = {k: v for k, v in env.items() if not k.startswith(ENDPOINT)}
+        run["AWS_IGNORE_CONFIGURED_ENDPOINT_URLS"] = "true"
         try:
-            out = subprocess.run(cmd, env=env, capture_output=True, text=True,
+            out = subprocess.run(cmd, env=run, capture_output=True, text=True,
                                  timeout=self.timeout, stdin=subprocess.DEVNULL, check=False)
         except subprocess.TimeoutExpired:
             return None, f"AWS did not answer within {self.timeout:g} s", True
