@@ -42,7 +42,6 @@ class PrivateNameTests(unittest.TestCase):
             self.assertFalse(pairs & PRIVATE_NAMES, f"{path.relative_to(ROOT)} names a private project")
 
 
-
 @unittest.skipUnless((ROOT / ".git").exists(), "needs a git checkout")
 class GitignoreTests(unittest.TestCase):
     def test_per_machine_files_are_never_committed(self):
@@ -108,6 +107,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(tested, listed)
         self.assertEqual(project["requires-python"], f">={tested[0]}")
         self.assertIn("3.14", tested)
+
 
 if __name__ == "__main__":
     unittest.main()
