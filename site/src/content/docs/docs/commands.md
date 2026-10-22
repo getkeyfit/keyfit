@@ -8,20 +8,23 @@ sidebar:
 <!-- Generated from README.md by site/scripts/sync_docs.py. Edit the source, not this file. -->
 
 ```bash
+# The project
 keyfit init                        # register this repository; offers the accounts found on this Mac (--yes: ask nothing)
 keyfit status                      # check every account of this project now: always online, refreshes the cache (--offline: local only)
-keyfit doctor                      # check the installation: shims, PATH order, real tools, registry, Keychain
+keyfit doctor                      # check the installation: shims, PATH order, real tools, git, registry, Keychain
 keyfit which -v                    # which project this folder belongs to, why, and its accounts
 keyfit projects                    # all registered projects
-keyfit add aws --profile acme-dev  # add or change one account of this project
-keyfit add linear                  # paste a key (hidden): checked with Linear, stored in the Keychain
-keyfit add linear --key env:LINEAR_ACME_API_KEY   # or a key you keep elsewhere (env:VAR, keychain:service/account)
-keyfit add github --login octocat  # one of the accounts `gh auth status` lists
+
+# Agents
 keyfit add claude                  # the Claude login in ~/.claude; for a second login: --new --name globex
 keyfit add codex                   # the Codex login in ~/.codex; another one: --codex-home PATH
 keyfit add opencode                # the providers signed in in OpenCode's database; another set: --new --name NAME
 keyfit add copilot                 # Copilot CLI runs as the project's GitHub account; another one: --login LOGIN
 keyfit add gemini                  # Gemini CLI's Google sign-in in ~/.gemini; another one: --new; a Gemini API key: --key
+
+# CLIs
+keyfit add aws --profile acme-dev  # add or change one account of this project
+keyfit add github --login octocat  # one of the accounts `gh auth status` lists
 keyfit add vercel                  # the login the vercel CLI has now, and its team; another login: --new --name NAME
 keyfit add supabase                # paste a Supabase token (hidden): checked, stored in the Keychain; or --cli
 keyfit add cloudflare              # the wrangler profile bound to this folder and its Cloudflare account
@@ -29,11 +32,17 @@ keyfit add convex --cli            # the login the convex CLI has now, and the t
 keyfit add google --email me@acme.com   # the project's Google account (work or personal), for every Google tool
 keyfit add gcloud                  # the gcloud configuration signed in as that account, and its project
 keyfit add firebase                # the Firebase project the folder uses; the firebase CLI's sign-in there must be that account
+
+# Linear and MCP servers
+keyfit add linear                  # paste a key (hidden): checked with Linear, stored in the Keychain
+keyfit add linear --key env:LINEAR_ACME_API_KEY   # or a key you keep elsewhere (env:VAR, keychain:service/account)
 keyfit add google-mcp --server gmail_acme   # a Gmail, Drive or Calendar MCP server signed in as that account
 keyfit add mcp 'globex_cloud_*'    # these MCP servers belong to this project; every other project stops seeing them
+
+# Anything else
 keyfit run -- terraform plan       # run any other command with the project's accounts (checked first)
 keyfit secret set NAME             # store a key from a hidden prompt; prints keychain:keyfit/NAME to use
 keyfit secret list                 # names of the keys Keyfit stored (never the values)
 ```
 
-`--project NAME` makes any `keyfit add …` change another project. Account names (`--name`) can be shared between projects. The registry lives in `~/.config/keyfit/registry.toml`. It stores where secrets live, never their values; see [security](/docs/security/).
+`--project NAME` makes any `keyfit add …` change another project. Account names (`--name`) can be shared between projects that use the same login; given another login, a shared name changes for all of them, and `keyfit add` names the projects it changed. Without `--name`, a second login never takes the first one's name: it gets the next free one, such as `pro-2`. The registry lives in `~/.config/keyfit/registry.toml`. It stores where secrets live, never their values; see [security](/docs/security/).

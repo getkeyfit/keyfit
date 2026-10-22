@@ -67,27 +67,33 @@ def without_title(text: str) -> str:
     return "\n".join(lines).strip("\n")
 
 
+def url(target: str, source: str) -> str:
+    """A link target in a source → the target on the site."""
+    anchor = ""
+    if "#" in target and not target.startswith("#"):
+        target, anchor = target.split("#", 1)
+        anchor = "#" + anchor
+    if target in LINKS:
+        return LINKS[target] + anchor
+    if not target.startswith(("http", "#", "/", "mailto:")):  # another repo file: link it on GitHub
+        return f"{REPO}/{(Path(source).parent / target).as_posix().lstrip('./')}{anchor}"
+    return target + anchor
+
+
 def relink(text: str, source: str) -> str:
-    def swap(match: re.Match) -> str:
-        label, target = match.group(1), match.group(2)
-        anchor = ""
-        if "#" in target and not target.startswith("#"):
-            target, anchor = target.split("#", 1)
-            anchor = "#" + anchor
-        if target in LINKS:
-            return f"[{label}]({LINKS[target]}{anchor})"
-        if not target.startswith(("http", "#", "/", "mailto:")):  # another repo file: link it on GitHub
-            base = Path(source).parent
-            return f"[{label}]({REPO}/{(base / target).as_posix().lstrip('./')}{anchor})"
-        return match.group(0)
-    return re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", swap, text)
+    return re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", lambda m: f"[{m.group(1)}]({url(m.group(2), source)})", text)
+
+
+DEFINITION = re.compile(r"^\[([^\]]+)\]:[ \t]+(\S+)", re.M)  # a reference-style link's `[label]: target`
 
 
 def render(slug: str) -> str:
     title, description, order, parts = PAGES[slug]
-    chunks = []
+    chunks, defined = [], {}
     for source, wanted in parts:
         text = (ROOT / source).read_text()
+        for match in DEFINITION.finditer(text):
+            defined.setdefault(match.group(1).lower(), url(match.group(2), source))
         if wanted is None:
             chunks.append(relink(without_title(text), source))
             continue
@@ -98,10 +104,17 @@ def render(slug: str) -> str:
             heading = re.sub(r"\s*\(.*\)$", "", name)  # "Quickstart (5 minutes)" → "Quickstart"
             body = found[name] if len(wanted) == 1 else f"## {heading}\n\n{found[name]}"
             chunks.append(relink(body, source))
+    page = "\n\n".join(chunks).strip()
+    # README defines its `[text][label]` links at its end, outside the sections a page takes: bring them along
+    own = {match.group(1).lower() for match in DEFINITION.finditer(page)}
+    used = dict.fromkeys(label.lower() for label in re.findall(r"\]\[([^\]]+)\]", page))
+    brought = [f"[{label}]: {defined[label]}" for label in used if label in defined and label not in own]
+    if brought:
+        page += "\n\n" + "\n".join(brought)
     sources = ", ".join(sorted({source for source, _ in parts}))
     return (f"---\ntitle: {title}\ndescription: {description}\nsidebar:\n  order: {order}\n---\n\n"
             f"<!-- Generated from {sources} by site/scripts/sync_docs.py. Edit the source, not this file. -->\n\n"
-            + "\n\n".join(chunks).strip() + "\n")
+            + page + "\n")
 
 
 def main(argv: list[str]) -> int:

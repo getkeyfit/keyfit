@@ -27,39 +27,30 @@ The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkou
 
 ## Quickstart
 
+**1. Install the shims.** This puts a shim in front of each of the thirteen tools and adds one line to your shell startup file:
+
 ```bash
-keyfit setup --rc     # shims for claude, codex, opencode, copilot, gemini, aws, gh, vercel, supabase, wrangler, convex, gcloud and firebase, plus one line in your shell startup file
+keyfit setup --rc
 ```
 
-Open a new terminal, then go to a repository of one of your clients (a repository, not your home folder: everything under the folder you register belongs to that project):
+**2. Register a project.** Open a new terminal, then go to a repository of one of your clients (a repository, not your home folder: everything under the folder you register belongs to that project):
 
 ```bash
 cd ~/code/acme-api
 keyfit init           # registers the repository, then offers the accounts it finds on this Mac
+```
+
+The project is named after the folder (`acme-api`). Folder names such as `api` or `web` repeat across clients, so when a project of that name exists already in another folder, `init` stops and asks for a name of its own: `keyfit init --name globex-api`. To add the folder to that project instead, with the same accounts, name it: `keyfit init --name api`.
+
+`keyfit init` asks about one account at a time, and Enter skips any of them. Skipped accounts are simply not checked; `keyfit status` lists what is still unmapped. Already using direnv? `keyfit init` also imports `use aws PROFILE ACCOUNT_ID` and `export LINEAR_API_KEY=$VARIABLE` lines from the repository's `.envrc`. It reads the file as text and never runs it. Without a terminal, or with `--yes`, `init` asks nothing: it registers the repository and imports from `.envrc` only.
+
+**3. Use your tools as usual.**
+
+```bash
 claude                # starts with this project's accounts, checked
 ```
 
-`keyfit init` asks about one account at a time, and Enter skips any of them:
-
-- **AWS:** a profile from `~/.aws/config`. Keyfit records the account that profile belongs to.
-- **GitHub:** one of the accounts `gh` is signed in to.
-- **Claude and Codex:** whether to use the login currently in `~/.claude` or `~/.codex`.
-- **OpenCode:** whether to use the sign-ins in OpenCode's own database (`~/.local/share/opencode/opencode.db`).
-- **Copilot CLI:** whether Copilot CLI runs as the project's GitHub account (asked when `copilot` is installed and you picked a GitHub account).
-- **Vercel:** whether to use the login the `vercel` CLI has now, with the team selected in it.
-- **Supabase:** whether to use the login the `supabase` CLI has now. Keyfit keeps a copy of its token in the macOS Keychain (macOS may ask once to allow that).
-- **Cloudflare:** the wrangler sign-in (auth profile) bound to the repository's folder, and the Cloudflare account it deploys to. Keyfit keeps no Cloudflare token: wrangler keeps the sign-in, Keyfit checks it.
-- **Convex:** whether to use the login the `convex` CLI has now (`npx convex login`). Keyfit records the team the project's deployment belongs to.
-- **Google:** the project's one Google account, the work or the personal email, picked from the accounts `gcloud` and the firebase CLI are signed in to. Every Google tool of the project is checked against it: `gcloud`, the firebase CLI and Gemini CLI.
-- **Google Cloud:** a gcloud configuration signed in as that account, and the Google Cloud project it works on. Keyfit keeps no Google token: gcloud keeps the sign-in, Keyfit checks it.
-- **Firebase:** the Firebase project the repository's `.firebaserc` names. The firebase CLI keeps the sign-in and binds the folder to it (`firebase login:use`); Keyfit checks both.
-- **Gemini CLI:** whether to use the Google sign-in in `~/.gemini` (when it is that account), or else a Gemini CLI folder of the project's own, where you sign in once (asked when `gemini` is installed and the project has a Google account).
-- **Google Workspace MCP:** which of the Gmail, Drive and Calendar MCP servers in your agents' configs belong to the project (asked when the project has a Google account). Servers whose login is signed in as another account are named, not offered. The ones you take are hidden in every other project.
-- **Linear:** a personal API key, typed at a hidden prompt. Keyfit checks it with Linear, then stores it in the macOS Keychain.
-
-Skipped accounts are simply not checked, with one catch: inside the project, `aws`, `gh` and `vercel` start only once it has an AWS, GitHub or Vercel account. Skip GitHub, and `gh` waits in that repository until you run `keyfit add github --login <login>`. `keyfit status` lists what is still unmapped. `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` are the exceptions: many projects use them only locally (`supabase start`, `wrangler dev`, an anonymous local Convex deployment, `gcloud components`, the Firebase emulators), so without a Supabase, Cloudflare, Convex, Google Cloud or Firebase account they run as before.
-
-It ends with `keyfit status`:
+`keyfit init` ends with `keyfit status`:
 
 ```
 acme-api
@@ -81,19 +72,9 @@ acme-api
   ✔ google-mcp gmail_acme, gcal_acme   me@acme.com · confirmed by Google
 ```
 
-When a check fails, the tool does not start:
-
-```
-$ claude
-keyfit: claude not started, acme-api needs attention
-  ✘ aws        acme-dev → …4321   SSO session expired
-    → aws sso login --sso-session acme
-  (bypass once: KEYFIT_DISABLE=1 claude …)
-```
-
 If something seems off, run `keyfit doctor`. It checks the installation and prints the fix under every ✘. See also the [troubleshooting guide](/docs/troubleshooting/).
 
-More on setup:
+### Setup options
 
 - **Without `--rc`,** `keyfit setup` changes nothing outside `~/.config/keyfit` and prints the line for you to add yourself.
 - **The shell** comes from `$SHELL`; choose it with `--shell zsh|bash`.
@@ -101,5 +82,3 @@ More on setup:
 - **bash:** the line goes into the login profile macOS terminals read. That is the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile` that exists. It also goes into `~/.bashrc` when that profile sources it.
 - **Another file:** `--rc PATH`.
 - **Keep the line last** in the file, so nothing added to PATH later in that file comes before the shims.
-
-Already using direnv? `keyfit init` also imports `use aws PROFILE ACCOUNT_ID` and `export LINEAR_API_KEY=$VARIABLE` lines from the repository's `.envrc`. It reads the file as text and never runs it. Without a terminal, or with `--yes`, `init` asks nothing: it registers the repository and imports from `.envrc` only.
