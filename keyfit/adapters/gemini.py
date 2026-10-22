@@ -19,11 +19,14 @@ inject  — GEMINI_CLI_HOME (none for your own home); a key account's key in GEM
 scrub   — where Gemini CLI starts (the shim and the remote check): the variables that would pick another sign-in, key,
           Google Cloud project, endpoint or credential store (GEMINI_API_KEY unless it is the account's, GOOGLE_API_KEY,
           GOOGLE_CLOUD_PROJECT, GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_GENAI_USE_VERTEXAI, …). Sessions of other agents
-          keep them. GEMINI_DEFAULT_AUTH_TYPE preselects the account's method in Gemini CLI's sign-in dialog.
+          keep them. GEMINI_DEFAULT_AUTH_TYPE preselects the account's method in Gemini CLI's sign-in dialog. Gemini CLI
+          loads one .env file (the nearest, from its folder up to /, else its home's) for each variable not set:
+          the local check fails when that file would bring one of them back.
 forget  — in a project without a Gemini CLI account, what Keyfit set for another project goes.
-local   — Google: the home's sign-in method is Google's (or not chosen yet), it holds a Google sign-in, and that
-          sign-in's email is the project's Google account. Key: the key is there and the home uses the API-key method.
-          Only labels are read, never a token.
+local   — no .env file Gemini CLI may load sets a variable Keyfit removed (only the names are read). Google: the
+          home's sign-in method is Google's (or not chosen yet), it holds a Google sign-in, and that sign-in's email
+          is the project's Google account. Key: the key is there and the home uses the API-key method. Only labels
+          are read, never a token.
 remote  — Google: when the sign-in's access token is still valid, Google's tokeninfo must name the account; an expired
           one is not renewed (that needs Gemini CLI's own OAuth client), so the local check decides until Gemini CLI
           renews it. Key: Google's Gemini API must accept the key (it lists one model; the key goes in a header).
@@ -62,7 +65,8 @@ SCRUB = ("GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_ACCES
          "GOOGLE_CLOUD_PROJECT_ID", "GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_QUOTA_PROJECT", "GOOGLE_CLOUD_ACCOUNT",
          "GOOGLE_CLOUD_UNIVERSE_DOMAIN", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_GCA", "GOOGLE_GEMINI_BASE_URL",
          "GOOGLE_VERTEX_BASE_URL", "GOOGLE_CREDENTIALS", "GOOGLE_SERVICE_ACCOUNT_AUTH", "GEMINI_CLI_AUTH_OVERRIDE",
-         "GEMINI_DEFAULT_AUTH_TYPE", "GEMINI_CLI_USE_COMPUTE_ADC", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE")
+         "GEMINI_DEFAULT_AUTH_TYPE", "GEMINI_CLI_USE_COMPUTE_ADC", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
+         "CODE_ASSIST_ENDPOINT")
 SCRUB_PREFIXES = ("GOOGLE_EXTERNAL_ACCOUNT_",)
 MODELS = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1"
 SHARED = ("GEMINI.md", "commands", "skills", "agents", "policies", "extensions")  # follow you into a new home
@@ -205,6 +209,86 @@ def scrub(conn, env: dict) -> None:
         env["GOOGLE_CLOUD_PROJECT"] = conn["cloud_project"]
 
 
+def _env_file(start: Path, path: Path, trusted: bool, ignore: bool) -> Path | None:
+    """The .env file Gemini CLI loads when it starts in *start* with the home *path* (its findEnvFile, 0.64.0): the
+    first from the folder up to /, .gemini/.env (in a trusted folder) before .env (with --ignore-env, only the home's),
+    else the home's .gemini/.env (trusted) or .env."""
+    for here in (start, *start.parents):
+        if trusted and (folder(here) / ".env").exists():
+            return folder(here) / ".env"
+        if (here / ".env").exists() and (not ignore or here == path):
+            return here / ".env"
+    last = ([folder(path) / ".env"] if trusted else []) + [path / ".env"]
+    return next((file for file in last if file.exists()), None)
+
+
+def dotenv_files(start: Path, path: Path) -> list[Path]:
+    """The .env files Gemini CLI may load in *start*: whether the folder is trusted, and --ignore-env, are not known
+    here, so the one each of those starts would load counts (a false alarm, never a miss)."""
+    found: list[Path] = []
+    for trusted in (True, False):
+        for ignore in (False, True):
+            file = _env_file(canonical(start), canonical(path), trusted, ignore)
+            if file is not None and file not in found:
+                found.append(file)
+    return found
+
+
+def _excluded(path: Path, env: dict) -> set:
+    """advanced.excludedEnvVars of your settings and the system's (Gemini CLI merges them): names it never loads from a
+    .env outside a .gemini folder. The folder's own settings do not count: an untrusted folder's are ignored."""
+    names: set = set()
+    for _, file in settings_files(path, env):
+        data = _jsonc(file)
+        advanced = data.get("advanced") if isinstance(data, dict) else None
+        listed = advanced.get("excludedEnvVars") if isinstance(advanced, dict) else None
+        if isinstance(listed, list):
+            names.update(name for name in listed if isinstance(name, str))
+    return names
+
+
+def reloaded(conn, env: dict, start: Path) -> list[tuple[Path, list[str]]]:
+    """(file, names) for each .env file Gemini CLI may load in *start* that sets a variable Keyfit removed where Gemini
+    CLI starts and left unset: Gemini CLI would load it, and so use another key, sign-in method, Google Cloud project,
+    endpoint or home. Only names are read: a value is never kept or shown."""
+    from .cloudflare import DOTENV_LINE
+
+    started = dict(env)
+    scrub(conn, started)
+    path = home(conn, env)
+    excluded = None
+    found = []
+    for file in dotenv_files(start, path):
+        try:
+            if not file.is_file():  # a folder: Gemini CLI cannot read it either
+                continue
+            text = file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        seen = {m.group(1) for m in map(DOTENV_LINE.match, text.splitlines()) if m}
+        names = sorted(name for name in seen if name not in started and (
+            name in SCRUB or name.startswith(SCRUB_PREFIXES) or name in (KEY_VAR, HOME_VAR)))
+        if names and ".gemini" not in str(file):
+            excluded = _excluded(path, env) if excluded is None else excluded
+            names = [name for name in names if name not in excluded]
+        if names:
+            found.append((file, names))
+    return found
+
+
+def reloaded_problem(found: list[tuple[Path, list[str]]], path: Path) -> tuple[str, str]:
+    """(detail, fix) for .env files that bring back what Keyfit removed: the files and the names, never a value."""
+    files = "; ".join(f"{printable(tilde(file))} sets {', '.join(names)}" for file, names in found)
+    every = sorted({name for _, listed in found for name in listed})
+    where = printable(tilde(found[0][0])) if len(found) == 1 else "those files"
+    fix = f"remove {', '.join(every)} from {where}"
+    if not any(".gemini" in str(file) for file, _ in found):  # Gemini CLI skips the names listed there in such a file
+        settings = tilde(folder(path) / "settings.json")
+        fix += f', or add "advanced": {{"excludedEnvVars": {json.dumps(every)}}} to {settings}'
+    it = "it" if len(every) == 1 else "them"
+    return f"{files}, which Gemini CLI would load although Keyfit removed {it} for the project's account", fix
+
+
 def seed(path: Path, env: dict, key: bool = False) -> list[str]:
     """Create a home for an account: Gemini CLI's folder, owner-only (it keeps the sign-in and the sessions), with your
     context file, commands, skills, agents, policies and extensions symlinked from your own (never the sign-in or your
@@ -314,6 +398,9 @@ class GeminiAdapter(Adapter):
         if not path.is_dir():
             return fail(f"Gemini CLI folder {tilde(path)} does not exist",
                         f"keyfit add gemini --name {name} " + ("--key" if is_key(conn) else "--new"))
+        found = reloaded(conn, env, Path.cwd())  # first: Gemini CLI's sign-in would load the file too
+        if found:
+            return fail(*reloaded_problem(found, path))
         chosen, where = method(path, env, Path.cwd())
         wanted = API_KEY if is_key(conn) else GOOGLE
         if (chosen or wanted) != wanted or (is_key(conn) and chosen is None):
