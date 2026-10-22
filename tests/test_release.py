@@ -51,5 +51,24 @@ class GitignoreTests(unittest.TestCase):
                                  text=True, timeout=60)
             self.assertEqual(out.stdout.split(":")[0], ".gitignore", f"{name} is not in .gitignore")
 
+
+@unittest.skipUnless((ROOT / "RELEASING.md").exists(), "RELEASING.md is not in the sdist")
+class ReleasingTests(unittest.TestCase):
+    def setUp(self):
+        self.text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
+
+    def test_homebrew_takes_the_sha256_pypi_serves(self):
+        # two sdist builds of the same commit differ, so a local dist/ never gives PyPI's sha256
+        self.assertNotRegex(self.text, r"shasum[^\n]*dist/")
+        self.assertIn("https://pypi.org/pypi/keyfit/X.Y.Z/json", self.text)
+
+    def test_first_release_is_public_and_protected_before_the_tag(self):
+        self.assertIn("\n## The first release\n", self.text)
+        first = self.text.split("\n## The first release\n", 1)[1]
+        steps = ("--visibility public", "homebrew-keyfit", "private-vulnerability-reporting", "`pypi` environment",
+                 "git tag", "gh release create", "step 7 above")
+        where = [first.index(step) for step in steps]
+        self.assertEqual(where, sorted(where))
+
 if __name__ == "__main__":
     unittest.main()
