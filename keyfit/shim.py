@@ -218,11 +218,7 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
                 owners: dict | None = None, seen=()) -> list[str]:
     """*seen*: the shell variables the checks found that the tool must start without (OpenCode's)."""
     if tool == "aws":
-        profile = project.connections["aws"]["profile"]
-        for asked in requested_profiles(args):
-            if asked != profile:
-                raise Refused(f"keyfit: this folder belongs to {project.name} (AWS profile {profile}); "
-                              f"refusing --profile {asked}.\n  Bypass once: KEYFIT_DISABLE=1 aws …")
+        aws_profiles(project, args)
         return args
     if tool == "gh":
         return gh_args(project, args)
@@ -272,6 +268,20 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
     if tool == "gemini":
         return gemini_args(project, args, env, cwd, owners)
     return args
+
+
+def aws_profiles(project: Project, args: list[str]) -> None:
+    """Refuse --profile other than the project's: another profile's credentials, and with the sign-in commands its
+    sign-in or settings (`aws configure export-credentials --profile other` prints its keys). The shared ones
+    ([settings] shared_aws_profiles) ran before. A project without an AWS account signs in to any profile."""
+    conn = project.connections.get("aws")
+    if not isinstance(conn, dict):
+        return
+    profile = conn.get("profile")
+    for asked in requested_profiles(args):
+        if asked != profile:
+            raise Refused(f"keyfit: this folder belongs to {project.name} (AWS profile {profile}); "
+                          f"refusing --profile {asked}.\n  Bypass once: KEYFIT_DISABLE=1 aws …")
 
 
 def gh_options(args: list[str]) -> list[tuple[str, str | None]]:
@@ -1348,6 +1358,8 @@ def main(argv: list[str]) -> int:
         if is_login_command(tool, args):
             # run sign-in/setup with the project's environment (so `aws sso login` / `claude auth login`
             # target the project's profile / account) but without checks
+            if tool == "aws":  # not another profile's sign-in, settings or keys
+                aws_profiles(project, args)
             if tool == "supabase":
                 supabase_login_check(project, args)
             if tool == "wrangler":
