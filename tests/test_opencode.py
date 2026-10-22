@@ -21,7 +21,7 @@ from keyfit import environment  # noqa: E402
 from keyfit.adapters.opencode import OpenCodeAdapter, default_db, scrub, signed_in  # noqa: E402
 from keyfit.cli import main  # noqa: E402
 from keyfit.registry import Project, Registry  # noqa: E402
-from keyfit.shim import Refused, adjust_args, sign_in_command  # noqa: E402
+from keyfit.shim import Refused, adjust_args, opencode_folder, sign_in_command  # noqa: E402
 from test_vercel import executable  # noqa: E402
 
 SCHEMA = ("CREATE TABLE credential (id text PRIMARY KEY, integration_id text, label text NOT NULL, value text NOT NULL, "
@@ -583,6 +583,10 @@ class ShimTests(unittest.TestCase):
         seen = self.started(self.run_tool("web"))
         self.assertEqual(sorted(json.loads(seen["env"]["OPENCODE_CONFIG_CONTENT"])["mcp"]),
                          ["globex_cloud_eu", "globex_cloud_web"])
+        for args in (["-m", "anthropic/claude-sonnet-4-5", "web"], ["run", "--dir", "web", "hi"], ["acp", "--cwd=web"]):
+            seen = self.started(self.run_tool(*args))
+            self.assertEqual(sorted(json.loads(seen["env"]["OPENCODE_CONFIG_CONTENT"])["mcp"]),
+                             ["globex_cloud_eu", "globex_cloud_web"], args)
 
     def test_a_directory_of_another_project_is_refused(self):
         database(self.db, ("anthropic", "Anthropic"))
@@ -593,6 +597,32 @@ class ShimTests(unittest.TestCase):
         sub = self.repo / "src"
         sub.mkdir()
         self.assertEqual(self.started(self.run_tool(str(sub)))["argv"], [str(sub), "--standalone"])
+
+    def test_a_directory_of_another_project_after_options_is_refused(self):
+        database(self.db, ("anthropic", "Anthropic"))
+        other = str(self.other)
+        for args in (["-m", "anthropic/claude-sonnet-4-5", other], ["--agent", "build", "--port", "4096", other],
+                     ["-c", other], ["run", "--dir", other, "hi"], ["run", f"--dir={other}", "hi"],
+                     ["acp", "--cwd", other]):
+            with self.subTest(args=args):
+                out = self.run_tool(*args)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn(f"opencode not started: {other} belongs to globex, this folder to demo", out.stderr)
+        for args in (["--newer-option", other], ["--cors", "http://a", other]):  # its value, or the folder?
+            with self.subTest(args=args):
+                out = self.run_tool(*args)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn(f"Keyfit can't tell whether {other} is a value of {args[0]} or the folder OpenCode "
+                              f"opens", out.stderr)
+
+    def test_continue_is_a_session_not_a_sign_in(self):
+        out = self.run_tool("-c", ".", "auth")  # -c takes no value: `.` is the folder, so this is no sign-in
+        self.assertEqual((out.returncode, out.stdout), (1, ""))
+        self.assertIn("keyfit: opencode not started, demo needs attention", out.stderr)  # checked
+        database(self.db, ("anthropic", "Anthropic"))
+        seen = self.started(self.run_tool("-c", ".", "auth"))
+        self.assertEqual(seen["argv"], ["-c", ".", "auth", "--standalone"])
+        self.assertEqual(sorted(json.loads(seen["env"]["OPENCODE_CONFIG_CONTENT"])["mcp"]), ["globex_cloud_eu"])
 
     def test_project_without_an_opencode_account_forgets_another_projects_database(self):
         seen = self.started(self.run_tool(cwd=self.other, OPENCODE_DB=str(self.db), KEYFIT_OPENCODE="work"))
@@ -617,6 +647,17 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(self.args("session"), ["session"])  # its help takes no --standalone
         self.assertEqual(self.args("acp"), ["acp"])  # always a private server
         self.assertEqual(self.args("--standalone", "run", "x"), ["--standalone", "run", "x"])
+
+    def test_the_folder_opencode_opens(self):
+        (self.tmp / "web").mkdir()
+        for args, folder in ((["web"], "web"), (["-c", "web"], "web"), (["-m", "x/y", "--port", "1", "web"], "web"),
+                             (["--cors", "http://a", "--fork", "web"], "web"), (["run", "--dir", "web", "x"], "web"),
+                             (["acp", "--cwd", "web"], "web"), (["run", "web"], None), (["mcp", "web"], None),
+                             (["missing"], None), (["--", "web"], None), (["--new-option", "."], None),
+                             (["--new-option", "value", "-c", "web"], "web")):
+            self.assertEqual(opencode_folder(args, self.tmp), folder, args)
+        with self.assertRaises(Refused):
+            opencode_folder(["--new-option", "web"], self.tmp)
 
     def test_server_option_is_refused(self):
         for given in (["--server", "http://x"], ["run", "--server=http://x", "hi"]):

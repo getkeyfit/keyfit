@@ -55,12 +55,14 @@ class Unhideable(Exception):
 
 
 class Unreadable(Exception):
-    """A config file an agent loads (*path*) can't be parsed, so its servers can't be hidden; without a path,
-    OPENCODE_CONFIG_CONTENT from the environment is not a JSON object, so no server can be added to it."""
+    """A config file an agent loads (*path*) can't be parsed, so its servers can't be hidden; with *option*, the JSON
+    given to that option on the command line is not an object; without either, OPENCODE_CONFIG_CONTENT from the
+    environment is not a JSON object, so no server can be added to it."""
 
-    def __init__(self, path: Path | None = None):
-        super().__init__(str(path or ""))
+    def __init__(self, path: Path | None = None, option: str | None = None):
+        super().__init__(str(path or option or ""))
         self.path = path
+        self.option = option
 
 
 def _read(path: Path, toml: bool = False, strict: bool = False) -> dict:
@@ -282,21 +284,48 @@ def _user_statusline(env: dict) -> bool:
         return False
 
 
-def claude_settings(project: Project, env: dict, cwd: Path, owners: dict | None = None) -> dict:
-    """Claude's --settings for a session of *project*. A name is denied when any of its definitions must be hidden (the
-    deny goes by name, for every scope). Unreadable: ~/.claude.json or the folder's .mcp.json can't be parsed."""
-    denied = list(dict.fromkeys(name for name, spec in claude_servers(env, cwd, strict=True)
-                                if hidden(name, spec, project, owners, env=env)))
+def _claude_given(value: str, cwd: Path, option: str) -> dict:
+    """The JSON object given to Claude's *option* on the command line: inline, or the file it names (from *cwd*)."""
+    if value.lstrip().startswith("{"):
+        try:
+            data = json.loads(value)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise Unreadable(option=option)
+        return data
+    path = cwd / Path(value).expanduser()
+    if not path.is_file():
+        raise Unreadable(path)
+    return _read(path, strict=True)
+
+
+def claude_settings(project: Project, env: dict, cwd: Path, owners: dict | None = None, given: str | None = None,
+                    configs=()) -> dict:
+    """Claude's --settings for a session of *project*: Keyfit's keys merged into *given*, your own --settings (the hidden
+    servers added to yours, background sessions off, the status line only where you set none). A name is denied when
+    any of its definitions must be hidden (the deny goes by name, for every scope), the servers of `--mcp-config` (the
+    files or JSON in *configs*) too. Unreadable: ~/.claude.json, the folder's .mcp.json, *given* or a config can't be
+    parsed."""
+    servers = claude_servers(env, cwd, strict=True)
+    for value in configs:
+        servers += [(name, spec) for name, spec in _table(_claude_given(value, cwd, "--mcp-config").get("mcpServers")).items()
+                    if isinstance(spec, dict)]
+    denied = list(dict.fromkeys(name for name, spec in servers if hidden(name, spec, project, owners, env=env)))
     local = _table(_read(cwd / ".mcp.json", strict=True).get("mcpServers"))
     disabled = [name for name, spec in local.items()
                 if isinstance(spec, dict) and hidden(name, spec, project, owners, verified=False, env=env)]
-    settings = {"disableAgentView": True}  # background sessions would run with their supervisor's first environment
-    if not _user_statusline(env):
+    settings = _claude_given(given, cwd, "--settings") if given is not None else {}
+    settings["disableAgentView"] = True  # background sessions would run with their supervisor's first environment
+    if "statusLine" not in settings and not _user_statusline(env):
         settings["statusLine"] = {"type": "command", "command": statusline_command()}
     if denied:
-        settings["deniedMcpServers"] = [{"serverName": name} for name in denied]
+        theirs = settings.get("deniedMcpServers") if isinstance(settings.get("deniedMcpServers"), list) else []
+        settings["deniedMcpServers"] = theirs + [entry for entry in ({"serverName": name} for name in denied)
+                                                 if entry not in theirs]
     if disabled:
-        settings["disabledMcpjsonServers"] = disabled
+        theirs = settings.get("disabledMcpjsonServers") if isinstance(settings.get("disabledMcpjsonServers"), list) else []
+        settings["disabledMcpjsonServers"] = theirs + [name for name in disabled if name not in theirs]
     return settings
 
 
@@ -354,20 +383,42 @@ def codex_servers(env: dict, cwd: Path | None = None, profile: str | None = None
     return servers
 
 
-def _codex_option(args, short: str, long: str) -> str | None:
-    """The value of a Codex option (`-p NAME`, `-pNAME`, `--profile NAME`, `--profile=NAME`; the last one counts);
-    words after `--` are a prompt."""
-    found = None
+def _codex_values(args, short: str, long: str) -> list[str | None]:
+    """Every value of a Codex option, in order (`-p NAME`, `-pNAME`, `--profile NAME`, `--profile=NAME`); words after
+    `--` are a prompt."""
+    found = []
     for i, arg in enumerate(args):
         if arg == "--":
             break
         if arg in (short, long):
-            found = args[i + 1] if i + 1 < len(args) else None
+            found.append(args[i + 1] if i + 1 < len(args) else None)
         elif arg.startswith(long + "="):
-            found = arg[len(long) + 1:]
+            found.append(arg[len(long) + 1:])
         elif arg.startswith(short) and not arg.startswith("--"):
-            found = arg[len(short):].removeprefix("=")
+            found.append(arg[len(short):].removeprefix("="))
     return found
+
+
+def _codex_option(args, short: str, long: str) -> str | None:
+    """The value of a Codex option (the last one counts)."""
+    found = _codex_values(args, short, long)
+    return found[-1] if found else None
+
+
+def codex_reenabled(args, overrides: list[str]) -> str | None:
+    """The first -c of *args* that would turn a server *overrides* switch off back on: its `enabled` set to anything
+    but false, or its whole table (or all of mcp_servers) set anew. Codex applies them in order, after Keyfit's; it
+    trims the key and splits it on every dot."""
+    names = {o.removeprefix("mcp_servers.").removesuffix(".enabled=false") for o in overrides if o != "-c"}
+    for value in _codex_values(args, "-c", "--config") if names else ():
+        key, eq, setting = (value or "").partition("=")
+        parts = key.strip().split(".")
+        if not eq or parts[0] != "mcp_servers":
+            continue
+        if len(parts) == 1 or (parts[1] in names and (len(parts) == 2 or (parts[2:] == ["enabled"]
+                                                                           and setting.strip() != "false"))):
+            return value
+    return None
 
 
 def codex_overrides(project: Project, env: dict, owners: dict | None = None, cwd: Path | None = None,

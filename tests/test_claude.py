@@ -299,6 +299,71 @@ class McpTests(unittest.TestCase):
         self.assertEqual(adjust_args("claude", self.acme, ["-p", "hi"], dict(self.env), self.repo, self.owners)[2:],
                          ["-p", "hi"])
 
+    def session(self, *args):
+        """Claude's command line for a session of acme, and the one --settings Keyfit gives it."""
+        out = adjust_args("claude", self.acme, list(args), dict(self.env), self.repo, self.owners)
+        self.assertEqual(out[:out.index("--") if "--" in out else len(out)].count("--settings"), 1, out)
+        return out[2:], json.loads(out[1])
+
+    def test_your_own_settings_get_keyfits_keys_merged_in(self):
+        self.state({"mcpServers": {"globex_cloud_eu": {"command": "x"}}})
+        (self.repo / ".mcp.json").write_text(json.dumps({"mcpServers": {"linear": LINEAR}}))
+        (self.repo / "mine.json").write_text(json.dumps({
+            "model": "opus", "disableAgentView": False, "statusLine": {"type": "command", "command": "mine"},
+            "deniedMcpServers": [{"serverUrl": "https://x.example/*"}], "disabledMcpjsonServers": ["noisy"]}))
+        for given in (["--settings", "mine.json"], [f"--settings={self.repo / 'mine.json'}"],
+                      ["--settings", (self.repo / "mine.json").read_text()]):
+            with self.subTest(given=given[0]):
+                rest, settings = self.session(*given, "-p", "hi")
+                self.assertEqual(rest, ["-p", "hi"])
+                self.assertEqual((settings["model"], settings["disableAgentView"], settings["statusLine"]["command"]),
+                                 ("opus", True, "mine"))
+                self.assertEqual(settings["deniedMcpServers"],
+                                 [{"serverUrl": "https://x.example/*"}, {"serverName": "globex_cloud_eu"}])
+                self.assertEqual(settings["disabledMcpjsonServers"], ["noisy", "linear"])
+        _, settings = self.session("--settings", '{"model": "opus"}', "-p", "hi")
+        self.assertIn("keyfit/statusline.py", settings["statusLine"]["command"])  # you set none: Keyfit's
+
+    def test_a_settings_file_with_variables_is_never_put_on_the_command_line(self):
+        secret = "sk-ant-never-on-argv-0000"
+        (self.repo / "mine.json").write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": secret}}))
+        with self.assertRaises(Refused) as refused:
+            adjust_args("claude", self.acme, ["--settings", "mine.json", "-p", "hi"], dict(self.env), self.repo, self.owners)
+        self.assertIn("keyfit: claude not started: your --settings file mine.json sets variables (env)", str(refused.exception))
+        self.assertNotIn(secret, str(refused.exception))
+        _, settings = self.session("--settings", json.dumps({"env": {"X": "1"}}), "-p", "hi")  # yours on it already
+        self.assertEqual(settings["env"], {"X": "1"})
+
+    def test_the_last_of_your_settings_counts_and_none_comes_after_keyfits(self):
+        rest, settings = self.session("--settings", '{"model": "a"}', "-p", "hi", "--settings={\"model\": \"b\"}",
+                                      "--", "--settings", "x")
+        self.assertEqual((settings["model"], rest), ("b", ["-p", "hi", "--", "--settings", "x"]))
+
+    def test_settings_keyfit_cannot_read_stop_the_start(self):
+        (self.repo / "broken.json").write_text('{"model": ')
+        for given, shown in ((["--settings", "broken.json"], f"Keyfit can't parse {self.repo / 'broken.json'}"),
+                             (["--settings", "missing.json"], f"Keyfit can't parse {self.repo / 'missing.json'}"),
+                             (["--settings", '{"model": '], "the JSON given to --settings is not a JSON object"),
+                             (["--mcp-config", "broken.json"], f"Keyfit can't parse {self.repo / 'broken.json'}"),
+                             (["--mcp-config", "[]"], f"Keyfit can't parse {self.repo / '[]'}"),
+                             (["--mcp-config", "{}x"], "the JSON given to --mcp-config is not a JSON object")):
+            with self.subTest(given=given):
+                with self.assertRaises(Refused) as refused:
+                    adjust_args("claude", self.acme, [*given, "-p", "hi"], dict(self.env), self.repo, self.owners)
+                self.assertIn(f"keyfit: claude not started: {shown}", str(refused.exception))
+                self.assertIn("KEYFIT_DISABLE=1 claude", str(refused.exception))
+
+    def test_servers_of_mcp_config_are_denied(self):
+        (self.repo / "globex.json").write_text(json.dumps({"mcpServers": {"globex_cloud_eu": {"command": "x"}}}))
+        inline = json.dumps({"mcpServers": {"linear_globex": GLOBEX_LINEAR, "paper": {"url": "http://p"}}})
+        for given in (["--mcp-config", "globex.json", inline], [f"--mcp-config={self.repo / 'globex.json'}",
+                                                                "--mcp-config", inline, "--strict-mcp-config"]):
+            with self.subTest(given=given):
+                rest, settings = self.session(*given, "-p", "hi")
+                self.assertEqual(rest, [*given, "-p", "hi"])
+                self.assertEqual(sorted(s["serverName"] for s in settings["deniedMcpServers"]),
+                                 ["globex_cloud_eu", "linear_globex"])
+
     def test_a_local_definition_of_a_claimed_google_server_is_checked(self):
         work, personal = self.home / ".gmail-mcp" / "work.json", self.home / ".gmail-mcp" / "personal.json"
         gmail = {"command": "npx", "args": ["-y", "@gongrzhe/server-gmail-autoauth-mcp"]}

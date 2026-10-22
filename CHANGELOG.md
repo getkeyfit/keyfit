@@ -517,6 +517,32 @@ From the third pre-launch review:
   `opencode.json`, `.github/mcp.json`, `.gemini/settings.json`, Codex's project config): a repository's
   client turned "the token belongs to someone@gmail.com" into an `account not confirmed` warning. It is
   read only from a regular file of at most 64 KB: a FIFO or `/dev/zero` hung the check.
+- **An agent pointed at another project's folder is refused, also after options.**
+  `opencode -m anthropic/claude-sonnet-4-5 ~/code/globex` opened globex with this folder's accounts:
+  Keyfit stopped looking for the folder at the first word that wasn't one, and hid the MCP servers of
+  this folder, not globex's. OpenCode's options are now read from its CLI reference, `opencode run
+  --dir DIR` and `opencode acp --cwd DIR` are checked too, and a folder after an option Keyfit doesn't
+  know is refused, since it may be that option's value. `codex -C DIR` (`--cd`) had no folder check
+  at all; it now has the one `copilot -C` has.
+- **A later word no longer turns a session into the agent's own command.** Keyfit took the first known
+  word anywhere on the line: `gemini summarize the mcp setup`, `gemini why do my hooks fail` and
+  `claude --add-dir ../lib agents` started sessions without `--allowed-mcp-server-names` or
+  `--settings`, so every MCP server was visible (`codex`, `copilot` and `opencode` alike). Only the
+  first command word, after the agent's own options, counts now; a line Keyfit can't read for sure
+  starts as a session, with the checks and the hiding.
+- **Each agent's options are read as that agent reads them.** One list of options with a value served
+  all thirteen tools, and in it `-c` took one, though for Claude and OpenCode it is `--continue`:
+  `claude -c fix auth` and `opencode -c . auth` were taken for sign-in commands and started without
+  checks, refusals or hidden servers (OpenCode also without `--standalone`).
+- **Your own options can't bring hidden MCP servers back.** A `--settings` of yours after Keyfit's
+  replaced it (Claude keeps the last one), and Codex's `-c mcp_servers.NAME.enabled=true` after
+  Keyfit's `enabled=false` turned the server back on. Keyfit now merges its keys into your last
+  `--settings` (a file or JSON) and passes one: the hidden servers added to your `deniedMcpServers`
+  and `disabledMcpjsonServers`, `disableAgentView` on, its status line only where you set none. A
+  `--settings` file that sets `env` is refused rather than put on Claude's command line, where every
+  process can read it. Servers of `claude --mcp-config` files and JSON are hidden like those of
+  `~/.claude.json`. A Codex `-c` that turns a hidden server on, or sets its table or `mcp_servers`
+  anew, is refused.
 
 ## [0.1.0] - 2026-10-12
 

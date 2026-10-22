@@ -83,7 +83,14 @@ OPENCODE_SHARED = {"upgrade", "update", "uninstall", "api", "debug", "mcp", "plu
 OPENCODE_NO_SERVER = {"upgrade", "update", "uninstall"}
 # Commands that take --standalone: a private server, with the session's environment and the project's sign-ins.
 OPENCODE_STANDALONE = {None, "run", "mini", "models", "stats", "session", "auth", "api", "reload"}
-OPENCODE_VALUED = {"--server", "--session", "-s", "--prompt", "--log-level", "--completions"}
+# OpenCode's options (opencode.ai/docs/cli) that take a value, those that take several (yargs arrays) and its flags,
+# to find the folder `opencode DIRECTORY` opens after them.
+OPENCODE_VALUED = {"--server", "--session", "-s", "--prompt", "--log-level", "--completions", "-m", "--model", "--agent",
+                   "--port", "--hostname", "--mdns-domain", "--command", "--format", "--title", "--attach", "-p",
+                   "--password", "-u", "--username", "--dir", "--variant", "--cwd"}
+OPENCODE_SEVERAL = {"--cors", "-f", "--file"}
+OPENCODE_FLAGS = {"-c", "--continue", "--fork", "--auto", "--mdns", "--print-logs", "--pure", "--standalone",
+                  "--thinking", "-h", "--help", "-v", "--version"}
 COPILOT_SUBCOMMANDS = {"app", "login", "help", "init", "config", "update", "version", "workflow", "sessions",
                        "memories", "plugin", "mcp", "skill", "instruction", "lsp", "sandbox", "completion"}
 COPILOT_SESSIONS = {None, "init", "workflow"}  # they run the agent: its MCP servers start
@@ -154,27 +161,58 @@ VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query
 # gh's options that decide which account's token `gh auth token` and `status` print, and those taking a value.
 GH_SHORT = {"h": "--hostname", "u": "--user", "t": "--show-token", "a": "--active"}
 GH_VALUED = {"--hostname", "--user", "--json", "--jq", "--template"}
+# Each agent's own options that take a value, and those that take every word up to the next option
+# (`claude --add-dir ../a ../b`), from their CLI references: `-c` is `--continue` for Claude and OpenCode and takes none.
+AGENT_OPTIONS = {
+    "claude": ({"--advisor", "--agent", "--agents", "--append-subagent-system-prompt",
+                "--append-subagent-system-prompt-file", "--append-system-prompt", "--append-system-prompt-file",
+                "--autocompact", "--debug-file", "--effort", "--environment", "--exec", "--fallback-model", "--from-pr",
+                "--input-format", "--json-schema", "--max-budget-usd", "--max-turns", "--model", "-n", "--name",
+                "--output-format", "--permission-mode", "--permission-prompt-tool", "--permission-prompts",
+                "--plugin-url", "--ref", "--remote-control", "--rc", "--remote-control-session-name-prefix", "-r",
+                "--resume", "--session-id", "--setting-sources", "--settings", "--system-prompt", "--system-prompt-file",
+                "--system-prompt-snapshot", "--teammate-mode", "-w", "--worktree"},
+               {"--add-dir", "--allowedTools", "--allowed-tools", "--betas", "--channels",
+                "--dangerously-load-development-channels", "--disallowedTools", "--disallowed-tools", "--file",
+                "--mcp-config", "--plugin-dir", "--tools"}),
+    "codex": ({"-c", "--config", "--enable", "--disable", "-m", "--model", "--local-provider", "-p", "--profile", "-s",
+               "--sandbox", "-a", "--ask-for-approval", "-C", "--cd", "--add-dir", "--remote", "--remote-auth-token-env",
+               "--color", "-o", "--output-last-message", "--output-schema"},
+              {"-i", "--image"}),
+    "opencode": (OPENCODE_VALUED, OPENCODE_SEVERAL),
+    "copilot": ({"-C", "--config-dir", "--additional-mcp-config", "--enable-mcp-server", "--disable-mcp-server",
+                 "--model", "-p", "--prompt", "--agent", "--log-level", "--log-dir"}, set()),
+    "gemini": ({"-m", "--model", "-p", "--prompt", "-i", "--prompt-interactive", "-w", "--worktree", "--approval-mode",
+                "-r", "--resume", "--delete-session", "-o", "--output-format"},
+               {"--allowed-mcp-server-names", "--allowedMcpServerNames", "--allowed-tools", "-e", "--extensions",
+                "--include-directories"}),
+}
 
 
 class Refused(Exception):
     pass
 
 
-def positionals(args: list[str]) -> list[str]:
-    """The command words, skipping options and the values of VALUE_OPTIONS. An option Keyfit does not know may
-    take the next word as its value (`claude --add-dir auth` starts a session), so the words stop there: an
-    unclear command line is never taken for a sign-in command, which would skip every check."""
+def positionals(args: list[str], tool: str | None = None) -> list[str]:
+    """The command words, skipping options and the values of the tool's options (AGENT_OPTIONS, else VALUE_OPTIONS).
+    An option Keyfit does not know may take the next word as its value (`claude --verbose auth` …), so the words stop
+    there: an unclear command line is never taken for a sign-in command, which would skip every check."""
+    valued, several = AGENT_OPTIONS.get(tool, (VALUE_OPTIONS, set()))
     out = []
+    taking = False  # the words of an option that takes several
     for i, arg in enumerate(args):
         if arg == "--":
             break
-        if i > 0 and args[i - 1] in VALUE_OPTIONS:
+        if i > 0 and args[i - 1] in valued:
             continue
         if arg.startswith("-"):
-            if "=" not in arg and arg not in VALUE_OPTIONS and i + 1 < len(args) and not args[i + 1].startswith("-"):
+            taking = arg in several
+            if "=" not in arg and arg not in valued and not taking and i + 1 < len(args) \
+                    and not args[i + 1].startswith("-"):
                 break
             continue
-        out.append(arg)
+        if not taking:
+            out.append(arg)
     return out
 
 
@@ -183,21 +221,18 @@ def is_login_command(tool: str, args: list[str]) -> bool:
         return args in GEMINI_SIGN_INS
     readers = {"supabase": supabase.words, "wrangler": cloudflare.words, "convex": convex.words, "gcloud": gcloud.words,
                "firebase": firebase.words}
-    words = readers.get(tool, positionals)(args)
+    words = readers[tool](args) if tool in readers else positionals(args, tool)
     if tool == "convex" and words[:2] == ["login", "status"]:
         return False
     return any(tuple(words[:len(prefix)]) == prefix for prefix in LOGIN_COMMANDS.get(tool, ()))
 
 
-def subcommand(args: list[str], known: set[str]) -> str | None:
-    previous = None
-    for arg in args:
-        if arg == "--":
-            return None
-        if arg in known and (previous is None or not previous.startswith("-")):
-            return arg
-        previous = arg
-    return None
+def subcommand(tool: str, args: list[str], known: set[str]) -> str | None:
+    """The tool's own command: its first command word (positionals), when that is one of *known*. A later word never
+    is (`gemini summarize the mcp setup` is a session), and an unclear command line has none: it is a session, with
+    the checks and the MCP hiding."""
+    words = positionals(args, tool)
+    return words[0] if words and words[0] in known else None
 
 
 def requested_profiles(args: list[str]) -> list[str]:
@@ -234,16 +269,26 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
     if tool == "firebase":
         return firebase_args(project, args, env, cwd)
     if tool == "claude":
-        if subcommand(args, CLAUDE_SUBCOMMANDS):
+        if subcommand(tool, args, CLAUDE_SUBCOMMANDS):
             return args
         env["CLAUDE_CODE_DISABLE_AGENT_VIEW"] = "1"  # no background sessions, also from ← and /background
+        given, configs, rest = claude_given(args)  # one --settings: a repeated option keeps its last value
         try:
-            settings = mcp.claude_settings(project, env, cwd, owners)
+            settings = mcp.claude_settings(project, env, cwd, owners, given[-1] if given else None, configs)
         except mcp.Unreadable as error:
+            if error.option:
+                raise Refused(f"keyfit: claude not started: the JSON given to {error.option} is not a JSON object "
+                              f"Keyfit can read, so it can't hide the MCP servers {project.name} must not see.\n"
+                              f"  Fix it (bypass once: KEYFIT_DISABLE=1 claude …)") from None
             raise unreadable(tool, project, error) from None
-        return (["--settings", json.dumps(settings)] if settings else []) + args
+        if given and not given[-1].lstrip().startswith("{") and settings.get("env"):  # a file, kept off the command line
+            raise Refused(f"keyfit: claude not started: your --settings file {printable(given[-1])} sets variables (env), "
+                          f"and Keyfit would have to put them on Claude's command line, where every process can read "
+                          f"them, to add the MCP servers {project.name} must not see.\n  Set them in your shell instead "
+                          f"(bypass once: KEYFIT_DISABLE=1 claude …)")
+        return (["--settings", json.dumps(settings)] if settings else []) + rest
     if tool == "codex":
-        sub = subcommand(args, CODEX_SUBCOMMANDS)
+        sub = subcommand(tool, args, CODEX_SUBCOMMANDS)
         if sub in CODEX_SHARED:
             raise Refused(f"keyfit: codex not started: `codex {sub}` works on Codex's shared app server, which keeps "
                           f"the environment it started with for every folder: {project.name}'s accounts could reach "
@@ -259,6 +304,10 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
             raise Refused(f"keyfit: codex not started, {project.name} must not see MCP server {printable(str(server))}, "
                           f"and Codex cannot hide a name with a dot, \"=\" or a space at either end.\n"
                           f"  Rename it in ~/.codex/config.toml (underscores work), or remove it.") from None
+        back = mcp.codex_reenabled(args, extra)
+        if back:
+            raise Refused(f"keyfit: this folder belongs to {project.name}; refusing -c {printable(back)}: it would turn "
+                          f"on an MCP server {project.name} must not see.\n  Bypass once: KEYFIT_DISABLE=1 codex …")
         if sub in CODEX_NO_DAEMON:
             extra.append("--no-daemon")  # the shared daemon keeps the first launcher's environment
         return extra + args
@@ -354,7 +403,7 @@ def claude_background(args: list[str], env: dict, project: Project | None) -> No
     if project is None and not session:
         return
     end = args.index("--") if "--" in args else len(args)
-    sub = subcommand(args, CLAUDE_SUBCOMMANDS)
+    sub = subcommand("claude", args, CLAUDE_SUBCOMMANDS)
     if sub == "daemon":
         words = [a for a in args[:end] if not a.startswith("-")]
         after = words[words.index(sub) + 1:][:1]
@@ -378,6 +427,31 @@ def claude_background(args: list[str], env: dict, project: Project | None) -> No
                   f"one.\n  Bypass once, with your own environment: KEYFIT_DISABLE=1 claude …")
 
 
+def claude_given(args: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """(the values of your own --settings, those of --mcp-config, the command line without --settings): `--settings X`,
+    `--settings=X`, and every word after --mcp-config up to the next option. A word that looks like an option counts as
+    one; words after `--` are a prompt."""
+    end = args.index("--") if "--" in args else len(args)
+    settings, configs, rest = [], [], []
+    taking, i = False, 0
+    while i < end:
+        arg = args[i]
+        name, eq, value = arg.partition("=")
+        if arg.startswith("-"):
+            taking = arg == "--mcp-config"
+        elif taking:
+            configs.append(arg)
+        if name == "--mcp-config" and eq:
+            configs.append(value)
+        if name == "--settings" and (eq or i + 1 < end):
+            settings.append(value if eq else args[i + 1])
+            i += 1 if eq else 2
+            continue
+        rest.append(arg)
+        i += 1
+    return settings, configs, rest + args[end:]
+
+
 def codex_private(args: list[str], env: dict) -> list[str]:
     """Codex in a folder outside every project. In your terminal it runs unchanged. Inside a session Keyfit started
     (KEYFIT_PROJECT set), the environment holds that project's accounts, which Codex's shared app server, started now,
@@ -385,7 +459,7 @@ def codex_private(args: list[str], env: dict) -> list[str]:
     refused."""
     if not env.get("KEYFIT_PROJECT"):
         return args
-    sub = subcommand(args, CODEX_SUBCOMMANDS)
+    sub = subcommand("codex", args, CODEX_SUBCOMMANDS)
     if sub in CODEX_SHARED:
         raise Refused(f"keyfit: codex not started: inside a session of {printable(env['KEYFIT_PROJECT'])}, "
                       f"`codex {sub}` could start Codex's shared app server with that project's accounts, and every "
@@ -398,7 +472,7 @@ def opencode_standalone(args: list[str]) -> list[str]:
     """Add --standalone (OpenCode's private server, with this environment) where the command takes it, unless a
     server is named already. `opencode auth` and `opencode session` alone print their commands and take none."""
     end = args.index("--") if "--" in args else len(args)
-    sub = subcommand(args, OPENCODE_SUBCOMMANDS)
+    sub = subcommand("opencode", args, OPENCODE_SUBCOMMANDS)
     if sub not in OPENCODE_STANDALONE:
         return args
     if sub in ("auth", "session") and not any(not a.startswith("-") for a in args[args.index(sub) + 1:end]):
@@ -416,7 +490,7 @@ def opencode_server_option(project: Project, args: list[str]) -> None:
         raise Refused(f"keyfit: this folder belongs to {project.name}; refusing --server: OpenCode would run with "
                       f"that server's sign-ins and environment, not {project.name}'s.\n"
                       f"  Bypass once: KEYFIT_DISABLE=1 opencode …")
-    if subcommand(args, OPENCODE_SUBCOMMANDS) == "acp" and "--login" in args[:end]:
+    if subcommand("opencode", args, OPENCODE_SUBCOMMANDS) == "acp" and "--login" in args[:end]:
         raise Refused(f"keyfit: this folder belongs to {project.name}; refusing `opencode acp --login`: it signs in "
                       f"through OpenCode's background server, not {project.name}'s database.\n"
                       f"  Sign in with: opencode auth login   (Keyfit sends it to {project.name}'s database)")
@@ -430,7 +504,7 @@ def opencode_private(args: list[str], env: dict) -> list[str]:
     end = args.index("--") if "--" in args else len(args)
     if not env.get("KEYFIT_PROJECT") or any(a == "--server" or a.startswith("--server=") for a in args[:end]):
         return args  # your own environment, or a server you named: none is started
-    sub = subcommand(args, OPENCODE_SUBCOMMANDS)
+    sub = subcommand("opencode", args, OPENCODE_SUBCOMMANDS)
     if sub in OPENCODE_NO_SERVER or (sub == "acp" and "--login" not in args[:end]):  # acp: always a private server
         return args
     standalone = opencode_standalone(args)
@@ -470,29 +544,51 @@ def opencode_args(project: Project, args: list[str], env: dict, cwd: Path, owner
     opencode_server_option(project, args)
     if "opencode" in project.connections:
         opencode.scrub(env, seen)
-    folder = opencode_folder(args)
-    opencode_mcp(project, env, Path(folder).resolve() if folder else cwd, owners)
+    folder = opencode_folder(args, cwd)
+    opencode_mcp(project, env, (cwd / folder).resolve() if folder else cwd, owners)
     return opencode_standalone(args)
 
 
-def opencode_folder(args: list[str]) -> str | None:
-    """The folder `opencode DIRECTORY` starts in, when one is named."""
-    skip = False
-    for arg in args:
-        if arg == "--":
-            return None
+def opencode_folder(args: list[str], cwd: Path | None = None) -> str | None:
+    """The folder OpenCode works in, when one is named (relative to *cwd*, default the current folder): `opencode
+    DIRECTORY`, `run --dir DIRECTORY`, `acp --cwd DIRECTORY`. Refused: a folder after an option Keyfit doesn't know
+    (or one that takes several values), which may take that folder as its value or leave it to OpenCode."""
+    base = Path(cwd or os.curdir)
+    end = args.index("--") if "--" in args else len(args)
+    named = [value if eq else args[i + 1] if i + 1 < end else ""
+             for i, (name, eq, value) in enumerate(arg.partition("=") for arg in args[:end]) if name in ("--dir", "--cwd")]
+    if named:
+        return named[-1] if named[-1] and (base / named[-1]).is_dir() else None
+    if subcommand("opencode", args, OPENCODE_SUBCOMMANDS):
+        return None
+    skip, unclear = False, None  # unclear: an option whose words, up to the next option, may be its values
+    for arg in args[:end]:
         if skip:
             skip = False
         elif arg.startswith("-"):
             skip = arg in OPENCODE_VALUED
+            unclear = None if skip or "=" in arg or arg in OPENCODE_FLAGS else arg
+        elif unclear:
+            if (base / arg).is_dir() and (base / arg).resolve() != base.resolve():
+                raise Refused(f"keyfit: opencode not started: Keyfit can't tell whether {printable(arg)} is a value of "
+                              f"{printable(unclear)} or the folder OpenCode opens, which would get this folder's "
+                              f"accounts.\n  Name the folder first (opencode DIR {printable(unclear)} …), or the value "
+                              f"with = ({printable(unclear)}=VALUE)   (bypass once: KEYFIT_DISABLE=1 opencode …)")
         else:
-            return arg if subcommand([arg], OPENCODE_SUBCOMMANDS) is None and os.path.isdir(arg) else None
+            return arg if arg not in OPENCODE_SUBCOMMANDS and (base / arg).is_dir() else None
     return None
 
 
+def codex_folder(args: list[str], cwd: Path | None = None) -> str | None:
+    """The folder `codex -C DIRECTORY` (or `--cd`) works in, when it is one."""
+    folder = mcp._codex_option(args, "-C", "--cd")
+    return folder if folder and os.path.isdir(os.path.join(cwd or os.curdir, folder)) else None
+
+
 def folder_check(tool: str, folder: str | None, registry: Registry, project: Project | None) -> None:
-    """`opencode DIRECTORY` and `copilot -C DIRECTORY` work in that folder with this folder's accounts: refuse when
-    the two folders belong to different projects (or only one is registered)."""
+    """`opencode DIRECTORY` (`run --dir`, `acp --cwd`), `copilot -C DIRECTORY` and `codex -C DIRECTORY` work in that
+    folder with this folder's accounts: refuse when the two folders belong to different projects (or only one is
+    registered)."""
     if folder is None:
         return
     there = resolve(folder, registry).project
@@ -531,7 +627,7 @@ def copilot_folder(args: list[str], cwd: Path | None = None) -> str | None:
 def copilot_args(project: Project, args: list[str], env: dict, cwd: Path, owners: dict | None = None) -> list[str]:
     """Sessions (and `init` and `workflow`, which run the agent) start with every MCP server the project must not
     see switched off by name, for the folder Copilot works in; `--enable-mcp-server` cannot bring one back."""
-    sub = subcommand(args, COPILOT_SUBCOMMANDS)
+    sub = subcommand("copilot", args, COPILOT_SUBCOMMANDS)
     if sub == "login":  # an option before it hid it from the sign-in commands (`copilot -C DIR login`)
         copilot_login_check(project)
         for var in LOGIN_SCRUB["copilot"]:
@@ -564,7 +660,7 @@ def gemini_args(project: Project, args: list[str], env: dict, cwd: Path, owners:
     conn = project.connections.get("gemini")
     if isinstance(conn, dict):
         gemini.scrub(conn, env)
-    if subcommand(args, GEMINI_SUBCOMMANDS):
+    if subcommand("gemini", args, GEMINI_SUBCOMMANDS):
         return args
     try:
         hide, kept = mcp.gemini_hidden(project, env, cwd, owners)
@@ -1324,7 +1420,7 @@ def main(argv: list[str]) -> int:
     env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
 
     try:
-        sub = subcommand(args, OPENCODE_SUBCOMMANDS) if tool == "opencode" else None
+        sub = subcommand("opencode", args, OPENCODE_SUBCOMMANDS) if tool == "opencode" else None
         if sub in OPENCODE_SHARED:
             return start(real, tool, opencode_private(args, env), env, env,
                          f"opencode {sub} is OpenCode's own command: it runs without a project's accounts or checks")
@@ -1340,8 +1436,9 @@ def main(argv: list[str]) -> int:
             raise Refused(f"keyfit: this session belongs to project {printable(pinned)}, which is not in the registry "
                           f"(renamed or removed?), so {tool} was not started.\n  Start the session again, or bypass "
                           f"once: KEYFIT_DISABLE=1 {tool} …")
-        if tool in ("opencode", "copilot"):
-            folder_check(tool, opencode_folder(args) if tool == "opencode" else copilot_folder(args), registry, project)
+        folders = {"opencode": opencode_folder, "copilot": copilot_folder, "codex": codex_folder}
+        if tool in folders:
+            folder_check(tool, folders[tool](args), registry, project)
         if tool == "claude":  # before the checks, and inside a session outside every project too
             claude_background(args, env, project)
         if project is None:  # not a registered project: exactly as before Keyfit

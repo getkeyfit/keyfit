@@ -208,6 +208,29 @@ class McpConfigTests(unittest.TestCase):
         self.trust(self.repo)
         self.assertEqual(self.hidden(cwd=worktree), ["globex_cloud_eu"])
 
+    def test_your_own_c_cannot_turn_a_hidden_server_back_on(self):
+        # Codex applies -c in order, after Keyfit's: a later one would win
+        self.write(self.home / ".codex" / "config.toml",
+                   '[mcp_servers.globex_cloud_eu]\ncommand = "globex-mcp"\n[mcp_servers.paper]\nurl = "http://p"\n')
+        for given in (["-c", "mcp_servers.globex_cloud_eu.enabled=true"], ["--config", " mcp_servers.globex_cloud_eu.enabled = 1"],
+                      ["--config=mcp_servers.globex_cloud_eu.enabled=true"], ["-cmcp_servers.globex_cloud_eu.enabled=true"],
+                      ["-c", 'mcp_servers.globex_cloud_eu={command = "globex-mcp"}'], ["-c", "mcp_servers={}"]):
+            with self.subTest(given=given):
+                with self.assertRaises(Refused) as refused:
+                    self.hidden(*given)
+                self.assertIn("keyfit: this folder belongs to acme; refusing -c ", str(refused.exception))
+                self.assertIn("it would turn on an MCP server acme must not see", str(refused.exception))
+        for given in (["-c", "mcp_servers.globex_cloud_eu.enabled=false"], ["-c", "mcp_servers.paper.enabled=true"],
+                      ["-c", "mcp_servers.globex_cloud_eu.startup_timeout_sec=5"], ["--", "-c", "mcp_servers={}"]):
+            out = adjust_args("codex", self.acme, ["exec", *given], dict(self.env), self.repo, {"globex": ["globex_cloud_*"]})
+            self.assertEqual(out, ["-c", "mcp_servers.globex_cloud_eu.enabled=false", "exec", *given])
+
+    def test_a_later_word_is_never_codexs_own_command(self):
+        self.write(self.home / ".codex" / "config.toml", '[mcp_servers.globex_cloud_eu]\ncommand = "globex-mcp"\n')
+        for given in (["explain", "the", "agents"], ["-i", "a.png", "b.png", "app-server"]):
+            out = adjust_args("codex", self.acme, given, dict(self.env), self.repo, {"globex": ["globex_cloud_*"]})
+            self.assertEqual(out, ["-c", "mcp_servers.globex_cloud_eu.enabled=false", "--no-daemon", *given])
+
     def test_config_files_with_a_byte_order_mark_and_ones_that_cannot_be_parsed(self):
         config = self.home / ".codex" / "config.toml"
         config.write_text('\ufeff[mcp_servers.globex_cloud_eu]\ncommand = "globex-mcp"\n', encoding="utf-8")
