@@ -299,6 +299,10 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
             raise Refused(f"keyfit: codex not started, {project.name} must not see MCP server {printable(str(server))}, "
                           f"and Codex cannot hide a name with a dot, \"=\" or a space at either end.\n"
                           f"  Rename it in ~/.codex/config.toml (underscores work), or remove it.") from None
+        back = mcp.codex_reenabled(args, extra)
+        if back:
+            raise Refused(f"keyfit: this folder belongs to {project.name}; refusing -c {printable(back)}: it would turn "
+                          f"on an MCP server {project.name} must not see.\n  Bypass once: KEYFIT_DISABLE=1 codex …")
         if sub in CODEX_NO_DAEMON:
             extra.append("--no-daemon")  # the shared daemon keeps the first launcher's environment
         return extra + args

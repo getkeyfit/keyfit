@@ -383,20 +383,42 @@ def codex_servers(env: dict, cwd: Path | None = None, profile: str | None = None
     return servers
 
 
-def _codex_option(args, short: str, long: str) -> str | None:
-    """The value of a Codex option (`-p NAME`, `-pNAME`, `--profile NAME`, `--profile=NAME`; the last one counts);
-    words after `--` are a prompt."""
-    found = None
+def _codex_values(args, short: str, long: str) -> list[str | None]:
+    """Every value of a Codex option, in order (`-p NAME`, `-pNAME`, `--profile NAME`, `--profile=NAME`); words after
+    `--` are a prompt."""
+    found = []
     for i, arg in enumerate(args):
         if arg == "--":
             break
         if arg in (short, long):
-            found = args[i + 1] if i + 1 < len(args) else None
+            found.append(args[i + 1] if i + 1 < len(args) else None)
         elif arg.startswith(long + "="):
-            found = arg[len(long) + 1:]
+            found.append(arg[len(long) + 1:])
         elif arg.startswith(short) and not arg.startswith("--"):
-            found = arg[len(short):].removeprefix("=")
+            found.append(arg[len(short):].removeprefix("="))
     return found
+
+
+def _codex_option(args, short: str, long: str) -> str | None:
+    """The value of a Codex option (the last one counts)."""
+    found = _codex_values(args, short, long)
+    return found[-1] if found else None
+
+
+def codex_reenabled(args, overrides: list[str]) -> str | None:
+    """The first -c of *args* that would turn a server *overrides* switch off back on: its `enabled` set to anything
+    but false, or its whole table (or all of mcp_servers) set anew. Codex applies them in order, after Keyfit's; it
+    trims the key and splits it on every dot."""
+    names = {o.removeprefix("mcp_servers.").removesuffix(".enabled=false") for o in overrides if o != "-c"}
+    for value in _codex_values(args, "-c", "--config") if names else ():
+        key, eq, setting = (value or "").partition("=")
+        parts = key.strip().split(".")
+        if not eq or parts[0] != "mcp_servers":
+            continue
+        if len(parts) == 1 or (parts[1] in names and (len(parts) == 2 or (parts[2:] == ["enabled"]
+                                                                           and setting.strip() != "false"))):
+            return value
+    return None
 
 
 def codex_overrides(project: Project, env: dict, owners: dict | None = None, cwd: Path | None = None,
