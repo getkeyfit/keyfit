@@ -281,6 +281,11 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
                               f"Keyfit can read, so it can't hide the MCP servers {project.name} must not see.\n"
                               f"  Fix it (bypass once: KEYFIT_DISABLE=1 claude …)") from None
             raise unreadable(tool, project, error) from None
+        if given and not given[-1].lstrip().startswith("{") and settings.get("env"):  # a file, kept off the command line
+            raise Refused(f"keyfit: claude not started: your --settings file {printable(given[-1])} sets variables (env), "
+                          f"and Keyfit would have to put them on Claude's command line, where every process can read "
+                          f"them, to add the MCP servers {project.name} must not see.\n  Set them in your shell instead "
+                          f"(bypass once: KEYFIT_DISABLE=1 claude …)")
         return (["--settings", json.dumps(settings)] if settings else []) + rest
     if tool == "codex":
         sub = subcommand(tool, args, CODEX_SUBCOMMANDS)

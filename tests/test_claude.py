@@ -324,6 +324,16 @@ class McpTests(unittest.TestCase):
         _, settings = self.session("--settings", '{"model": "opus"}', "-p", "hi")
         self.assertIn("keyfit/statusline.py", settings["statusLine"]["command"])  # you set none: Keyfit's
 
+    def test_a_settings_file_with_variables_is_never_put_on_the_command_line(self):
+        secret = "sk-ant-never-on-argv-0000"
+        (self.repo / "mine.json").write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": secret}}))
+        with self.assertRaises(Refused) as refused:
+            adjust_args("claude", self.acme, ["--settings", "mine.json", "-p", "hi"], dict(self.env), self.repo, self.owners)
+        self.assertIn("keyfit: claude not started: your --settings file mine.json sets variables (env)", str(refused.exception))
+        self.assertNotIn(secret, str(refused.exception))
+        _, settings = self.session("--settings", json.dumps({"env": {"X": "1"}}), "-p", "hi")  # yours on it already
+        self.assertEqual(settings["env"], {"X": "1"})
+
     def test_the_last_of_your_settings_counts_and_none_comes_after_keyfits(self):
         rest, settings = self.session("--settings", '{"model": "a"}', "-p", "hi", "--settings={\"model\": \"b\"}",
                                       "--", "--settings", "x")
