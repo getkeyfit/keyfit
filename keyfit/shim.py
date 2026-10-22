@@ -42,8 +42,8 @@ INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": 
            "firebase": "npm install -g firebase-tools   (projects that have it run their own: npx firebase-tools …)",
            "npx": "brew install node"}
 # How to map the one account `aws`, `gh` and `vercel` need inside a project before they start there.
-MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github --login <login>",
-       "vercel": "keyfit add vercel"}
+MAP = {"aws": "keyfit add aws --profile <profile>",
+       "github": "keyfit add github --login <a login gh auth status lists>", "vercel": "keyfit add vercel"}
 RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",),
             "wrangler": ("cloudflare",), "convex": ("convex",), "gcloud": ("gcloud",), "firebase": ("firebase",),
             "claude": None, "codex": None, "opencode": None, "copilot": None, "gemini": None}
@@ -1379,6 +1379,9 @@ def main(argv: list[str]) -> int:
                 args = gemini_args(project, args, login_env, Path.cwd(), registry.mcp_owners())
             return start(real, tool, args, env, login_env)
         if relevant and not any(kind in project.connections for kind in relevant):
+            if tool == "gh" and positionals(args)[:2] == ["auth", "status"] and \
+                    not gh_switch(gh_options(args), "--show-token"):  # it lists the logins to map: as a sign-in
+                return start(real, tool, args, env, login_environment(tool, project, env))
             if tool in OPTIONAL:  # no account of its kind: it runs as before Keyfit, minus other projects' tokens
                 return start(real, tool, args, env, environment.build(project, env, kinds=relevant),
                              f"project {project.name} has no {relevant[0]} account mapped: {tool} runs without "

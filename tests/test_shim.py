@@ -406,7 +406,8 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("gh", "pr", "list")
         self.assertEqual(out.returncode, 1)
         self.assertEqual(out.stderr, "keyfit: project demo has no github account mapped, so gh was not started.\n"
-                                     "  Map one: keyfit add github --login <login>   (bypass once: KEYFIT_DISABLE=1 gh …)\n")
+                                     "  Map one: keyfit add github --login <a login gh auth status lists>   (bypass once: "
+                                     "KEYFIT_DISABLE=1 gh …)\n")
 
     def test_login_commands_run_even_when_a_check_fails(self):
         out = self.run_tool("aws", "sso", "login", FAKE_ACCOUNT="999999999999")

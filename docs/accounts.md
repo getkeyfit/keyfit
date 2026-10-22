@@ -145,7 +145,7 @@ shared_aws_profiles = ["ci-worker"]
 - **The tool gets:** `GH_TOKEN`, read from `gh`'s stored login for that account. Other GitHub token variables, `GH_HOST` and `GH_CONFIG_DIR` are removed.
 - **Checked before it starts:** `gh` has a token for the login, and `api.github.com/user` must return that login. A different git author email or SSH host alias in the repository shows as a warning.
 - **Refused in the project:** `--user <another account>` with `gh auth token` or `gh auth status`, `gh auth token --secure-storage` without `--user`, and `gh auth status --show-token` without `--active`. They would print another account's token.
-- **Sign-in commands:** `gh auth login`, `logout`, `refresh`, `switch` and `setup-git` always run, without `GH_TOKEN`, so gh manages its own logins. `gh auth token`, `status` and `git-credential` are checked like any `gh` command and answer with the project's token.
+- **Sign-in commands:** `gh auth login`, `logout`, `refresh`, `switch` and `setup-git` always run, without `GH_TOKEN`, so gh manages its own logins. `gh auth token`, `status` and `git-credential` are checked like any `gh` command and answer with the project's token. In a project without a GitHub account, `gh auth status` still runs unchecked, so you can pick the login to map.
 
 **Limits.** GitHub means github.com. GitHub Enterprise hosts are not supported, for `gh` or for Copilot CLI.
 

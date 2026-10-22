@@ -179,12 +179,12 @@ class ShimTests(unittest.TestCase):
             cache.put(cache.key("demo", "github", {"login": "hubot", "name": "hubot"}, fingerprint), "ok",
                       "login confirmed")
 
-    def run_gh(self, *args, tokens=None, **extra):
+    def run_gh(self, *args, tokens=None, cwd=None, **extra):
         env = {"PATH": f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin", "HOME": str(self.home),
                "KEYFIT_CONFIG_DIR": str(self.config), "GH_CALLS": str(self.calls),
                "FAKE_GH_TOKENS": json.dumps({"octocat": "tok-octocat", "hubot": "tok-hubot"} if tokens is None else tokens),
                "HTTPS_PROXY": "http://127.0.0.1:9", **extra}  # should a check ever go online: a closed port
-        return subprocess.run(["gh", *args], cwd=self.repo, env=env, capture_output=True, text=True, timeout=60)
+        return subprocess.run(["gh", *args], cwd=cwd or self.repo, env=env, capture_output=True, text=True, timeout=60)
 
     def gh_calls(self):
         return [json.loads(line) for line in self.calls.read_text().splitlines()]
@@ -232,6 +232,27 @@ class ShimTests(unittest.TestCase):
                 self.assertNotIn(args, self.gh_calls())  # the real gh never ran it
         for args in (["auth", "status", "-at"], ["auth", "status", "--show-token=false"], ["auth", "--", "-u", "x"]):
             self.assertEqual(self.run_gh(*args).returncode, 0, args)
+
+    def test_a_project_without_a_github_account_lists_gh_logins_but_prints_no_token(self):
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=plain, check=True)
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config)}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            from keyfit.cli import main
+            main(["init", "--yes", "--root", str(plain), "--name", "plain"])
+        # `gh auth status` names the logins to map, so it runs as a sign-in does: unchecked, without GH_TOKEN
+        for args in (["auth", "status"], ["auth", "status", "--hostname", "github.com", "--active"]):
+            out = self.run_gh(*args, cwd=plain, GH_TOKEN="tok-octocat")
+            self.assertEqual((out.returncode, json.loads(out.stdout)), (0, {"argv": args, "GH_TOKEN": None}),
+                             out.stderr)
+        for args in (["auth", "status", "--show-token"], ["auth", "status", "-t"], ["auth", "token"],
+                     ["auth", "git-credential", "get"]):
+            out = self.run_gh(*args, cwd=plain)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), args)
+            self.assertEqual(out.stderr, "keyfit: project plain has no github account mapped, so gh was not started.\n"
+                                         "  Map one: keyfit add github --login <a login gh auth status lists>   "
+                                         "(bypass once: KEYFIT_DISABLE=1 gh …)\n")
 
     def test_sign_ins_run_unchecked_without_the_projects_token(self):
         # gh keeps no token for hubot, so the check fails: the sign-ins still run, as gh manages its own tokens
