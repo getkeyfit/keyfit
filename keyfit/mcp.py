@@ -2,7 +2,7 @@
 
 Your existing servers keep their names (linear_acme, …) because your agent
 guidance routes by those names. For a session in project P, a server is hidden when
-- it is a Linear server (mcp.linear.app in its address or command, or a LINEAR… variable or a key in its env)
+- it is a Linear server (mcp.linear.app in its address or command, or a LINEAR_… variable or a key in its env)
   and P has no Linear account, or it reads another key variable than P's, carries another key than P's or signs
   in inside the agent (OAuth); Linear servers in the folder's .mcp.json are hidden unless P names them — they
   carry unverified keys;
@@ -104,12 +104,12 @@ def _strings(value) -> list[str]:
 
 def _linear(spec: dict) -> tuple[set[str], set[str], bool] | None:
     """(variables, keys, remote) of a Linear server, or None when *spec* is not one. Linear's remote server is found by
-    mcp.linear.app in its address or its command (`npx mcp-remote https://mcp.linear.app/mcp`), a local one by a LINEAR…
-    variable or a key in its env. Every variable its definition names counts (Codex's bearer_token_env_var,
+    mcp.linear.app in its address or its command (`npx mcp-remote https://mcp.linear.app/mcp`), a local one by a LINEAR_…
+    variable (not LinearB's LINEARB_…) or a key in its env. Every variable its definition names counts (Codex's bearer_token_env_var,
     env_http_headers and env_vars name them bare), and so does every key written into it."""
     env = spec_env(spec)
     remote = any(LINEAR_HOST.search(word) for word in [str(spec.get("url") or ""), *spec_argv(spec)])
-    if not remote and not any(n.upper().startswith("LINEAR") or LINEAR_KEY.search(v) for n, v in env.items()):
+    if not remote and not any(n.upper().startswith("LINEAR_") or LINEAR_KEY.search(v) for n, v in env.items()):
         return None
     words = _strings(spec)
     variables = {a or b for word in words for a, b in REFERENCE.findall(word)}

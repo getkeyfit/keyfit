@@ -445,7 +445,7 @@ From the third pre-launch review:
   server with another workspace's key in its `env` (Claude's form and Codex's `env = {…}`),
   `npx mcp-remote https://mcp.linear.app/mcp --header "Authorization: Bearer ${LINEAR_GLOBEX_API_KEY}"`
   and `https://MCP.LINEAR.APP/mcp` or `https://mcp.linear.app:443/mcp` stayed visible in every project.
-  A Linear server is now one with `mcp.linear.app` in its address or command, or a `LINEAR…` variable
+  A Linear server is now one with `mcp.linear.app` in its address or command, or a `LINEAR_…` variable
   or a Linear key in its `env`; it stays visible only when every variable it names holds the project's
   key and a key written into it is the project's own. One signed in inside the agent (OAuth) is hidden
   unless a project claims it: `keyfit add mcp NAME` now works for Linear servers too. Keyfit now also

@@ -213,6 +213,7 @@ class McpServerTests(unittest.TestCase):
             "linear": {"type": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}},
             "linear_local": {"command": "npx", "args": ["linear-mcp-server"], "env": {"LINEAR_API_KEY": GOOD}},
             "paper": {"type": "http", "url": "http://127.0.0.1:29979/mcp"},
+            "linearb": {"command": "npx", "args": ["linearb-mcp"], "env": {"LINEARB_TOKEN": "${LINEARB_TOKEN}"}},  # not Linear
         }, plain), ["linear", "linear_local"])
 
 
