@@ -483,7 +483,8 @@ def copilot_login_check(project: Project) -> None:
 
 
 def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
-    """Refuse options that would leave the project's Vercel login or team (like `aws --profile`), then add the
+    """Refuse options that would leave the project's Vercel login or team (like `aws --profile`) and a folder to
+    work in that is linked to another team (--cwd, `deploy <path>`, `vercel <path>`, `dev <dir>`), then add the
     login's folder (--global-config) and the team (--scope) unless the user named them already."""
     conn = project.connections["vercel"]
     folder = canonical(conn["config_dir"])
@@ -506,6 +507,16 @@ def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
             if link is not None:
                 raise Refused(f"keyfit: {tilde(link[0])} links {value} to another Vercel team ({printable(link[1])}), but this "
                               f"folder belongs to {project.name} (Vercel team {team}); refusing --cwd {value}.{bypass}")
+    command, paths = vercel.targets(args)
+    moved = [value for name, value in given if name == "--cwd" and value]
+    base = cwd / moved[-1] if moved and command == "deploy" else cwd  # `dev [dir]` starts from the shell's folder
+    for path in paths:
+        if (base / path).is_dir():  # the CLI deploys only a folder
+            link = vercel.foreign_link(conn, base / path, env)
+            if link is not None:
+                raise Refused(f"keyfit: {tilde(link[0])} links {path} to another Vercel team ({printable(link[1])}), but "
+                              f"this folder belongs to {project.name} (Vercel team {team}); refusing {command} {path}."
+                              f"{bypass}")
     names = {name for name, _ in given}
     extra = [] if "--global-config" in names else vercel.config_args(conn, env)
     if team and not names & {"--scope", "--team"}:
@@ -516,8 +527,8 @@ def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
 def supabase_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
     """Refuse what would leave the project's Supabase login or organization (like `aws --profile`): another profile
     or --org-id, and a project the token reaches in another organization (or cannot reach) named by --project-ref,
-    `gen … --project-id`, `link <ref>`, `projects delete <ref>` or the link of a --workdir. The folder's own link
-    was checked already."""
+    `gen … --project-id`, a word shaped like a ref (`link <ref>`, `projects delete <ref>`) or the link of a
+    --workdir. The folder's own link was checked already."""
     conn = project.connections["supabase"]
     org = conn.get("org_name") or conn["org"]
     refuse = f"keyfit: this folder belongs to {project.name} (Supabase organization {printable(org)}); refusing"
@@ -533,19 +544,17 @@ def supabase_args(project: Project, args: list[str], env: dict, cwd: Path) -> li
             raise Refused(f"{refuse} --profile {printable(value)}: a profile picks another login and API host.{bypass}")
         if name == "--org-id" and value != conn["org"]:
             raise Refused(f"{refuse} --org-id {printable(value)}.{bypass}")
-        if name == "--project-ref" or (name == "--project-id" and words[:1] == ["gen"]):  # `stop --project-id`: local
+        if name == "--project-ref" or (name == "--project-id" and "gen" in words):  # `stop --project-id`: local
             asked.append((f"{name} {value}", value))
         if name == "--workdir" and not named & {"--project-ref", "--project-id"}:
-            ref, source = supabase.linked_ref(cwd, {**env, "SUPABASE_WORKDIR": value})
-            if ref:
+            for ref, source in supabase.linked_refs(cwd, {**env, "SUPABASE_WORKDIR": value}):
                 asked.append((f"--workdir {value} (linked to {ref} in {source})", ref))
-    if words[:1] == ["link"]:  # every word after it that could be a ref: an option Keyfit does not know may hold
-        asked += [(f"link {word}", word) for word in words[1:]]  # one value in between
-    if words[:2] == ["projects", "delete"]:
-        asked += [(f"projects delete {word}", word) for word in words[2:]]
-    checked, _ = supabase.linked_ref(cwd, env)
+    # every word that could be a ref, wherever it stands: an option Keyfit does not know may take the word before
+    # the command as its value, or hold one between the command and the ref
+    asked += [(" ".join(words[:i + 1]), word) for i, word in enumerate(words) if supabase.REF.fullmatch(word)]
+    checked = {ref for ref, _ in supabase.linked_refs(cwd, env)}
     for shown, ref in asked:
-        if ref == checked or not supabase.REF.fullmatch(ref):  # checked already; or a branch name, which the CLI
+        if ref in checked or not supabase.REF.fullmatch(ref):  # checked already; or a branch name, which the CLI
             continue  # looks up among the linked project's branches, or a ref it refuses itself
         reason = project_outside(project, conn, ref, env)
         if reason:

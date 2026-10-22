@@ -13,9 +13,11 @@ inject  — remove inherited variables that point the CLI at another project or 
           VERCEL_PROJECT_ID (and their older NOW_ names) and VERCEL_TEAM_ID. Also VERCEL_TOKEN: the CLI
           ignores it, but Vercel's SDK and other tools an agent may start read it.
           The shim adds the arguments: `--global-config DIR` unless DIR is the folder the CLI picks by
-          itself, and `--scope TEAM` when the account has a team (keyfit/shim.py).
+          itself, and `--scope TEAM` when the account has a team (keyfit/shim.py). It refuses a folder
+          named on the command line (--cwd, `deploy <path>`, `dev <dir>`) that is linked to another team.
 local   — auth.json holds a token (an expired one only with a refresh token); the repository is not
-          linked (.vercel/project.json, .vercel/repo.json) to another team than the account's.
+          linked (.vercel/project.json, .vercel/repo.json: the entry for this folder) to another team than
+          the account's.
 remote  — GET api.vercel.com/v2/user must return the expected username; with a team,
           GET /v2/teams/<team> must succeed with the same token (membership) and match its ID and slug.
           An expired access token is first renewed by the real CLI (`vercel whoami`), as every vercel
@@ -49,6 +51,11 @@ LINKS = (".vercel/project.json", ".vercel/repo.json", ".now/project.json")
 # `--name value`, `--name=value` and `-x value`, also as the last letter of a group (`-dS acme`); `--` ends options.
 SHORT = {"Q": "--global-config", "S": "--scope", "T": "--team", "t": "--token"}
 LONG = {"--global-config", "--scope", "--team", "--token", "--cwd"}
+# Its other global options, with a value, then without. Any other option before the first word belongs to deploy,
+# the default command: `vercel --prod app` deploys app.
+VALUED, SHORT_VALUED = LONG | {"--local-config", "--api"}, {*SHORT, "A"}
+GLOBAL = VALUED | {"--help", "--version", "--debug", "--no-color", "--non-interactive", "--changelog"}
+SHORT_GLOBAL = SHORT_VALUED | {"h", "v", "d"}
 
 
 def _home(env: dict) -> Path:
@@ -157,6 +164,56 @@ def options(args: list[str]) -> list[tuple[str, str | None]]:
     return found
 
 
+def targets(args: list[str]) -> tuple[str, list[str]]:
+    """What the CLI would link and deploy, or run `vercel dev` in, as named on the command line: ("deploy", [path])
+    for `vercel deploy path` and `vercel path`, ("dev", [dir]) for `vercel dev dir`. Every word after deploy or dev
+    counts (an option Keyfit does not know may take one as its value), and every word when an option of deploy
+    comes first. Keyfit keeps no list of the CLI's commands: in `vercel env ls`, env counts as a path too."""
+    words, deploy, i = [], False, 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":  # the rest are words
+            words += args[i + 1:]
+            break
+        if arg.startswith("--"):
+            name, eq, _ = arg.partition("=")
+            deploy |= not words and name not in GLOBAL
+            i += 2 if name in VALUED and not eq else 1
+        elif arg.startswith("-") and len(arg) > 1:
+            deploy |= not words and not set(arg[1:]) <= SHORT_GLOBAL
+            i += 2 if arg[-1] in SHORT_VALUED else 1  # only the last letter of a group takes a value
+        else:
+            words.append(arg)
+            i += 1
+    if words[:1] == ["dev"] and not deploy:
+        return "dev", words[1:]
+    if words[:1] == ["deploy"]:
+        return "deploy", words[1:]
+    return "deploy", words if deploy else words[:1]
+
+
+def _link_orgs(data, where: str) -> list:
+    """The teams a link file names for the folder *where* (relative to the folder that holds the link): orgId of
+    project.json. Of repo.json (`vercel link --repo`), that of the projects whose directory holds *where*, the
+    deepest like the CLI, else of every project; each falls back to the file's top-level orgId (older files)."""
+    if not isinstance(data, dict):
+        return []
+    projects = [p for p in data.get("projects") or [] if isinstance(p, dict)] \
+        if isinstance(data.get("projects"), list) else []
+    if not projects:
+        return [data.get("orgId")]
+
+    def directory(project) -> str:
+        value = project.get("directory")
+        return value.strip("/") or "." if isinstance(value, str) else "."
+    where = "" if where == "." else where
+    ordered = sorted(projects, key=lambda p: -len(directory(p).split("/")))  # stable: ties keep the file's order
+    matches = [p for p in ordered if directory(p) in (".", where) or where.startswith(directory(p) + "/")]
+    if matches:
+        matches = [p for p in matches if directory(p) == directory(matches[0])]
+    return [p.get("orgId") or data.get("orgId") for p in matches or projects]
+
+
 def foreign_link(conn, start, env: dict) -> tuple[Path, str] | None:
     """The first Vercel link the CLI could follow from *start* that names another team than the account's:
     .vercel/project.json (or the older .now/project.json) and .vercel/repo.json (`vercel link --repo`), in
@@ -171,11 +228,12 @@ def foreign_link(conn, start, env: dict) -> tuple[Path, str] | None:
             break
         for rel in LINKS:
             try:
-                org = json.loads((folder / rel).read_text()).get("orgId")
-            except (OSError, ValueError, AttributeError):
+                data = json.loads((folder / rel).read_text())
+            except (OSError, ValueError):
                 continue
-            if isinstance(org, str) and org and org != team_id:
-                return folder / rel, org
+            for org in _link_orgs(data, start.relative_to(folder).as_posix()):
+                if isinstance(org, str) and org and org != team_id:
+                    return folder / rel, org
         if (folder / ".git").exists():
             break
     return None
