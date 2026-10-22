@@ -28,7 +28,10 @@ QUERY = "{ organization { urlKey name } }"
 
 
 def is_linear_key_var(name: str) -> bool:
-    return "LINEAR" in name and name.endswith("API_KEY")
+    """A variable that may hold a Linear key: LINEAR (not LinearB's LINEARB) with KEY or TOKEN in its name, in any case
+    (LINEAR_ACME_API_KEY, LINEAR_TOKEN, GLOBEX_LINEAR_KEY, linear_api_key)."""
+    upper = name.upper()
+    return re.search(r"LINEAR(?!B)", upper) is not None and ("KEY" in upper or "TOKEN" in upper)
 
 
 def _fetch(key: str, timeout: float) -> tuple[int, dict]:

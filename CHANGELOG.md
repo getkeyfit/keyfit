@@ -244,6 +244,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Every error names the next command.** A tool that isn't installed shows how to install it; an
   unmapped `gh` shows `keyfit add github --login <login>`; `keyfit add aws` lists the profiles there
   are; a rejected AWS access key points at `aws configure --profile P`, which runs inside the project.
+- **A shorter README.** It now covers what Keyfit is, install, a first project, everyday commands
+  and limits. Everything about each kind of account (what the tool gets, what is checked and refused,
+  how to set it up, its limits) moved to one section per account in `docs/accounts.md`.
 
 ### Fixed
 
@@ -265,6 +268,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the others: the kind column is now ten characters wide.
 - Guided `keyfit init` on a Mac without Codex said `no clean ChatGPT login in ~/.codex … sign in
   (codex login)`; it now says `codex not found on PATH — skipped`, like the other tools.
+- Python 3.14 is tested and listed in the package's classifiers. CI now also runs the tests that
+  install a built wheel (they were skipped on every Python), and a release installs its wheel into a
+  fresh virtualenv and runs `keyfit --version` and `keyfit setup` before anything is published.
 
 ### Security
 
@@ -320,6 +326,255 @@ From the second pre-launch review:
   naming the file and the variable, never the value. wrangler's sign-in commands, a `--cwd` folder and
   `--env-file` files are held to the same. A project that deliberately uses another Cloudflare host
   (staging, a compliance region) isn't supported yet.
+
+From the third pre-launch review:
+
+- **Claude's background sessions no longer run with another project's accounts.** Claude Code runs
+  them (`claude --bg`, agent view, `←` and `/background`, `claude respawn`) under one supervisor per
+  config folder, which keeps the environment of the start that launched it and gives it to every
+  background session, in any folder. A supervisor started in a project kept that project's accounts
+  for all of them, and Keyfit's check of the folder never applied. Claude sessions in a project now
+  start with background sessions and agent view off (`"disableAgentView": true` in `--settings`,
+  `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`), and `claude --bg`, `agents`, `attach`, `respawn` and
+  `daemon run` are refused in a project and inside a session. `claude daemon status`, `logs` and
+  `stop` run as typed (Keyfit's `--settings` in front of `daemon` kept them from running). A
+  supervisor that already runs keeps what it got: stop it once in a terminal outside every project,
+  with `claude daemon stop --any`.
+- **Codex's shared server no longer gets a project's accounts either.** It keeps the environment of
+  the start that launched it, for every folder. `codex resume` and `codex fork` now start with
+  `--no-daemon`, like `codex`, and `codex agents`, `queue`, `remote-control` and `app-server`, which
+  work on that server, are refused in a project. One that already runs: stop it with
+  `codex app-server daemon stop`, outside every project. Inside a session, in a folder outside every
+  project, Codex is held to the same: `codex`, `resume` and `fork` start with `--no-daemon`, and the
+  server's commands are refused (they ran unchanged with the session's accounts).
+- **Two clients' setups are no longer merged silently.** `keyfit init` in a second folder with a
+  registered project's name (`~/work/globex/api` after `~/work/acme/api`) added it to that project:
+  it ran with acme's accounts, and its own `.envrc` was never imported. `init` now stops and asks for
+  a name of its own (`--name globex-api`); naming the existing project (`--name api`) still adds the
+  folder, and says so. `keyfit add codex`, `claude`, `vercel` and `opencode` without `--name` gave a
+  second login the first one's default name (two ChatGPT pro logins `pro`, two personal Claude logins
+  `personal`, two Vercel logins in one team), which replaced the first project's account with the
+  second's; the second login now gets the next free name (`pro-2`). A `--name` shared on purpose but
+  given another login (also for `github` and `copilot`) changes it for every project using it, as
+  before, and now names them; `github` no longer keeps the old login's email and ssh host then.
+- **`--name` must be a name.** `keyfit add claude`, `opencode` and `vercel --new --name ../../x`
+  created folders outside `~/.config/keyfit`; `--name` of every `keyfit add` is now letters, digits,
+  `.`, `_` and `-`.
+- **Supabase: an option before the command no longer hides it.** `supabase --agent no projects delete
+  <ref>` and `supabase --agent yes gen types --project-id <ref>` ran on a project of another
+  organization: Keyfit took `--agent`'s value for the command. `--agent` and `--output-format` now
+  count as options with a value, and every word shaped like a project ref is checked wherever it
+  stands (`gen … --project-id` too), so an option Keyfit doesn't know can't hide one either.
+- **Supabase: the TypeScript CLI's other links are checked.** Its `branches` commands act on the
+  parent project in `supabase/.temp/linked-project.json`, and its stack mode links through
+  `supabase/.link.json`; a project of another organization named there now fails the check, like one
+  in `supabase/.temp/project-ref`.
+- **Vercel: a folder to deploy is checked like `--cwd`.** `vercel deploy <path>`, `vercel <path>` and
+  `vercel dev <dir>` use that folder's link and take the team from it, whatever `--scope` says. A
+  folder linked to another team is now refused.
+- **Vercel: `.vercel/repo.json` in its current format.** `vercel link --repo` records a team per
+  project, and Keyfit read only the older top-level `orgId`, so a repository linked to another team
+  that way passed the check. It now takes the project whose directory holds the folder (else every
+  project), like the CLI.
+- **Convex reads `.env.local`, `.env` and `--env-file` files the way the convex CLI does.** The CLI
+  parses them with dotenv, which skips a byte-order mark, reads invalid UTF-8 as replacement characters,
+  accepts `KEY: value` lines and lets a quoted value span several lines. Keyfit read them line by line,
+  so a file written any of these ways could point the folder at another team's deployment while the
+  check said "login and team confirmed". Keyfit now parses them with dotenv's own pattern. A file that
+  decides the deployment but can't be read fails the check (`.env.local cannot be read, …`), and an
+  `--env-file` Keyfit can't read is refused.
+- **A deploy key in `CONVEX_DEPLOYMENT` is never sent or printed.** A key put there (`prod:NAME|…`) went
+  to Convex in the deployment lookup's address and appeared in the failure line and in `keyfit add
+  convex` errors. Only a deployment name (like `happy-animal-123`) is now sent or printed: such a
+  `CONVEX_DEPLOYMENT` fails the check before the network, and `--team`, `--deployment` and
+  `--deployment-name` values holding a key, or a `--deployment-name` that isn't a deployment name, are
+  refused without being repeated.
+- **Inherited `CONVEX_SELF_HOSTED_URL` and `CONVEX_SELF_HOSTED_ADMIN_KEY` are removed** in a project with
+  a Convex account, unless the folder's own files set the same. The CLI takes them before
+  `CONVEX_DEPLOYMENT`, so another project's self-hosted deployment hid the folder's own, unchecked.
+- **gcloud no longer acts as another identity in a project.** `--impersonate-service-account` is
+  refused, and a configuration that sets `auth/impersonate_service_account`, `auth/token_host`,
+  `auth/mtls_token_host`, `auth/disable_ssl_validation` or an `api_endpoint_overrides/…` fails its
+  check, with `gcloud config unset … --configuration NAME` as the fix (it now runs while checks fail).
+  Before, an impersonating configuration was reported as "me@acme.io as deployer@… · account and project
+  confirmed". `gcloud config set auth/…` and `api_endpoint_overrides/…` on a configuration a project
+  uses are refused.
+- **gcloud's and firebase's other spellings are read like the CLIs read them.** A leading release track
+  (`gcloud beta config configurations delete globex`, `gcloud alpha config set account other@x.com`)
+  and arguments after `--` (`gcloud auth login -- other@x.com`, `firebase use -- other-project`,
+  `firebase login:use -- other@x.com`) slipped past the refusals, and so did `gcloud auth login
+  --remote-bootstrap URL other@x.com`. `gcloud auth login` without the project's account and `gcloud
+  auth activate-service-account` as anyone else are refused in a project with a Google Cloud account:
+  they write whichever account signs in into the project's configuration.
+- **firebase is checked on the project its CLI really picks.** firebase.json's deprecated `"firebase"`
+  key, which the CLI takes before `.firebaserc`, was ignored; and without a `firebase.json` (a
+  monorepo's top) the `.firebaserc` there was not checked, though `firestore:delete`, `database:get`
+  or `auth:export` act on its default.
+- **`keyfit add gcloud` never takes another account's configuration.** It took the only configuration
+  whatever its account (the default one, active everywhere else) and printed `gcloud config set
+  account … --configuration default`, which would move every gcloud outside projects to the project's
+  account. It now names `gcloud config configurations create … --no-activate`, as `keyfit init` does.
+- **firebase's sign-in can't be sent elsewhere.** Inherited `FIREBASE_TOKEN_URL` and
+  `FIREBASE_GOOGLE_URL` (where the firebase CLI posts the refresh token), the CLI's other
+  `FIREBASE_…_URL` endpoints and `FIREBASE_CLIENT_ID`/`_SECRET` are removed, also for Keyfit's own
+  renewal with `firebase projects:list`.
+- **A git that can't answer no longer makes a project folder look unregistered.** When git failed
+  (Command Line Tools broken by a macOS update, Xcode's licence not accepted, git missing or slow,
+  `dubious ownership`, a `.git` file naming a folder that is gone), a registered folder counted as
+  one outside every project: tools started with your shell's credentials, without checks and with
+  every MCP server, and `keyfit doctor` said `All good`. Inside a repository (a `.git` there or
+  above), tools now don't start and show git's message; folders without one run as before.
+  `keyfit doctor` has a `git` line. The lookup also ignores the `GIT_DIR`, `GIT_WORK_TREE`,
+  `GIT_COMMON_DIR`, `GIT_INDEX_FILE` and `GIT_CEILING_DIRECTORIES` a git hook exports: a tool a hook
+  ran in a worktree's subfolder resolved to no project.
+- **Submodules and nested repositories in a worktree belong to its project.** In a Superset worktree,
+  git's top folder is the submodule's and no registered folder sits above it. When a repository isn't
+  registered, Keyfit now resolves the checkout around it before trying registered parent folders.
+- **A failed check no longer leaves its cached success behind.** After `keyfit status` showed ✘ (a
+  profile that now signs in to another account, say), launches kept starting the tool on the success
+  cached up to 30 minutes before. Any other answer now removes it, and only successes are cached
+  (with the names of the shell keys OpenCode reported); warnings such as `account not confirmed`
+  were cached for 30 minutes too.
+- **A success trusted while a service can't be reached is shown for every tool.** `aws`, `gh`,
+  `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` started on one up to 24 hours
+  old without the `could not re-check now` warning.
+- **No `Sign in now?` inside a session Keyfit started** (`KEYFIT_PROJECT` set): agents run commands
+  in a terminal of their own, where an `aws` waited for an answer.
+- **MCP servers acting on another workspace are hidden wherever they are defined.** A Linear server was
+  recognised only by the exact address `mcp.linear.app` and the first `${VAR}` of its headers, so a
+  server with another workspace's key in its `env` (Claude's form and Codex's `env = {…}`),
+  `npx mcp-remote https://mcp.linear.app/mcp --header "Authorization: Bearer ${LINEAR_GLOBEX_API_KEY}"`
+  and `https://MCP.LINEAR.APP/mcp` or `https://mcp.linear.app:443/mcp` stayed visible in every project.
+  A Linear server is now one with `mcp.linear.app` in its address or command, or a `LINEAR_…` variable
+  or a Linear key in its `env`; it stays visible only when every variable it names holds the project's
+  key and a key written into it is the project's own. One signed in inside the agent (OAuth) is hidden
+  unless a project claims it: `keyfit add mcp NAME` now works for Linear servers too. Keyfit now also
+  reads Claude's local scope (`claude mcp add` without `--scope`: the folder's entry in `~/.claude.json`,
+  also for the repository's top and a worktree's main checkout), Codex's profile file
+  (`codex --profile NAME`: `NAME.config.toml` next to `config.toml`) and the `.codex/config.toml` of the
+  folders Codex trusts, so servers defined there are hidden, and a Google Workspace server defined
+  there is checked. A `.mcp.json`, `opencode.json`, Copilot CLI `mcp-config.json` or Gemini CLI
+  `settings.json` with a byte-order mark or a leading `//` comment counted as empty; it is read now,
+  and a config file an agent loads that still can't be parsed stops the agent with a message instead
+  of starting it with servers Keyfit couldn't see.
+- **wrangler's config is found the way wrangler finds it.** Given an entry file (`wrangler deploy
+  ../other/src/index.ts`, also `versions upload`, `dev`, `preview` and `--script`), wrangler reads the
+  config of that file's folder, whose `account_id` beats the account Keyfit pins; such a config of
+  another account is now refused like `--config`. The config a build generated, which
+  `.wrangler/deploy/config.json` sends `wrangler deploy` to (the Vite plugin's
+  `dist/<name>/wrangler.json`), is checked too, so a stale one no longer keeps an old account.
+- **A wrangler config Keyfit cannot read fails the check** instead of being skipped. A byte order mark
+  and bytes that aren't UTF-8 are read as wrangler reads them (a `wrangler.toml` of another account
+  with a byte order mark passed), so is a `//` comment ended by a lone CR, and what Keyfit still cannot
+  parse (TOML 1.1 syntax) is refused with a message that says so.
+- **`--cwd` follows symlinks, as wrangler does,** so a link into another project's folder is refused,
+  and a refusal about another project's folder no longer suggests binding it.
+- **wrangler's binding commands are checked everywhere.** `wrangler auth activate`, `deactivate` and
+  `delete` typed outside every project ran unchecked, and so did binding a folder that holds projects'
+  folders (`..`, `~/code`, `~/.superset/worktrees/<repository>`) to another profile, or unbinding it;
+  they are now refused when they would move a project's folder (a root or a worktree) off its
+  profile. `keyfit add cloudflare`'s `Run it now?` binds the project's own folder when the
+  repository holds more than the project (`~/mono/apps/web` in `~/mono`), under the same rules as
+  `Bind this folder now?`.
+- **wrangler's options are read as wrangler reads them:** `--env NAME` loads `.env.NAME` wherever that
+  path leads (`--env /../settings.txt` loads `settings.txt`), and `--config -0x.toml` and `--config -`
+  name files.
+- **Both wranglers must be new enough for profiles:** the one `npx wrangler` runs (also pnpm's script
+  in `node_modules/.bin`, whose version went unread) and the one `wrangler` runs from PATH. A version
+  Keyfit cannot tell is a warning instead of passing silently.
+- **The online Cloudflare check gets none of the project's other tokens.** At an agent start it ran the
+  repository's own `node_modules/.bin/wrangler` with every account of the project in its environment
+  (a Convex or GitHub token, say); it now runs with your shell's environment and the Cloudflare
+  account only.
+- **A folder's `.env` cannot move wrangler's profiles.** `XDG_CONFIG_HOME` there would have wrangler
+  read and write its profiles and bindings where Keyfit doesn't look (and `Sign in now?` sign in
+  there); it now fails the check like the sign-in endpoints.
+- **Sign-in commands are only the sign-ins, so they no longer print another account's token.** Whole
+  command groups ran without checks or refusals. `gh auth token` in a project printed the token of
+  gh's active account, not the project's: only `gh auth login`, `logout`, `refresh`, `switch` and
+  `setup-git` are sign-ins now, `gh auth token`, `status` and `git-credential` are checked and answer
+  with the project's `GH_TOKEN`, and `--user` another account, `--secure-storage` without `--user` and
+  `--show-token` without `--active` are refused. In a project without a GitHub account, `gh auth
+  status` still runs unchecked, to list the logins to map. `aws configure`, `sso login` and `login`
+  took any `--profile`, so `aws configure export-credentials --profile other` printed that profile's
+  keys: another profile is refused there too (shared profiles still run). `vercel teams invite`,
+  `members`, `add`, `request` and `sso` ran unchecked on the team selected in the login folder: only
+  `teams switch` and `teams ls` are sign-ins now, and the rest are checked and get the project's team.
+- **Gmail, Drive and Calendar servers no longer run as another Google account while Keyfit says
+  "confirmed by Google".** Google Drive MCP signs in with a service account (`GOOGLE_APPLICATION_CREDENTIALS`,
+  `GOOGLE_DRIVE_MCP_SUBJECT`) or a token of its own (`GOOGLE_DRIVE_MCP_ACCESS_TOKEN`, `_REFRESH_TOKEN`,
+  `_CLIENT_ID`, `_CLIENT_SECRET`) ahead of its login, and moves an old token file (`GOOGLE_TOKEN_PATH`) into
+  a missing one; Google Calendar MCP takes a service account (`GOOGLE_SERVICE_ACCOUNT_KEY`, `_SUBJECT`, and
+  `GOOGLE_APPLICATION_CREDENTIALS` without a client file), Google Workspace MCP one that acts as any user of
+  its domain (`GOOGLE_SERVICE_ACCOUNT_KEY_FILE`, `_JSON`). A shell exporting `GOOGLE_APPLICATION_CREDENTIALS`
+  for Terraform made the Drive server ignore the login Keyfit checked. A project with such a server now
+  starts its sessions without these variables, a definition that sets one fails the check (`remove … from
+  gdrive's env in Claude's MCP config`), and Google Drive MCP not signed in yet blocks when the folder
+  holds `google-tokens.json` or `.gcp-saved-tokens.json`, which the server would move into its login. A
+  default login (and OAuth client) is looked for under the `HOME` and `XDG_CONFIG_HOME` the server's
+  definition sets, as the server does. The OAuth client Keyfit renews a token with now comes from your own
+  configs only (Claude's local scope included), never from a definition the folder brings (`.mcp.json`,
+  `opencode.json`, `.github/mcp.json`, `.gemini/settings.json`, Codex's project config): a repository's
+  client turned "the token belongs to someone@gmail.com" into an `account not confirmed` warning. It is
+  read only from a regular file of at most 64 KB: a FIFO or `/dev/zero` hung the check.
+- **An agent pointed at another project's folder is refused, also after options.**
+  `opencode -m anthropic/claude-sonnet-4-5 ~/code/globex` opened globex with this folder's accounts:
+  Keyfit stopped looking for the folder at the first word that wasn't one, and hid the MCP servers of
+  this folder, not globex's. OpenCode's options are now read from its CLI reference, `opencode run
+  --dir DIR` and `opencode acp --cwd DIR` are checked too, and a folder after an option Keyfit doesn't
+  know is refused, since it may be that option's value. `codex -C DIR` (`--cd`) had no folder check
+  at all; it now has the one `copilot -C` has.
+- **A later word no longer turns a session into the agent's own command.** Keyfit took the first known
+  word anywhere on the line: `gemini summarize the mcp setup`, `gemini why do my hooks fail` and
+  `claude --add-dir ../lib agents` started sessions without `--allowed-mcp-server-names` or
+  `--settings`, so every MCP server was visible (`codex`, `copilot` and `opencode` alike). Only the
+  first command word, after the agent's own options, counts now; a line Keyfit can't read for sure
+  starts as a session, with the checks and the hiding.
+- **Each agent's options are read as that agent reads them.** One list of options with a value served
+  all thirteen tools, and in it `-c` took one, though for Claude and OpenCode it is `--continue`:
+  `claude -c fix auth` and `opencode -c . auth` were taken for sign-in commands and started without
+  checks, refusals or hidden servers (OpenCode also without `--standalone`).
+- **Your own options can't bring hidden MCP servers back.** A `--settings` of yours after Keyfit's
+  replaced it (Claude keeps the last one), and Codex's `-c mcp_servers.NAME.enabled=true` after
+  Keyfit's `enabled=false` turned the server back on. Keyfit now merges its keys into your last
+  `--settings` (a file or JSON) and passes one: the hidden servers added to your `deniedMcpServers`
+  and `disabledMcpjsonServers`, `disableAgentView` on, its status line only where you set none. A
+  `--settings` file that sets `env` is refused rather than put on Claude's command line, where every
+  process can read it. Servers of `claude --mcp-config` files and JSON are hidden like those of
+  `~/.claude.json`. A Codex `-c` that turns a hidden server on, or sets its table or `mcp_servers`
+  anew, is refused.
+- **Bedrock's API key no longer beats the project's AWS profile.** `AWS_BEARER_TOKEN_BEDROCK` (any
+  `AWS_BEARER_TOKEN_…`) comes first in the AWS CLI's token chain, so `aws bedrock-runtime …` and the
+  agents in a project with an AWS account acted in the key's account. It is now removed with the other
+  inherited AWS credentials. Keyfit's own `aws sts get-caller-identity` now ignores endpoint overrides
+  (`AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_STS`, a profile's `endpoint_url`): "account confirmed" came
+  from that host, which also got the signed request.
+- **Gemini CLI: `CODE_ASSIST_ENDPOINT` is removed, and a `.env` can't bring back what Keyfit removed.**
+  `CODE_ASSIST_ENDPOINT` decides where Gemini CLI sends the sign-in's access token. Gemini CLI also
+  loads one `.env` file (the nearest `.gemini/.env` or `.env` from its folder up, else the one in its
+  own folder) for every variable that isn't set, so a `GEMINI_API_KEY`, `GOOGLE_CLOUD_PROJECT`,
+  `GOOGLE_GENAI_USE_VERTEXAI` or `GOOGLE_GEMINI_BASE_URL` there came back after Keyfit removed it. Such
+  a file now fails the check, naming the file and the variables, never the values. The project's own
+  `.env` (in one of its folders or worktrees) setting what a Gemini app uses (its key or credentials,
+  Google Cloud project or location, `GOOGLE_GENAI_USE_VERTEXAI`) gets a warning instead; an endpoint,
+  `GEMINI_CLI_HOME` or the credential store fails there too. Names listed in Gemini CLI's
+  `advanced.excludedEnvVars` setting don't count in a `.env` outside a `.gemini` folder, as Gemini CLI
+  skips them.
+- **Copilot CLI: no model provider from `providers.json` in a project.** Copilot CLI takes model
+  providers from `COPILOT_PROVIDERS_CONFIG`, else from `~/.copilot/providers.json`, before the
+  `COPILOT_PROVIDER_…` variables Keyfit removes, so your own provider and key served the project's
+  sessions. `COPILOT_PROVIDERS_CONFIG` is now set to a file that never exists
+  (`/var/empty/providers.json`), as when you have no `providers.json`; a project without a Copilot
+  account gets yours back.
+- **Claude Code: the other provider switches are removed too.** `CLAUDE_CODE_USE_ANTHROPIC_AWS`,
+  `CLAUDE_CODE_USE_MANTLE`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` (`claude auth login` would sign the
+  project's folder in as that token's account) and `ANTHROPIC_CUSTOM_HEADERS` stayed, and a cached
+  check let a session start on another provider.
+- **Linear: every other Linear key variable is removed, as documented.** Only names containing
+  `LINEAR` and ending in `API_KEY` went, so `LINEAR_TOKEN`, `LINEAR_API_TOKEN`, `LINEAR_ACCESS_TOKEN`,
+  `LINEAR_KEY`, `GLOBEX_LINEAR_KEY` and a lowercase `linear_api_key` reached the project's sessions.
+  Any name with `LINEAR` and `KEY` or `TOKEN`, in any case, now goes (LinearB's `LINEARB_…` stays); the
+  project's own variable is set again.
 
 ## [0.1.0] - 2026-10-12
 

@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -29,6 +29,12 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Build tools for the installed-wheel tests
+        run: |
+          python -m pip install "setuptools>=77"
+          # tests/test_install.py skips itself without them (setup-python's 3.12+ have no setuptools); here it must run
+          python -c 'import sys; sys.path[:0] = ["tests"]; import test_install; sys.exit(test_install.CANNOT_BUILD or None)'
 
       - name: Unit tests
         run: python -m unittest discover -s tests

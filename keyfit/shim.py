@@ -27,7 +27,7 @@ from .adapters.google import same
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
-from .resolve import resolve
+from .resolve import GitError, resolve
 
 TOOLS = ("claude", "codex", "opencode", "copilot", "gemini", "aws", "gh", "vercel", "supabase", "wrangler", "convex",
          "gcloud", "firebase")
@@ -42,8 +42,8 @@ INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": 
            "firebase": "npm install -g firebase-tools   (projects that have it run their own: npx firebase-tools …)",
            "npx": "brew install node"}
 # How to map the one account `aws`, `gh` and `vercel` need inside a project before they start there.
-MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github --login <login>",
-       "vercel": "keyfit add vercel"}
+MAP = {"aws": "keyfit add aws --profile <profile>",
+       "github": "keyfit add github --login <a login gh auth status lists>", "vercel": "keyfit add vercel"}
 RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",),
             "wrangler": ("cloudflare",), "convex": ("convex",), "gcloud": ("gcloud",), "firebase": ("firebase",),
             "claude": None, "codex": None, "opencode": None, "copilot": None, "gemini": None}
@@ -56,13 +56,24 @@ AGENTS = ("claude", "codex", "opencode", "copilot", "gemini")
 OPTIONAL = ("supabase", "wrangler", "convex", "gcloud", "firebase")
 PINNED = ("aws", "gh", "vercel", "supabase", "wrangler", "convex", "gcloud", "firebase")
 MAX_DEPTH = 6
-CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs",
-                      "mcp", "plugin", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update", "help"}
+CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "daemon", "doctor", "gateway", "import", "install",
+                      "logs", "mcp", "plugin", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update",
+                      "help"}
+# Claude Code's background sessions run under one supervisor per config folder, which keeps the environment of the start
+# that launched it and gives it to every background session, in any folder. What starts or wakes one is refused where
+# that environment holds a project's accounts (see claude_background); `daemon status`, `logs` and `stop` only read or
+# stop it.
+CLAUDE_BACKGROUND = {"agents", "attach", "respawn"}
+CLAUDE_DAEMON_READ = {"status", "logs", "stop"}
 CODEX_SUBCOMMANDS = {"agents", "exec", "e", "review", "login", "logout", "mcp", "plugin", "app-server",
                      "remote-control", "app", "completion", "update", "doctor", "sandbox", "debug", "apply", "a",
                      "resume", "queue", "archive", "delete", "migrate-rollouts", "unarchive", "fork", "cloud",
                      "exec-server", "features", "help"}
 CODEX_SESSIONS = {None, "exec", "e", "review", "resume", "fork"}
+# The interactive sessions, which use Codex's shared app server unless told --no-daemon, and the commands that work on
+# that server: it keeps the environment of the start that launched it, for every folder.
+CODEX_NO_DAEMON = {None, "resume", "fork"}
+CODEX_SHARED = {"agents", "queue", "remote-control", "app-server"}
 OPENCODE_SUBCOMMANDS = {"upgrade", "update", "uninstall", "acp", "api", "debug", "auth", "mcp", "plugin", "models",
                         "stats", "mini", "run", "session", "service", "reload", "pair", "serve"}
 # OpenCode's background server serves every folder and keeps the environment of the start that launched it. Its own
@@ -72,7 +83,14 @@ OPENCODE_SHARED = {"upgrade", "update", "uninstall", "api", "debug", "mcp", "plu
 OPENCODE_NO_SERVER = {"upgrade", "update", "uninstall"}
 # Commands that take --standalone: a private server, with the session's environment and the project's sign-ins.
 OPENCODE_STANDALONE = {None, "run", "mini", "models", "stats", "session", "auth", "api", "reload"}
-OPENCODE_VALUED = {"--server", "--session", "-s", "--prompt", "--log-level", "--completions"}
+# OpenCode's options (opencode.ai/docs/cli) that take a value, those that take several (yargs arrays) and its flags,
+# to find the folder `opencode DIRECTORY` opens after them.
+OPENCODE_VALUED = {"--server", "--session", "-s", "--prompt", "--log-level", "--completions", "-m", "--model", "--agent",
+                   "--port", "--hostname", "--mdns-domain", "--command", "--format", "--title", "--attach", "-p",
+                   "--password", "-u", "--username", "--dir", "--variant", "--cwd"}
+OPENCODE_SEVERAL = {"--cors", "-f", "--file"}
+OPENCODE_FLAGS = {"-c", "--continue", "--fork", "--auto", "--mdns", "--print-logs", "--pure", "--standalone",
+                  "--thinking", "-h", "--help", "-v", "--version"}
 COPILOT_SUBCOMMANDS = {"app", "login", "help", "init", "config", "update", "version", "workflow", "sessions",
                        "memories", "plugin", "mcp", "skill", "instruction", "lsp", "sandbox", "completion"}
 COPILOT_SESSIONS = {None, "init", "workflow"}  # they run the agent: its MCP servers start
@@ -82,23 +100,26 @@ COPILOT_VALUED = ("-C", "--config-dir", "--additional-mcp-config", "--enable-mcp
 # has no sign-in command, so Keyfit's is a session that signs in (its own dialog) and quits.
 GEMINI_SUBCOMMANDS = {"mcp", "extensions", "extension", "skills", "skill", "hooks", "hook", "gemma"}
 GEMINI_SIGN_INS = (["--prompt-interactive", "/quit"], ["-i", "/quit"], ["--prompt-interactive=/quit"], ["-i=/quit"])
-# Sign-in and setup commands always run — they are how a failed check gets fixed.
+# Sign-in and setup commands always run — they are how a failed check gets fixed. Only those: `gh auth token` and
+# `status`, or `vercel teams invite`, run checked like any other command.
 LOGIN_COMMANDS = {
     "aws": (("sso", "login"), ("sso", "logout"), ("login",), ("logout",), ("configure",)),
     "claude": (("auth",), ("setup-token",)),
     "codex": (("login",), ("logout",)),
-    "gh": (("auth",),),
-    "vercel": (("login",), ("logout",), ("switch",), ("whoami",), ("teams",)),
+    "gh": (("auth", "login"), ("auth", "logout"), ("auth", "refresh"), ("auth", "switch"), ("auth", "setup-git")),
+    "vercel": (("login",), ("logout",), ("switch",), ("whoami",), ("teams", "switch"), ("teams", "change"),
+               ("teams", "ls"), ("teams", "list")),
     "supabase": (("login",), ("logout",)),
     "wrangler": (("login",), ("logout",), ("whoami",), ("auth", "create"), ("auth", "activate"), ("auth", "deactivate"),
                  ("auth", "delete"), ("auth", "list"), ("auth", "keyring")),
     "convex": (("login",), ("logout",)),  # not `login status`: it only reads the login
     "opencode": (("auth",),),
     "copilot": (("login",),),
-    # the fixes of a gcloud check (a configuration to create, its account or project to set) and what shows gcloud's
-    # sign-ins and configurations
-    "gcloud": (("auth", "login"), ("auth", "list"), ("config", "set"), ("config", "configurations", "create"),
-               ("config", "configurations", "list"), ("config", "configurations", "describe")),
+    # the fixes of a gcloud check (a configuration to create, its account or project to set, a setting to unset) and
+    # what shows gcloud's sign-ins and configurations
+    "gcloud": (("auth", "login"), ("auth", "list"), ("config", "set"), ("config", "unset"),
+               ("config", "configurations", "create"), ("config", "configurations", "list"),
+               ("config", "configurations", "describe")),
     # the fixes of a firebase check (a sign-in, binding the folder to it, the project to use) and what shows them
     "firebase": (("login",), ("login:add",), ("login:use",), ("login:list",), ("logout",), ("use",)),
 }
@@ -137,27 +158,61 @@ VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query
                  "-c", "--config", "-m", "--model", "-Q", "--global-config", "-S", "--scope", "-T", "--team",
                  "-t", "--token", "-A", "--local-config", "--cwd", "--api", "--workdir", "--project-ref",
                  "--project-id", "--org-id", "--network-id", "--dns-resolver", "-o"}
+# gh's options that decide which account's token `gh auth token` and `status` print, and those taking a value.
+GH_SHORT = {"h": "--hostname", "u": "--user", "t": "--show-token", "a": "--active"}
+GH_VALUED = {"--hostname", "--user", "--json", "--jq", "--template"}
+# Each agent's own options that take a value, and those that take every word up to the next option
+# (`claude --add-dir ../a ../b`), from their CLI references: `-c` is `--continue` for Claude and OpenCode and takes none.
+AGENT_OPTIONS = {
+    "claude": ({"--advisor", "--agent", "--agents", "--append-subagent-system-prompt",
+                "--append-subagent-system-prompt-file", "--append-system-prompt", "--append-system-prompt-file",
+                "--autocompact", "--debug-file", "--effort", "--environment", "--exec", "--fallback-model", "--from-pr",
+                "--input-format", "--json-schema", "--max-budget-usd", "--max-turns", "--model", "-n", "--name",
+                "--output-format", "--permission-mode", "--permission-prompt-tool", "--permission-prompts",
+                "--plugin-url", "--ref", "--remote-control", "--rc", "--remote-control-session-name-prefix", "-r",
+                "--resume", "--session-id", "--setting-sources", "--settings", "--system-prompt", "--system-prompt-file",
+                "--system-prompt-snapshot", "--teammate-mode", "-w", "--worktree"},
+               {"--add-dir", "--allowedTools", "--allowed-tools", "--betas", "--channels",
+                "--dangerously-load-development-channels", "--disallowedTools", "--disallowed-tools", "--file",
+                "--mcp-config", "--plugin-dir", "--tools"}),
+    "codex": ({"-c", "--config", "--enable", "--disable", "-m", "--model", "--local-provider", "-p", "--profile", "-s",
+               "--sandbox", "-a", "--ask-for-approval", "-C", "--cd", "--add-dir", "--remote", "--remote-auth-token-env",
+               "--color", "-o", "--output-last-message", "--output-schema"},
+              {"-i", "--image"}),
+    "opencode": (OPENCODE_VALUED, OPENCODE_SEVERAL),
+    "copilot": ({"-C", "--config-dir", "--additional-mcp-config", "--enable-mcp-server", "--disable-mcp-server",
+                 "--model", "-p", "--prompt", "--agent", "--log-level", "--log-dir"}, set()),
+    "gemini": ({"-m", "--model", "-p", "--prompt", "-i", "--prompt-interactive", "-w", "--worktree", "--approval-mode",
+                "-r", "--resume", "--delete-session", "-o", "--output-format"},
+               {"--allowed-mcp-server-names", "--allowedMcpServerNames", "--allowed-tools", "-e", "--extensions",
+                "--include-directories"}),
+}
 
 
 class Refused(Exception):
     pass
 
 
-def positionals(args: list[str]) -> list[str]:
-    """The command words, skipping options and the values of VALUE_OPTIONS. An option Keyfit does not know may
-    take the next word as its value (`claude --add-dir auth` starts a session), so the words stop there: an
-    unclear command line is never taken for a sign-in command, which would skip every check."""
+def positionals(args: list[str], tool: str | None = None) -> list[str]:
+    """The command words, skipping options and the values of the tool's options (AGENT_OPTIONS, else VALUE_OPTIONS).
+    An option Keyfit does not know may take the next word as its value (`claude --verbose auth` …), so the words stop
+    there: an unclear command line is never taken for a sign-in command, which would skip every check."""
+    valued, several = AGENT_OPTIONS.get(tool, (VALUE_OPTIONS, set()))
     out = []
+    taking = False  # the words of an option that takes several
     for i, arg in enumerate(args):
         if arg == "--":
             break
-        if i > 0 and args[i - 1] in VALUE_OPTIONS:
+        if i > 0 and args[i - 1] in valued:
             continue
         if arg.startswith("-"):
-            if "=" not in arg and arg not in VALUE_OPTIONS and i + 1 < len(args) and not args[i + 1].startswith("-"):
+            taking = arg in several
+            if "=" not in arg and arg not in valued and not taking and i + 1 < len(args) \
+                    and not args[i + 1].startswith("-"):
                 break
             continue
-        out.append(arg)
+        if not taking:
+            out.append(arg)
     return out
 
 
@@ -166,21 +221,18 @@ def is_login_command(tool: str, args: list[str]) -> bool:
         return args in GEMINI_SIGN_INS
     readers = {"supabase": supabase.words, "wrangler": cloudflare.words, "convex": convex.words, "gcloud": gcloud.words,
                "firebase": firebase.words}
-    words = readers.get(tool, positionals)(args)
+    words = readers[tool](args) if tool in readers else positionals(args, tool)
     if tool == "convex" and words[:2] == ["login", "status"]:
         return False
     return any(tuple(words[:len(prefix)]) == prefix for prefix in LOGIN_COMMANDS.get(tool, ()))
 
 
-def subcommand(args: list[str], known: set[str]) -> str | None:
-    previous = None
-    for arg in args:
-        if arg == "--":
-            return None
-        if arg in known and (previous is None or not previous.startswith("-")):
-            return arg
-        previous = arg
-    return None
+def subcommand(tool: str, args: list[str], known: set[str]) -> str | None:
+    """The tool's own command: its first command word (positionals), when that is one of *known*. A later word never
+    is (`gemini summarize the mcp setup` is a session), and an unclear command line has none: it is a session, with
+    the checks and the MCP hiding."""
+    words = positionals(args, tool)
+    return words[0] if words and words[0] in known else None
 
 
 def requested_profiles(args: list[str]) -> list[str]:
@@ -202,12 +254,10 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
                 owners: dict | None = None, seen=()) -> list[str]:
     """*seen*: the shell variables the checks found that the tool must start without (OpenCode's)."""
     if tool == "aws":
-        profile = project.connections["aws"]["profile"]
-        for asked in requested_profiles(args):
-            if asked != profile:
-                raise Refused(f"keyfit: this folder belongs to {project.name} (AWS profile {profile}); "
-                              f"refusing --profile {asked}.\n  Bypass once: KEYFIT_DISABLE=1 aws …")
+        aws_profiles(project, args)
         return args
+    if tool == "gh":
+        return gh_args(project, args)
     if tool == "vercel":
         return vercel_args(project, args, env, cwd)
     if tool == "supabase":
@@ -219,21 +269,46 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
     if tool == "firebase":
         return firebase_args(project, args, env, cwd)
     if tool == "claude":
-        if subcommand(args, CLAUDE_SUBCOMMANDS):
+        if subcommand(tool, args, CLAUDE_SUBCOMMANDS):
             return args
-        settings = mcp.claude_settings(project, env, cwd, owners)
-        return (["--settings", json.dumps(settings)] if settings else []) + args
+        env["CLAUDE_CODE_DISABLE_AGENT_VIEW"] = "1"  # no background sessions, also from ← and /background
+        given, configs, rest = claude_given(args)  # one --settings: a repeated option keeps its last value
+        try:
+            settings = mcp.claude_settings(project, env, cwd, owners, given[-1] if given else None, configs)
+        except mcp.Unreadable as error:
+            if error.option:
+                raise Refused(f"keyfit: claude not started: the JSON given to {error.option} is not a JSON object "
+                              f"Keyfit can read, so it can't hide the MCP servers {project.name} must not see.\n"
+                              f"  Fix it (bypass once: KEYFIT_DISABLE=1 claude …)") from None
+            raise unreadable(tool, project, error) from None
+        if given and not given[-1].lstrip().startswith("{") and settings.get("env"):  # a file, kept off the command line
+            raise Refused(f"keyfit: claude not started: your --settings file {printable(given[-1])} sets variables (env), "
+                          f"and Keyfit would have to put them on Claude's command line, where every process can read "
+                          f"them, to add the MCP servers {project.name} must not see.\n  Set them in your shell instead "
+                          f"(bypass once: KEYFIT_DISABLE=1 claude …)")
+        return (["--settings", json.dumps(settings)] if settings else []) + rest
     if tool == "codex":
-        sub = subcommand(args, CODEX_SUBCOMMANDS)
+        sub = subcommand(tool, args, CODEX_SUBCOMMANDS)
+        if sub in CODEX_SHARED:
+            raise Refused(f"keyfit: codex not started: `codex {sub}` works on Codex's shared app server, which keeps "
+                          f"the environment it started with for every folder: {project.name}'s accounts could reach "
+                          f"other folders, or another project's accounts this one.\n  Run it in a terminal outside "
+                          f"every project (bypass once: KEYFIT_DISABLE=1 codex …)")
         if sub not in CODEX_SESSIONS:
             return args
         try:
-            extra = mcp.codex_overrides(project, env, owners)
+            extra = mcp.codex_overrides(project, env, owners, cwd, args)
+        except mcp.Unreadable as error:
+            raise unreadable(tool, project, error) from None
         except mcp.Unhideable as server:
             raise Refused(f"keyfit: codex not started, {project.name} must not see MCP server {printable(str(server))}, "
                           f"and Codex cannot hide a name with a dot, \"=\" or a space at either end.\n"
                           f"  Rename it in ~/.codex/config.toml (underscores work), or remove it.") from None
-        if sub is None:
+        back = mcp.codex_reenabled(args, extra)
+        if back:
+            raise Refused(f"keyfit: this folder belongs to {project.name}; refusing -c {printable(back)}: it would turn "
+                          f"on an MCP server {project.name} must not see.\n  Bypass once: KEYFIT_DISABLE=1 codex …")
+        if sub in CODEX_NO_DAEMON:
             extra.append("--no-daemon")  # the shared daemon keeps the first launcher's environment
         return extra + args
     if tool == "opencode":
@@ -245,11 +320,159 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
     return args
 
 
+def aws_profiles(project: Project, args: list[str]) -> None:
+    """Refuse --profile other than the project's: another profile's credentials, and with the sign-in commands its
+    sign-in or settings (`aws configure export-credentials --profile other` prints its keys). The shared ones
+    ([settings] shared_aws_profiles) ran before. A project without an AWS account signs in to any profile."""
+    conn = project.connections.get("aws")
+    if not isinstance(conn, dict):
+        return
+    profile = conn.get("profile")
+    for asked in requested_profiles(args):
+        if asked != profile:
+            raise Refused(f"keyfit: this folder belongs to {project.name} (AWS profile {profile}); "
+                          f"refusing --profile {asked}.\n  Bypass once: KEYFIT_DISABLE=1 aws …")
+
+
+def gh_options(args: list[str]) -> list[tuple[str, str | None]]:
+    """(long name, value) of gh's options before `--`, read like gh: `--user x`, `--user=x`, `-u x`, `-ux` and
+    letters grouped (`-at`). A switch has the value None, or what follows its "=" (`--show-token=false`)."""
+    found, i = [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            break
+        if arg.startswith("--"):
+            name, eq, value = arg.partition("=")
+            if name in GH_VALUED and not eq:
+                value = args[i + 1] if i + 1 < len(args) else None
+                i += 1
+            found.append((name, value if eq or name in GH_VALUED else None))
+        elif arg.startswith("-") and len(arg) > 1:
+            letters = arg[1:]
+            for j, letter in enumerate(letters):
+                name, rest = GH_SHORT.get(letter, "-" + letter), letters[j + 1:]
+                if name in GH_VALUED:  # the rest of the word is its value, else the next word
+                    if not rest:
+                        rest = args[i + 1] if i + 1 < len(args) else None
+                        i += 1
+                    found.append((name, rest.removeprefix("=") if rest else rest))
+                    break
+                if rest.startswith("="):
+                    found.append((name, rest[1:]))
+                    break
+                found.append((name, None))
+        i += 1
+    return found
+
+
+def gh_switch(given: list[tuple[str, str | None]], name: str) -> bool:
+    values = [value for option, value in given if option == name]  # the last one counts
+    return bool(values) and (values[-1] is None or values[-1].lower() not in ("false", "f", "0"))
+
+
+def gh_args(project: Project, args: list[str]) -> list[str]:
+    """`gh auth token`, `status` and `git-credential` run with the project's GH_TOKEN, which gh answers with first.
+    Refuse what would make them answer with another account's token: --user other than the project's login,
+    `--secure-storage` without it (the token of gh's active account) and `--show-token` without --active (the tokens
+    of every account gh keeps)."""
+    if positionals(args)[:1] != ["auth"]:
+        return args
+    login = project.connections["github"].get("login") or ""
+    refuse = f"keyfit: this folder belongs to {project.name} (GitHub {login}); refusing"
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 gh …"
+    given = gh_options(args)
+    users = [value for name, value in given if name == "--user"]
+    for user in users:
+        if (user or "").lower() != login.lower():  # GitHub logins ignore case
+            raise Refused(f"{refuse} --user {printable(user or '')}.{bypass}")
+    if gh_switch(given, "--secure-storage") and not users:
+        raise Refused(f"{refuse} --secure-storage without --user {login}: gh would read the token of its active "
+                      f"account, which may be another one.{bypass}")
+    if gh_switch(given, "--show-token") and not gh_switch(given, "--active"):
+        raise Refused(f"{refuse} --show-token without --active: gh would print the token of every account it "
+                      f"keeps, not only {login}'s.\n  Only {login}'s: gh auth status --active --show-token{bypass}")
+    return args
+
+
+def claude_background(args: list[str], env: dict, project: Project | None) -> None:
+    """Refuse what starts or wakes Claude Code's background sessions (`--bg`, CLAUDE_BACKGROUND, `daemon run`) in a
+    project, and inside a session Keyfit started (KEYFIT_PROJECT set), whose environment holds that project's accounts.
+    Sessions in a project start with background sessions off (adjust_args); elsewhere Claude runs unchanged."""
+    session = env.get("KEYFIT_PROJECT")
+    if project is None and not session:
+        return
+    end = args.index("--") if "--" in args else len(args)
+    sub = subcommand("claude", args, CLAUDE_SUBCOMMANDS)
+    if sub == "daemon":
+        words = [a for a in args[:end] if not a.startswith("-")]
+        after = words[words.index(sub) + 1:][:1]
+        command = None if after and after[0] in CLAUDE_DAEMON_READ else " ".join([sub, *after])
+    elif sub in CLAUDE_BACKGROUND:
+        command = sub
+    elif sub is None:
+        command = next((a for a in args[:end] if a in ("--bg", "--background")), None)
+    else:
+        command = None
+    if command is None:
+        return
+    if session:
+        raise Refused(f"keyfit: claude not started: inside a session of {printable(session)}, "
+                      f"`claude {printable(command)}` could start Claude's background supervisor with that project's "
+                      f"accounts, and every background session, in any folder, would get them.\n  Run it in a terminal "
+                      f"outside the session (bypass once: KEYFIT_DISABLE=1 claude …)")
+    raise Refused(f"keyfit: claude not started: `claude {printable(command)}` runs under Claude's background "
+                  f"supervisor, which keeps the environment it started with for every background session, in any "
+                  f"folder: {project.name}'s accounts could reach other folders, or another project's accounts this "
+                  f"one.\n  Bypass once, with your own environment: KEYFIT_DISABLE=1 claude …")
+
+
+def claude_given(args: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """(the values of your own --settings, those of --mcp-config, the command line without --settings): `--settings X`,
+    `--settings=X`, and every word after --mcp-config up to the next option. A word that looks like an option counts as
+    one; words after `--` are a prompt."""
+    end = args.index("--") if "--" in args else len(args)
+    settings, configs, rest = [], [], []
+    taking, i = False, 0
+    while i < end:
+        arg = args[i]
+        name, eq, value = arg.partition("=")
+        if arg.startswith("-"):
+            taking = arg == "--mcp-config"
+        elif taking:
+            configs.append(arg)
+        if name == "--mcp-config" and eq:
+            configs.append(value)
+        if name == "--settings" and (eq or i + 1 < end):
+            settings.append(value if eq else args[i + 1])
+            i += 1 if eq else 2
+            continue
+        rest.append(arg)
+        i += 1
+    return settings, configs, rest + args[end:]
+
+
+def codex_private(args: list[str], env: dict) -> list[str]:
+    """Codex in a folder outside every project. In your terminal it runs unchanged. Inside a session Keyfit started
+    (KEYFIT_PROJECT set), the environment holds that project's accounts, which Codex's shared app server, started now,
+    would keep for every folder: sessions start without it (--no-daemon), and the commands that work on it are
+    refused."""
+    if not env.get("KEYFIT_PROJECT"):
+        return args
+    sub = subcommand("codex", args, CODEX_SUBCOMMANDS)
+    if sub in CODEX_SHARED:
+        raise Refused(f"keyfit: codex not started: inside a session of {printable(env['KEYFIT_PROJECT'])}, "
+                      f"`codex {sub}` could start Codex's shared app server with that project's accounts, and every "
+                      f"folder would share them.\n  Run it in a terminal outside the session (bypass once: "
+                      f"KEYFIT_DISABLE=1 codex …)")
+    return ["--no-daemon"] + args if sub in CODEX_NO_DAEMON else args
+
+
 def opencode_standalone(args: list[str]) -> list[str]:
     """Add --standalone (OpenCode's private server, with this environment) where the command takes it, unless a
     server is named already. `opencode auth` and `opencode session` alone print their commands and take none."""
     end = args.index("--") if "--" in args else len(args)
-    sub = subcommand(args, OPENCODE_SUBCOMMANDS)
+    sub = subcommand("opencode", args, OPENCODE_SUBCOMMANDS)
     if sub not in OPENCODE_STANDALONE:
         return args
     if sub in ("auth", "session") and not any(not a.startswith("-") for a in args[args.index(sub) + 1:end]):
@@ -267,7 +490,7 @@ def opencode_server_option(project: Project, args: list[str]) -> None:
         raise Refused(f"keyfit: this folder belongs to {project.name}; refusing --server: OpenCode would run with "
                       f"that server's sign-ins and environment, not {project.name}'s.\n"
                       f"  Bypass once: KEYFIT_DISABLE=1 opencode …")
-    if subcommand(args, OPENCODE_SUBCOMMANDS) == "acp" and "--login" in args[:end]:
+    if subcommand("opencode", args, OPENCODE_SUBCOMMANDS) == "acp" and "--login" in args[:end]:
         raise Refused(f"keyfit: this folder belongs to {project.name}; refusing `opencode acp --login`: it signs in "
                       f"through OpenCode's background server, not {project.name}'s database.\n"
                       f"  Sign in with: opencode auth login   (Keyfit sends it to {project.name}'s database)")
@@ -281,7 +504,7 @@ def opencode_private(args: list[str], env: dict) -> list[str]:
     end = args.index("--") if "--" in args else len(args)
     if not env.get("KEYFIT_PROJECT") or any(a == "--server" or a.startswith("--server=") for a in args[:end]):
         return args  # your own environment, or a server you named: none is started
-    sub = subcommand(args, OPENCODE_SUBCOMMANDS)
+    sub = subcommand("opencode", args, OPENCODE_SUBCOMMANDS)
     if sub in OPENCODE_NO_SERVER or (sub == "acp" and "--login" not in args[:end]):  # acp: always a private server
         return args
     standalone = opencode_standalone(args)
@@ -293,10 +516,19 @@ def opencode_private(args: list[str], env: dict) -> list[str]:
                   f"(bypass once: KEYFIT_DISABLE=1 opencode …)")
 
 
+def unreadable(tool: str, project: Project, error: mcp.Unreadable) -> Refused:
+    """A config file the agent loads that Keyfit can't parse: the agent would start with servers Keyfit didn't see."""
+    return Refused(f"keyfit: {tool} not started: Keyfit can't parse {printable(tilde(error.path))}, so it can't hide "
+                   f"the MCP servers there that {project.name} must not see.\n"
+                   f"  Fix the file (bypass once: KEYFIT_DISABLE=1 {tool} …)")
+
+
 def opencode_mcp(project: Project, env: dict, cwd: Path, owners: dict | None) -> None:
     try:
         mcp.opencode_environment(project, env, cwd, owners)
-    except mcp.Unreadable:
+    except mcp.Unreadable as error:
+        if error.path:
+            raise unreadable("opencode", project, error) from None
         raise Refused(f"keyfit: opencode not started: OPENCODE_CONFIG_CONTENT in your environment is not a JSON "
                       f"object, so Keyfit cannot switch off the MCP servers {project.name} must not see.\n"
                       f"  Fix or unset it (bypass once: KEYFIT_DISABLE=1 opencode …)") from None
@@ -312,29 +544,51 @@ def opencode_args(project: Project, args: list[str], env: dict, cwd: Path, owner
     opencode_server_option(project, args)
     if "opencode" in project.connections:
         opencode.scrub(env, seen)
-    folder = opencode_folder(args)
-    opencode_mcp(project, env, Path(folder).resolve() if folder else cwd, owners)
+    folder = opencode_folder(args, cwd)
+    opencode_mcp(project, env, (cwd / folder).resolve() if folder else cwd, owners)
     return opencode_standalone(args)
 
 
-def opencode_folder(args: list[str]) -> str | None:
-    """The folder `opencode DIRECTORY` starts in, when one is named."""
-    skip = False
-    for arg in args:
-        if arg == "--":
-            return None
+def opencode_folder(args: list[str], cwd: Path | None = None) -> str | None:
+    """The folder OpenCode works in, when one is named (relative to *cwd*, default the current folder): `opencode
+    DIRECTORY`, `run --dir DIRECTORY`, `acp --cwd DIRECTORY`. Refused: a folder after an option Keyfit doesn't know
+    (or one that takes several values), which may take that folder as its value or leave it to OpenCode."""
+    base = Path(cwd or os.curdir)
+    end = args.index("--") if "--" in args else len(args)
+    named = [value if eq else args[i + 1] if i + 1 < end else ""
+             for i, (name, eq, value) in enumerate(arg.partition("=") for arg in args[:end]) if name in ("--dir", "--cwd")]
+    if named:
+        return named[-1] if named[-1] and (base / named[-1]).is_dir() else None
+    if subcommand("opencode", args, OPENCODE_SUBCOMMANDS):
+        return None
+    skip, unclear = False, None  # unclear: an option whose words, up to the next option, may be its values
+    for arg in args[:end]:
         if skip:
             skip = False
         elif arg.startswith("-"):
             skip = arg in OPENCODE_VALUED
+            unclear = None if skip or "=" in arg or arg in OPENCODE_FLAGS else arg
+        elif unclear:
+            if (base / arg).is_dir() and (base / arg).resolve() != base.resolve():
+                raise Refused(f"keyfit: opencode not started: Keyfit can't tell whether {printable(arg)} is a value of "
+                              f"{printable(unclear)} or the folder OpenCode opens, which would get this folder's "
+                              f"accounts.\n  Name the folder first (opencode DIR {printable(unclear)} …), or the value "
+                              f"with = ({printable(unclear)}=VALUE)   (bypass once: KEYFIT_DISABLE=1 opencode …)")
         else:
-            return arg if subcommand([arg], OPENCODE_SUBCOMMANDS) is None and os.path.isdir(arg) else None
+            return arg if arg not in OPENCODE_SUBCOMMANDS and (base / arg).is_dir() else None
     return None
 
 
+def codex_folder(args: list[str], cwd: Path | None = None) -> str | None:
+    """The folder `codex -C DIRECTORY` (or `--cd`) works in, when it is one."""
+    folder = mcp._codex_option(args, "-C", "--cd")
+    return folder if folder and os.path.isdir(os.path.join(cwd or os.curdir, folder)) else None
+
+
 def folder_check(tool: str, folder: str | None, registry: Registry, project: Project | None) -> None:
-    """`opencode DIRECTORY` and `copilot -C DIRECTORY` work in that folder with this folder's accounts: refuse when
-    the two folders belong to different projects (or only one is registered)."""
+    """`opencode DIRECTORY` (`run --dir`, `acp --cwd`), `copilot -C DIRECTORY` and `codex -C DIRECTORY` work in that
+    folder with this folder's accounts: refuse when the two folders belong to different projects (or only one is
+    registered)."""
     if folder is None:
         return
     there = resolve(folder, registry).project
@@ -373,7 +627,7 @@ def copilot_folder(args: list[str], cwd: Path | None = None) -> str | None:
 def copilot_args(project: Project, args: list[str], env: dict, cwd: Path, owners: dict | None = None) -> list[str]:
     """Sessions (and `init` and `workflow`, which run the agent) start with every MCP server the project must not
     see switched off by name, for the folder Copilot works in; `--enable-mcp-server` cannot bring one back."""
-    sub = subcommand(args, COPILOT_SUBCOMMANDS)
+    sub = subcommand("copilot", args, COPILOT_SUBCOMMANDS)
     if sub == "login":  # an option before it hid it from the sign-in commands (`copilot -C DIR login`)
         copilot_login_check(project)
         for var in LOGIN_SCRUB["copilot"]:
@@ -384,9 +638,12 @@ def copilot_args(project: Project, args: list[str], env: dict, cwd: Path, owners
     given = copilot_options(args)
     folder = copilot_folder(args, cwd)
     config = [value for name, value in given if name == "--config-dir" and value]
-    names = mcp.copilot_hidden(project, env, (cwd / folder).resolve() if folder else cwd, owners,
-                               config_dir=str(cwd / Path(config[-1]).expanduser()) if config else None,
-                               additional=[value for name, value in given if name == "--additional-mcp-config" and value])
+    try:
+        names = mcp.copilot_hidden(project, env, (cwd / folder).resolve() if folder else cwd, owners,
+                                   config_dir=str(cwd / Path(config[-1]).expanduser()) if config else None,
+                                   additional=[value for name, value in given if name == "--additional-mcp-config" and value])
+    except mcp.Unreadable as error:
+        raise unreadable("copilot", project, error) from None
     for name, value in given:
         if name == "--enable-mcp-server" and value in names:
             raise Refused(f"keyfit: this folder belongs to {project.name}; refusing --enable-mcp-server "
@@ -403,9 +660,12 @@ def gemini_args(project: Project, args: list[str], env: dict, cwd: Path, owners:
     conn = project.connections.get("gemini")
     if isinstance(conn, dict):
         gemini.scrub(conn, env)
-    if subcommand(args, GEMINI_SUBCOMMANDS):
+    if subcommand("gemini", args, GEMINI_SUBCOMMANDS):
         return args
-    hide, kept = mcp.gemini_hidden(project, env, cwd, owners)
+    try:
+        hide, kept = mcp.gemini_hidden(project, env, cwd, owners)
+    except mcp.Unreadable as error:
+        raise unreadable("gemini", project, error) from None
     if not hide:
         return args
     given = mcp.gemini_allowed(args)
@@ -434,7 +694,8 @@ def copilot_login_check(project: Project) -> None:
 
 
 def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
-    """Refuse options that would leave the project's Vercel login or team (like `aws --profile`), then add the
+    """Refuse options that would leave the project's Vercel login or team (like `aws --profile`) and a folder to
+    work in that is linked to another team (--cwd, `deploy <path>`, `vercel <path>`, `dev <dir>`), then add the
     login's folder (--global-config) and the team (--scope) unless the user named them already."""
     conn = project.connections["vercel"]
     folder = canonical(conn["config_dir"])
@@ -457,6 +718,16 @@ def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
             if link is not None:
                 raise Refused(f"keyfit: {tilde(link[0])} links {value} to another Vercel team ({printable(link[1])}), but this "
                               f"folder belongs to {project.name} (Vercel team {team}); refusing --cwd {value}.{bypass}")
+    command, paths = vercel.targets(args)
+    moved = [value for name, value in given if name == "--cwd" and value]
+    base = cwd / moved[-1] if moved and command == "deploy" else cwd  # `dev [dir]` starts from the shell's folder
+    for path in paths:
+        if (base / path).is_dir():  # the CLI deploys only a folder
+            link = vercel.foreign_link(conn, base / path, env)
+            if link is not None:
+                raise Refused(f"keyfit: {tilde(link[0])} links {path} to another Vercel team ({printable(link[1])}), but "
+                              f"this folder belongs to {project.name} (Vercel team {team}); refusing {command} {path}."
+                              f"{bypass}")
     names = {name for name, _ in given}
     extra = [] if "--global-config" in names else vercel.config_args(conn, env)
     if team and not names & {"--scope", "--team"}:
@@ -467,8 +738,8 @@ def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
 def supabase_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
     """Refuse what would leave the project's Supabase login or organization (like `aws --profile`): another profile
     or --org-id, and a project the token reaches in another organization (or cannot reach) named by --project-ref,
-    `gen … --project-id`, `link <ref>`, `projects delete <ref>` or the link of a --workdir. The folder's own link
-    was checked already."""
+    `gen … --project-id`, a word shaped like a ref (`link <ref>`, `projects delete <ref>`) or the link of a
+    --workdir. The folder's own link was checked already."""
     conn = project.connections["supabase"]
     org = conn.get("org_name") or conn["org"]
     refuse = f"keyfit: this folder belongs to {project.name} (Supabase organization {printable(org)}); refusing"
@@ -484,19 +755,17 @@ def supabase_args(project: Project, args: list[str], env: dict, cwd: Path) -> li
             raise Refused(f"{refuse} --profile {printable(value)}: a profile picks another login and API host.{bypass}")
         if name == "--org-id" and value != conn["org"]:
             raise Refused(f"{refuse} --org-id {printable(value)}.{bypass}")
-        if name == "--project-ref" or (name == "--project-id" and words[:1] == ["gen"]):  # `stop --project-id`: local
+        if name == "--project-ref" or (name == "--project-id" and "gen" in words):  # `stop --project-id`: local
             asked.append((f"{name} {value}", value))
         if name == "--workdir" and not named & {"--project-ref", "--project-id"}:
-            ref, source = supabase.linked_ref(cwd, {**env, "SUPABASE_WORKDIR": value})
-            if ref:
+            for ref, source in supabase.linked_refs(cwd, {**env, "SUPABASE_WORKDIR": value}):
                 asked.append((f"--workdir {value} (linked to {ref} in {source})", ref))
-    if words[:1] == ["link"]:  # every word after it that could be a ref: an option Keyfit does not know may hold
-        asked += [(f"link {word}", word) for word in words[1:]]  # one value in between
-    if words[:2] == ["projects", "delete"]:
-        asked += [(f"projects delete {word}", word) for word in words[2:]]
-    checked, _ = supabase.linked_ref(cwd, env)
+    # every word that could be a ref, wherever it stands: an option Keyfit does not know may take the word before
+    # the command as its value, or hold one between the command and the ref
+    asked += [(" ".join(words[:i + 1]), word) for i, word in enumerate(words) if supabase.REF.fullmatch(word)]
+    checked = {ref for ref, _ in supabase.linked_refs(cwd, env)}
     for shown, ref in asked:
-        if ref == checked or not supabase.REF.fullmatch(ref):  # checked already; or a branch name, which the CLI
+        if ref in checked or not supabase.REF.fullmatch(ref):  # checked already; or a branch name, which the CLI
             continue  # looks up among the linked project's branches, or a ref it refuses itself
         reason = project_outside(project, conn, ref, env)
         if reason:
@@ -543,7 +812,8 @@ def supabase_login_check(project: Project, args: list[str]) -> None:
 def wrangler_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
     """Refuse what would leave the project's wrangler profile or Cloudflare account (like `aws --profile`): another
     --profile, a --cwd or --config whose folder is bound to another profile or whose config names another
-    account_id, and a --cwd folder or --env-file whose .env sets wrangler's API host or sign-in. The folder's own
+    account_id, an entry file (`wrangler deploy ../other/src/index.ts`) from whose folder wrangler would read such a
+    config, and a --cwd folder or --env-file whose .env sets wrangler's API host or sign-in. The folder's own
     binding, config and .env files were checked already."""
     conn = project.connections["cloudflare"]
     title = conn.get("account_name") or conn["account_id"]
@@ -564,45 +834,68 @@ def wrangler_args(project: Project, args: list[str], env: dict, cwd: Path) -> li
         elif name == "--config":
             configs.append(value)
     wrangler_endpoints(project, args, cwd)
-    if moved is None and not configs:
+    # wrangler moves to --cwd first (process.chdir: symlinks resolved), then reads --config, else the config found from
+    # an entry file's folder
+    base = os.path.realpath(os.path.join(cwd, moved)) if moved else str(cwd)
+    entries = [] if configs else cloudflare.entries(args, base)
+    if moved is None and not configs and not entries:
         return args
-    base = os.path.join(cwd, moved) if moved else str(cwd)  # wrangler moves to --cwd first, then reads --config
-    for config in configs or [None]:
+    given = [(config, None) for config in configs] or [(None, entry) for entry in entries] or [(None, None)]
+    for config, entry in given:
         path = Path(os.path.abspath(os.path.join(base, config))) if config else None
-        problem = cloudflare.mismatch(conn, path.parent if path else base, env, asked=asked, config=path)
+        problem = cloudflare.mismatch(conn, path.parent if path else base, env, asked=asked, config=path, entry=entry)
         if problem:
-            shown = " ".join(part for part in (moved and f"--cwd {moved}", config and f"--config {config}") if part)
-            raise Refused(f"{refuse} {printable(shown)}: {problem[0]}.\n  → {problem[1]}{bypass}")
+            shown = " ".join(part for part in (moved and f"--cwd {moved}", config and f"--config {config}", entry)
+                             if part)
+            there = path.parent if path else os.path.join(base, os.path.dirname(entry)) if entry else base
+            raise Refused(f"{refuse} {printable(shown)}: {problem[0]}.\n  → {elsewhere(project, there) or problem[1]}"
+                          f"{bypass}")
     return args
 
 
+def elsewhere(project: Project, folder) -> str | None:
+    """The advice for a refusal about *folder* when it is not one of the project's: never to bind it or change its
+    config, which would move another project (or a folder outside every project) to this project's account."""
+    there = resolve(folder, Registry.load()).project
+    if there is not None and there.name == project.name:
+        return None
+    whose = f"{tilde(canonical(folder))} belongs to {there.name}" if there else \
+        f"{tilde(canonical(folder))} is outside every project"
+    return f"run wrangler on {project.name}'s own folders and configs ({printable(whose)})"
+
+
 def wrangler_endpoints(project: Project, args: list[str], cwd) -> None:
-    """Refuse a wrangler that would load its API host or sign-in endpoints from .env files, which beat nothing Keyfit
-    removed: those of the folder it runs in (also after --cwd), or the files named with --env-file."""
+    """Refuse a wrangler that would load its API host, sign-in endpoints or config folder from .env files, which beat
+    nothing Keyfit removed: those of the folder it runs in (also after --cwd, symlinks resolved), with --env NAME
+    also .env.NAME and .env.NAME.local, or the files named with --env-file."""
     given = cloudflare.options(args)
     moved = [value for name, value in given if name == "--cwd" and value]
     named = [value for name, value in given if name == "--env-file" and value]
-    found = cloudflare.endpoints_set(os.path.join(cwd, *moved[-1:]), named)
+    envs = [value for name, value in given if name == "--env" and value]
+    folder = os.path.realpath(os.path.join(cwd, moved[-1])) if moved else str(cwd)
+    found = cloudflare.endpoints_set(folder, named, envs)
     if found:
         detail, fix = cloudflare.endpoints_problem(found)
         raise Refused(f"keyfit: this folder belongs to {project.name}; refusing wrangler: {detail}.\n  → {fix}\n"
                       f"  Bypass once: KEYFIT_DISABLE=1 wrangler …")
 
 
-def wrangler_login_check(project: Project, args: list[str], registry: Registry, env: dict) -> None:
+def wrangler_login_check(project: Project | None, args: list[str], registry: Registry, env: dict) -> None:
     """wrangler's sign-in and binding commands run without checks (they are how a failed check gets fixed), except
     those that would move a registered folder off its project's profile: `login`/`logout` (wrangler's default login
     only) in a project with a named profile, `auth activate`/`deactivate` of a folder whose project uses another
-    profile, `auth create` of another project's profile and `auth delete` of any project's (it unbinds its folders).
-    In a project with a Cloudflare account, none runs where a .env file would pick wrangler's API host or sign-in."""
+    profile or that holds a project's folder (a root or a worktree) it would move off its profile, `auth create` of
+    another project's profile and `auth delete` of any project's (it unbinds its folders). Outside every project
+    (*project* None) only the `auth activate`, `deactivate` and `delete` rules apply. In a project with a Cloudflare
+    account, none runs where a .env file would pick wrangler's API host or sign-in."""
     words = cloudflare.words(args)
-    conn = project.connections.get("cloudflare")
+    conn = project.connections.get("cloudflare") if project else None
     own = conn.get("profile") if isinstance(conn, dict) else None
     bypass = "\n  Bypass once: KEYFIT_DISABLE=1 wrangler …"
     if isinstance(conn, dict):  # a sign-in runs without checks: never with the folder's endpoints
         wrangler_endpoints(project, args, os.getcwd())
     if words[:1] in (["login"], ["logout"]):
-        if own and own != cloudflare.DEFAULT:
+        if project and own and own != cloudflare.DEFAULT:
             raise Refused(f"keyfit: this folder belongs to {project.name}, which uses wrangler profile {own}; "
                           f"`wrangler {words[0]}` would change only wrangler's default login, which {project.name} does "
                           f"not use.\n  Sign in again as {own}: wrangler auth create {own}{bypass}")
@@ -616,7 +909,7 @@ def wrangler_login_check(project: Project, args: list[str], registry: Registry, 
             users.setdefault(theirs["profile"], []).append(other.name)
     action, rest = words[1], words[2:]
     name = rest[0] if rest else None
-    if action == "create" and name and name != own and users.get(name):  # a profile it shares stays its own
+    if project and action == "create" and name and name != own and users.get(name):  # a shared one stays its own
         others = ", ".join(p for p in users[name] if p != project.name)
         raise Refused(f"keyfit: this folder belongs to {project.name}; refusing `wrangler auth create {printable(name)}`: "
                       f"that profile is the sign-in of {others}.{bypass}")
@@ -627,17 +920,52 @@ def wrangler_login_check(project: Project, args: list[str], registry: Registry, 
         return
     target = (rest[1] if len(rest) > 1 else None) if action == "activate" else name
     moved = [value for option, value in cloudflare.options(args) if option == "--cwd" and value]
-    folder = os.path.abspath(os.path.join(os.getcwd(), *moved[-1:], target or "."))
+    base = os.path.realpath(os.path.join(os.getcwd(), moved[-1])) if moved else os.getcwd()  # wrangler's process.cwd()
+    folder = os.path.abspath(os.path.join(base, target or "."))  # path.resolve, as wrangler stores it
     owner = resolve(folder, registry).project
     theirs = owner.connections.get("cloudflare") if owner else None
-    if not isinstance(theirs, dict) or not isinstance(theirs.get("profile"), str):
-        return
-    if action == "activate" and name and name != theirs["profile"]:
-        raise Refused(f"keyfit: refusing `wrangler auth activate {printable(name)}` for {tilde(folder)}: that folder "
-                      f"belongs to {owner.name}, which uses wrangler profile {theirs['profile']}.{bypass}")
-    if action == "deactivate" and cloudflare.bindings(env).get(folder) == theirs["profile"]:
-        raise Refused(f"keyfit: refusing `wrangler auth deactivate` for {tilde(folder)}: {owner.name} uses wrangler "
-                      f"profile {theirs['profile']} there.{bypass}")
+    if isinstance(theirs, dict) and isinstance(theirs.get("profile"), str):
+        if action == "activate" and name and name != theirs["profile"]:
+            raise Refused(f"keyfit: refusing `wrangler auth activate {printable(name)}` for {tilde(folder)}: that "
+                          f"folder belongs to {owner.name}, which uses wrangler profile {theirs['profile']}.{bypass}")
+        if action == "deactivate" and cloudflare.bindings(env).get(folder) == theirs["profile"]:
+            raise Refused(f"keyfit: refusing `wrangler auth deactivate` for {tilde(folder)}: {owner.name} uses "
+                          f"wrangler profile {theirs['profile']} there.{bypass}")
+    if action == "activate" and not name:
+        return  # wrangler stops: no profile named
+    table = cloudflare.bindings(env)  # a folder that holds a project's folders: ~/code, /, ~/.superset/worktrees/<repo>
+    after = {d: p for d, p in table.items() if d != folder}
+    if action == "activate":
+        after[folder] = name
+    for other in registry.projects().values():
+        theirs = other.connections.get("cloudflare")
+        if not isinstance(theirs, dict) or not isinstance(theirs.get("profile"), str):
+            continue
+        for place in project_folders(other):
+            if cloudflare.bound(place, table)[0] == theirs["profile"] != cloudflare.bound(place, after)[0]:
+                shown = f"`wrangler auth {action}{f' {printable(name)}' if action == 'activate' else ''}`"
+                raise Refused(f"keyfit: refusing {shown} for {printable(tilde(folder))}: it holds "
+                              f"{printable(tilde(place))}, where {other.name} uses wrangler profile "
+                              f"{theirs['profile']}.{bypass}")
+
+
+def project_folders(project: Project) -> list[str]:
+    """The project's folders as wrangler sees them when it runs there (symlinks resolved): its roots and the same
+    folder in each linked worktree of their repositories (Superset's under ~/.superset/worktrees too)."""
+    import subprocess
+
+    found = [str(root) for root in project.canonical_roots()]
+    for root in list(found):
+        try:
+            out = subprocess.run(["git", "-C", root, "worktree", "list", "--porcelain"], capture_output=True,
+                                 text=True, timeout=10, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        trees = [str(canonical(line[9:])) for line in out.stdout.splitlines() if line.startswith("worktree ")]
+        if trees and (root == trees[0] or root.startswith(trees[0].rstrip(os.sep) + os.sep)):  # the main one first
+            inside = os.path.relpath(root, trees[0])
+            found += [os.path.normpath(os.path.join(tree, inside)) for tree in trees[1:]]
+    return list(dict.fromkeys(found))
 
 
 def convex_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
@@ -655,14 +983,23 @@ def convex_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
             continue
         if name == "--admin-key":
             raise Refused(f"{refuse} --admin-key: it would skip {project.name}'s Convex login and its check.{bypass}")
+        if "|" in value and name in ("--team", "--deployment", "--deployment-name"):  # a deploy key: never printed
+            raise Refused(f"{refuse} {name}: its value holds a deploy key (…|…).{bypass}")
         if name == "--team" and value != team:
             raise Refused(f"{refuse} --team {printable(value)}.{bypass}")
         if name == "--deployment" and value.count(":") == 2 and value.split(":")[0] != team:
             raise Refused(f"{refuse} --deployment {printable(value)}: another team.{bypass}")
         if name == "--deployment-name" or (name == "--deployment" and convex.DEPLOYMENT_NAME.fullmatch(value)):
-            asked.append((f"{name} {value}", value))  # any other --deployment is a ref inside the folder's project
+            # any other --deployment is a ref inside the folder's project; only a deployment name is printed or sent
+            asked.append((f"{name} {value}" if convex.DEPLOYMENT_NAME.fullmatch(value) else name, value))
         if name == "--env-file":
-            aim = convex.target(cwd, env, files=convex.read_env_file(cwd / value))
+            values = convex.read_env_file(cwd / value)
+            if values is None:
+                raise Refused(f"{refuse} --env-file {printable(value)}: Keyfit cannot read it, so it cannot check the "
+                              f"deployment it names.{bypass}")
+            aim = convex.target(cwd, env, files=values)
+            if aim and aim["kind"] == "invalid":
+                raise Refused(f"{refuse} --env-file {printable(value)}: {aim['source']} {aim['why']}.{bypass}")
             if aim and aim["kind"] == "preview" and aim["team"] != team:
                 raise Refused(f"{refuse} --env-file {printable(value)}: a preview deploy key of another team "
                               f"({printable(aim['team'])}).{bypass}")
@@ -716,7 +1053,7 @@ def convex_login_check(project: Project, args: list[str]) -> None:
 def gcloud_options(project: Project, conn: dict, args: list[str]) -> None:
     """Refuse what would leave the project's gcloud configuration, Google account or Google Cloud project (like
     `aws --profile`): another --configuration, --account or --project, --access-token-file (a token instead of the
-    account) and --flags-file (options Keyfit cannot see)."""
+    account), --impersonate-service-account (another identity) and --flags-file (options Keyfit cannot see)."""
     refuse = (f"keyfit: this folder belongs to {project.name} (gcloud configuration {conn.get('configuration')}, Google "
               f"account {conn.get('account') or 'not set'}, project {conn.get('project')}); refusing")
     bypass = "\n  Bypass once: KEYFIT_DISABLE=1 gcloud …"
@@ -724,6 +1061,9 @@ def gcloud_options(project: Project, conn: dict, args: list[str]) -> None:
         if name == "--access-token-file":
             raise Refused(f"{refuse} --access-token-file: gcloud would use that token instead of {project.name}'s "
                           f"Google account and its check.{bypass}")
+        if name == "--impersonate-service-account":
+            raise Refused(f"{refuse} --impersonate-service-account: gcloud would act as that service account instead of "
+                          f"{project.name}'s Google account.{bypass}")
         if name == "--flags-file":
             raise Refused(f"{refuse} --flags-file: Keyfit cannot see the --account or --project it may hold.{bypass}")
         if value is None:
@@ -736,33 +1076,43 @@ def gcloud_options(project: Project, conn: dict, args: list[str]) -> None:
 
 def gcloud_guard(project: Project, args: list[str], registry: Registry, env: dict) -> None:
     """Inside a registered project: refuse the options that leave the project's gcloud account (gcloud_options),
-    `gcloud auth login` as another person (it would write that account into the project's configuration), and what
-    would change a configuration a registered project uses away from that project's account or project:
-    `config set|unset account|project` and `config configurations delete|rename`."""
+    `gcloud auth login` and `auth activate-service-account` as another person or without naming the project's account
+    (they would write that account into the project's configuration), and what would change a configuration a
+    registered project uses away from that project's account or project: `config set|unset account|project`,
+    `config set auth/…|api_endpoint_overrides/…` (another identity or server; unsetting them is the fix) and
+    `config configurations delete|rename`."""
     conn = project.connections.get("gcloud")
     own = conn if isinstance(conn, dict) else None
     bypass = "\n  Bypass once: KEYFIT_DISABLE=1 gcloud …"
     if own:
         gcloud_options(project, own, args)
     words = gcloud.words(args)
-    if own and own.get("account") and words[:2] == ["auth", "login"] and len(words) > 2 \
-            and not same(words[2], own["account"]):
-        raise Refused(f"keyfit: this folder belongs to {project.name}, whose Google account is {own['account']}; "
-                      f"refusing `gcloud auth login {printable(words[2])}`: gcloud would make configuration "
-                      f"{own.get('configuration')} use that account.{bypass}")
+    if own and own.get("account") and words[:2] in (["auth", "login"], ["auth", "activate-service-account"]):
+        refuse = f"keyfit: this folder belongs to {project.name}, whose Google account is {own['account']}; refusing"
+        if len(words) > 2 and not same(words[2], own["account"]):
+            raise Refused(f"{refuse} `gcloud {words[0]} {words[1]} {printable(words[2])}`: gcloud would make "
+                          f"configuration {own.get('configuration')} use that account.{bypass}")
+        if len(words) == 2:
+            raise Refused(f"{refuse} `gcloud {words[0]} {words[1]}` without {own['account']}: gcloud would make "
+                          f"configuration {own.get('configuration')} use whichever account signs in.\n  Sign in as "
+                          f"the project's account: {gcloud.sign_in(own['account'])}{bypass}")
     users: dict[str, list[tuple[str, dict]]] = {}  # configuration → (project, its gcloud account) of those using it
     for other in registry.projects().values():
         theirs = other.connections.get("gcloud")
         if isinstance(theirs, dict) and isinstance(theirs.get("configuration"), str):
             users.setdefault(theirs["configuration"], []).append((other.name, theirs))
-    if words[:2] in (["config", "set"], ["config", "unset"]) and len(words) > 2 \
-            and words[2].removeprefix("core/") in ("account", "project"):
+    if words[:2] in (["config", "set"], ["config", "unset"]) and len(words) > 2:
         setting = words[2].removeprefix("core/")
         named = [value for name, value in gcloud.options(args) if name == "--configuration" and value]
         target = named[-1] if named else own.get("configuration") if own else gcloud.active(env)
         value = words[3] if words[1] == "set" and len(words) > 3 else None
+        if words[1] == "set" and setting.startswith(("auth/", "api_endpoint_overrides/")) and users.get(target):
+            raise Refused(f"keyfit: refusing `gcloud config set {printable(setting)}` for configuration {target}: "
+                          f"{', '.join(name for name, _ in users[target])} uses it, and that setting changes whom gcloud "
+                          f"acts as or where it sends the account's requests.{bypass}")
         for name, theirs in users.get(target, []):
-            wanted = theirs.get(setting)  # the project's Google account, or its Google Cloud project
+            # the project's Google account, or its Google Cloud project
+            wanted = theirs.get(setting) if setting in ("account", "project") else None
             if wanted and not (value and (same(value, wanted) if setting == "account" else value == wanted)):
                 shown = " ".join(printable(w) for w in words[:4])
                 raise Refused(f"keyfit: refusing `gcloud {shown}` for configuration {target}: {name} uses it with "
@@ -920,10 +1270,12 @@ def sign_in_command(fix: str) -> tuple[dict, list[str]] | None:
     return None
 
 
-def binding_command(check, project: Project, registry: Registry, env: dict) -> tuple[str, str] | None:
+def binding_command(check, project: Project, registry: Registry, env: dict,
+                    here: str | None = None) -> tuple[str, str] | None:
     """(profile, folder) when the check's fix is exactly `wrangler auth activate NAME FOLDER` for the project's own
     wrangler profile and a folder Keyfit may bind: one of this project's (never another project's, nor a folder outside
-    every project), not the home folder or a folder above it, and one whose binding fixes the folder you are in."""
+    every project), not the home folder or a folder above it, and one whose binding fixes the folder you are in
+    (*here*, else the current one)."""
     import shlex
 
     conn = project.connections.get("cloudflare")
@@ -936,20 +1288,20 @@ def binding_command(check, project: Project, registry: Registry, env: dict) -> t
     if words[:3] != ["wrangler", "auth", "activate"] or len(words) != 5 or words[3] != conn.get("profile"):
         return None
     profile, folder = words[3], os.path.expanduser(words[4])
-    if profile == cloudflare.DEFAULT or not os.path.isabs(folder) or not bindable(profile, folder, env):
+    if profile == cloudflare.DEFAULT or not os.path.isabs(folder) or not bindable(profile, folder, env, here):
         return None
     there = resolve(folder, registry).project
     return (profile, folder) if there is not None and there.name == project.name else None
 
 
-def bindable(profile: str, folder: str, env: dict) -> bool:
+def bindable(profile: str, folder: str, env: dict, here: str | None = None) -> bool:
     """True when *folder* is a folder, not the home folder or one above it (everything under it would follow), and
-    binding it makes wrangler use *profile* in the folder you are in."""
+    binding it makes wrangler use *profile* in the folder you are in (*here*, else the current one)."""
     home = canonical(env.get("HOME") or Path.home())
     target = canonical(folder)
     if not target.is_dir() or target == home or target in home.parents:
         return False
-    return cloudflare.bound(os.getcwd(), {**cloudflare.bindings(env), folder: profile})[0] == profile
+    return cloudflare.bound(here or os.getcwd(), {**cloudflare.bindings(env), folder: profile})[0] == profile
 
 
 def superset_folder(profile: str, folder: str, project: Project, registry: Registry, env: dict) -> str | None:
@@ -969,7 +1321,10 @@ def superset_folder(profile: str, folder: str, project: Project, registry: Regis
     except OSError:
         return None
     for path in (parent, *entries):
-        there = resolve(path, registry).project
+        try:
+            there = resolve(path, registry).project
+        except GitError:  # git cannot tell where that worktree belongs: bind only the folder you are in
+            return None
         if there is not None and there.name != project.name:
             return None
     return parent
@@ -986,9 +1341,11 @@ def offer_fixes(failed: list, project: Project, env: dict, registry: Registry, t
     """In a terminal, when every failed check is fixed by a sign-in or by binding a folder of the project to its wrangler
     profile, ask (`Sign in now?`, then `Bind this folder now?`) and run them. What ran ("signed in", "bound …") when
     they all finished; False: one failed; None: nothing was offered or an answer was no. Never asked without a
-    terminal (agents, scripts, CI), so nothing waits for an answer that cannot come, and never for a fix in *tried*
-    (the fixes offered before, which are added to it): a fix that ran and did not help is only printed."""
-    if not failed or env.get("KEYFIT_DRY_RUN") == "1" or env.get("CI") or any(c.fix in tried for c in failed):
+    terminal (agents, scripts, CI) or inside a session Keyfit started (KEYFIT_PROJECT set: agents run commands in a
+    terminal too), so nothing waits for an answer that cannot come, and never for a fix in *tried* (the fixes offered
+    before, which are added to it): a fix that ran and did not help is only printed."""
+    if not failed or env.get("KEYFIT_DRY_RUN") == "1" or env.get("CI") or env.get("KEYFIT_PROJECT") or \
+            any(c.fix in tried for c in failed):
         return None
     if not (sys.stdin.isatty() and sys.stderr.isatty()):
         return None
@@ -1063,7 +1420,7 @@ def main(argv: list[str]) -> int:
     env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)
 
     try:
-        sub = subcommand(args, OPENCODE_SUBCOMMANDS) if tool == "opencode" else None
+        sub = subcommand("opencode", args, OPENCODE_SUBCOMMANDS) if tool == "opencode" else None
         if sub in OPENCODE_SHARED:
             return start(real, tool, opencode_private(args, env), env, env,
                          f"opencode {sub} is OpenCode's own command: it runs without a project's accounts or checks")
@@ -1079,9 +1436,16 @@ def main(argv: list[str]) -> int:
             raise Refused(f"keyfit: this session belongs to project {printable(pinned)}, which is not in the registry "
                           f"(renamed or removed?), so {tool} was not started.\n  Start the session again, or bypass "
                           f"once: KEYFIT_DISABLE=1 {tool} …")
-        if tool in ("opencode", "copilot"):
-            folder_check(tool, opencode_folder(args) if tool == "opencode" else copilot_folder(args), registry, project)
+        folders = {"opencode": opencode_folder, "copilot": copilot_folder, "codex": codex_folder}
+        if tool in folders:
+            folder_check(tool, folders[tool](args), registry, project)
+        if tool == "claude":  # before the checks, and inside a session outside every project too
+            claude_background(args, env, project)
         if project is None:  # not a registered project: exactly as before Keyfit
+            if tool == "codex":
+                args = codex_private(args, env)
+            if tool == "wrangler" and is_login_command(tool, args):  # except binding a project's folder elsewhere
+                wrangler_login_check(None, args, registry, env)
             return start(real, tool, opencode_private(args, env) if tool == "opencode" else args, env, env)
         if tool == "gcloud":  # before sign-in commands too: they write into configurations
             gcloud_guard(project, args, registry, env)
@@ -1092,6 +1456,8 @@ def main(argv: list[str]) -> int:
         if is_login_command(tool, args):
             # run sign-in/setup with the project's environment (so `aws sso login` / `claude auth login`
             # target the project's profile / account) but without checks
+            if tool == "aws":  # not another profile's sign-in, settings or keys
+                aws_profiles(project, args)
             if tool == "supabase":
                 supabase_login_check(project, args)
             if tool == "wrangler":
@@ -1110,6 +1476,9 @@ def main(argv: list[str]) -> int:
                 args = gemini_args(project, args, login_env, Path.cwd(), registry.mcp_owners())
             return start(real, tool, args, env, login_env)
         if relevant and not any(kind in project.connections for kind in relevant):
+            if tool == "gh" and positionals(args)[:2] == ["auth", "status"] and \
+                    not gh_switch(gh_options(args), "--show-token"):  # it lists the logins to map: as a sign-in
+                return start(real, tool, args, env, login_environment(tool, project, env))
             if tool in OPTIONAL:  # no account of its kind: it runs as before Keyfit, minus other projects' tokens
                 return start(real, tool, args, env, environment.build(project, env, kinds=relevant),
                              f"project {project.name} has no {relevant[0]} account mapped: {tool} runs without "
@@ -1139,13 +1508,18 @@ def main(argv: list[str]) -> int:
             if failed:
                 _say([f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"])
                 return 1
-        if tool in AGENTS:
-            for check in (c for c in checks if c.status == "warn"):
-                _say([f"keyfit: {check.lines()[0].strip()}"])
+        # agents: every warning; every tool: a success trusted from the cache because the provider did not answer
+        for check in (c for c in checks if c.status == "warn" and (tool in AGENTS or c.transient)):
+            _say([f"keyfit: {check.lines()[0].strip()}"])
         seen = [var for check in checks if check.kind == tool for var in check.scrub]
         args = adjust_args(tool, project, args, run_env, Path.cwd(), registry.mcp_owners(), seen)
     except Refused as refusal:
         print(refusal, file=sys.stderr)
+        return 1
+    except GitError as err:  # inside a repository git cannot read, the folder may be a project's: nothing starts
+        print(f"keyfit: {tool} not started: {printable(err)}, so Keyfit cannot tell which project that folder "
+              f"belongs to.\n  Fix git (keyfit doctor shows how), or bypass once: KEYFIT_DISABLE=1 {tool} …",
+              file=sys.stderr)
         return 1
     except RegistryError as err:  # a hand edit: no project can be told apart, so nothing starts checked
         _say([f"keyfit: {tool} not started, {tilde(err.path)} has a mistake", f"  ✘ {err}", f"    → {err.fix}",

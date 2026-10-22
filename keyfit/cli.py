@@ -27,7 +27,7 @@ from .adapters.aws import ACCOUNT_RE, parse_envrc, read_profile
 from .checks import Check, mask_account, printable
 from .registry import GOOGLE_TOOLS
 from .registry import Project, Registry, RegistryError, canonical, config_dir, default_path, tilde  # noqa: F401
-from .resolve import git_main_checkout, resolve
+from .resolve import GitError, git_main_checkout, resolve
 from .shim import INSTALL, MAP, RELEVANT
 
 TOOL_OF = {kinds[0]: tool for tool, kinds in RELEVANT.items() if kinds}  # github → gh
@@ -106,10 +106,23 @@ def cmd_init(args) -> int:
     if existing is not None and existing.name != name:
         print(f"{tilde(root)} is already registered as project '{existing.name}'", file=sys.stderr)
         return 1
+    # a project of that name in other folders: folder names (api, web, infra) repeat across clients, so only an
+    # explicit --name adds this folder to it, with that project's accounts
+    same = reg.get(name) if existing is None else None
+    others = same.roots if same else []
+    if others and not args.name:
+        print(f"a project named '{name}' already exists in {', '.join(others)}; {tilde(root)} is another folder.\n"
+              f"  Give this one a name of its own: keyfit init --name <client>-{name}\n"
+              f"  (or, to add it to '{name}' with the same accounts: keyfit init --name {name})", file=sys.stderr)
+        return 1
     reg.add_project(name, root)
     imported = _import_envrc(reg, name, root)
     reg.save()
-    print(f"Registered project '{name}' → {tilde(root)}")
+    if others:
+        print(f"Added a {'second' if len(others) == 1 else 'further'} folder to project '{name}' → {tilde(root)} "
+              f"(it also has {', '.join(others)}; every folder of {name} uses the same accounts)")
+    else:
+        print(f"Registered project '{name}' → {tilde(root)}")
     for line in imported:
         print(f"  imported {line}")
     if git is None:
@@ -719,8 +732,8 @@ def cmd_add_mcp(args) -> int:
         return 1
     owned = reg.add_mcp_servers(project.name, args.servers)
     reg.save()
-    found = {**{n: "claude" for n in mcp.claude_user_servers(dict(os.environ))},
-             **{n: "codex" for n in mcp.codex_servers(dict(os.environ))},
+    found = {**{n: "claude" for n, _ in mcp.claude_servers(dict(os.environ), Path.cwd())},
+             **{n: "codex" for n in mcp.codex_servers(dict(os.environ), Path.cwd())},
              **{n: "opencode" for n, _, _ in mcp.opencode_servers(dict(os.environ), Path.cwd())},
              **{n: "gemini" for n, _, _ in mcp.gemini_servers(dict(os.environ), Path.cwd())}}
     print(f"{project.name}: owns MCP servers {', '.join(owned)} — hidden in every other project")
@@ -737,12 +750,42 @@ def _claude_status(folder: Path) -> tuple[dict | None, str]:
     return claude_adapter.auth_status(env)
 
 
+def _bad_name(name: str | None) -> bool:
+    """A --name that is not a name Keyfit keeps accounts (and their folders) under; says so."""
+    if name is None or secrets.NAME.fullmatch(name):
+        return False
+    print("a name is letters, digits, '.', '_' and '-' (at most 64)", file=sys.stderr)
+    return True
+
+
+def _pick_name(reg: Registry, project: Project, kind: str, wanted: str | None, base: str, record: dict,
+               identity: tuple) -> tuple[str, str]:
+    """The name to record *record* under, and a line to print when that changes another project's account. Without
+    --name (*wanted*): *base*, else base-2, … — never an account recorded with another identity (the *identity*
+    fields: its folder, login or account). A --name is shared on purpose; the other projects it changes are named."""
+    taken = reg.data["accounts"].get(kind, {})
+    key = lambda r: tuple(str(r.get(f) or "").lower() if f == "login" else r.get(f) for f in identity)
+
+    def another(name: str) -> bool:
+        return isinstance(taken.get(name), dict) and key(taken[name]) != key(record)
+    name, n = wanted or base, 1
+    while not wanted and another(name):
+        n += 1
+        name = f"{base}-{n}"
+    users = sorted(p for p, body in reg.data["projects"].items() if p != project.name and body.get(kind) == name)
+    if not (users and another(name)):
+        return name, ""
+    was = ", ".join(f"{f} {taken[name][f]}" for f in identity if taken[name].get(f))
+    return name, f"  account '{name}' was {was or 'another account'}; it changed for {', '.join(users)} too"
+
+
 def cmd_add_claude(args) -> int:
     """Record which Claude login a project uses. Default: the login already in ~/.claude."""
     reg = Registry.load(args.registry)
     project = _project_from_args(reg, args)
-    if project is None:
+    if project is None or _bad_name(args.name):
         return 1
+    identity = ("config_dir", "org_id", "email")
     if args.new:
         if not args.name:
             print("--new needs --name (the account's short name)", file=sys.stderr)
@@ -750,9 +793,13 @@ def cmd_add_claude(args) -> int:
         folder = Path(args.config_dir).expanduser() if args.config_dir else config_dir() / "claude" / args.name
         made = claude_adapter.seed(folder, dict(os.environ), [Path(r).expanduser() for r in project.roots])
         print(f"Created {tilde(folder)}" + (f" ({', '.join(made)})" if made else ""))
-        reg.set_account("claude", args.name, {"config_dir": tilde(folder)})
+        record = {"config_dir": tilde(folder)}
+        _, note = _pick_name(reg, project, "claude", args.name, args.name, record, identity)
+        reg.set_account("claude", args.name, record)
         reg.set_connection(project.name, "claude", args.name)
         reg.save()
+        if note:
+            print(note)
         print(f"Sign in once in that folder, then record the identity:\n"
               f"  {claude_adapter.login_command(folder, os.environ)}\n"
               f"  keyfit add claude --name {args.name} --config-dir {tilde(folder)}")
@@ -768,12 +815,16 @@ def cmd_add_claude(args) -> int:
         print(f"no claude.ai login in {tilde(folder)} (auth method: {status.get('authMethod')})", file=sys.stderr)
         print(f"  sign in with: {claude_adapter.login_command(folder, os.environ)}", file=sys.stderr)
         return 1
-    name = args.name or claude_adapter.slug(status.get("orgName") or "personal")
-    reg.set_account("claude", name, claude_adapter.identity_from(status, tilde(folder), pin_email=args.pin_email))
+    record = claude_adapter.identity_from(status, tilde(folder), pin_email=args.pin_email)
+    name, note = _pick_name(reg, project, "claude", args.name, claude_adapter.slug(status.get("orgName") or "personal"),
+                            record, identity)
+    reg.set_account("claude", name, record)
     reg.set_connection(project.name, "claude", name)
     reg.save()
     print(f"{project.name}: claude account '{name}' → {status.get('orgName') or 'personal'} "
           f"({status.get('subscriptionType')}) in {tilde(folder)}")
+    if note:
+        print(note)
     return 0
 
 
@@ -783,7 +834,7 @@ def cmd_add_github(args) -> int:
 
     reg = Registry.load(args.registry)
     project = _project_from_args(reg, args)
-    if project is None:
+    if project is None or _bad_name(args.name):
         return 1
     token, reason = read_token(args.login, dict(os.environ))
     if token is None:
@@ -803,9 +854,11 @@ def cmd_add_github(args) -> int:
         return 1
     root = Path(project.roots[0]).expanduser()
     email, host = git_identity(str(root))
-    name = args.name or args.login.lower()
-    # accounts are shared by projects: merge, so one project's repo details never erase another's
-    account = dict(reg.data["accounts"].get("github", {}).get(name, {}), login=args.login)
+    name, note = _pick_name(reg, project, "github", args.name, args.login.lower(), {"login": args.login}, ("login",))
+    # accounts are shared by projects: merge, so one project's repo details never erase another's (same login only)
+    before = reg.data["accounts"].get("github", {}).get(name)
+    same = isinstance(before, dict) and str(before.get("login", "")).lower() == args.login.lower()
+    account = dict(before if same else {}, login=args.login)
     for key, explicit, found in (("email", args.email, email), ("ssh_host", args.ssh_host, host)):
         if explicit:
             account[key] = explicit
@@ -816,6 +869,8 @@ def cmd_add_github(args) -> int:
     reg.save()
     extras = ", ".join(f"{k} {v}" for k, v in account.items() if k != "login")
     print(f"{project.name}: github account '{name}' → {args.login}" + (f" ({extras})" if extras else ""))
+    if note:
+        print(note)
     return 0
 
 
@@ -835,7 +890,7 @@ def cmd_add_codex(args) -> int:
 
     reg = Registry.load(args.registry)
     project = _project_from_args(reg, args)
-    if project is None:
+    if project is None or _bad_name(args.name):
         return 1
     conn = {"codex_home": args.codex_home} if args.codex_home else {}
     folder = home(conn, dict(os.environ))
@@ -843,15 +898,19 @@ def cmd_add_codex(args) -> int:
     if login is None:
         print(f"{problem} — run: codex login", file=sys.stderr)
         return 1
-    name = args.name or (login["plan"] or "chatgpt")
     account = {"codex_home": tilde(folder), "plan": login["plan"]}
     if args.pin_account:
         account.update(account_id=login["account_id"], pin_account=True)
-    reg.set_account("codex", name, {k: v for k, v in account.items() if v})
+    account = {k: v for k, v in account.items() if v}
+    name, note = _pick_name(reg, project, "codex", args.name, login["plan"] or "chatgpt", account,
+                            ("codex_home", "account_id"))
+    reg.set_account("codex", name, account)
     reg.set_connection(project.name, "codex", name)
     reg.save()
     print(f"{project.name}: codex account '{name}' → ChatGPT {login['plan']} in {tilde(folder)}"
           + (" (pinned to this account)" if args.pin_account else ""))
+    if note:
+        print(note)
     return 0
 
 
@@ -859,7 +918,7 @@ def cmd_add_opencode(args) -> int:
     """Record which OpenCode sign-ins (its login database) a project uses. Default: OpenCode's own database."""
     reg = Registry.load(args.registry)
     project = _project_from_args(reg, args)
-    if project is None:
+    if project is None or _bad_name(args.name):
         return 1
     env = dict(os.environ)
     if args.new:
@@ -869,12 +928,15 @@ def cmd_add_opencode(args) -> int:
         folder = config_dir() / "opencode" / args.name
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)  # OpenCode keeps the sign-ins and sessions here
         db = folder / "opencode.db"
+        _, note = _pick_name(reg, project, "opencode", args.name, args.name, {"db": tilde(db)}, ("db",))
         reg.set_account("opencode", args.name, {"db": tilde(db)})
         reg.set_connection(project.name, "opencode", args.name)
         reg.save()
         print(f"Created {tilde(folder)}. Sign in once (OpenCode keeps the sign-ins in that folder), then record "
               f"them:\n  {opencode_adapter.sign_in(db, env)}\n"
               f"  keyfit add opencode --name {args.name} --db {tilde(db)}")
+        if note:
+            print(note)
         return 0
     db = canonical(args.db) if args.db else opencode_adapter.default_db(env)
     found, reason = opencode_adapter.signed_in(db)
@@ -882,11 +944,15 @@ def cmd_add_opencode(args) -> int:
         print(f"no OpenCode sign-ins in {tilde(db)}" + (f" ({reason})" if reason else "") +
               f"\n  sign in with: {opencode_adapter.sign_in(db, env)}", file=sys.stderr)
         return 1
-    name = args.name or ("default" if db == opencode_adapter.default_db(env) else db.parent.name)
-    reg.set_account("opencode", name, {"db": tilde(db), "logins": sorted(found)})
+    record = {"db": tilde(db), "logins": sorted(found)}
+    name, note = _pick_name(reg, project, "opencode", args.name,
+                            "default" if db == opencode_adapter.default_db(env) else db.parent.name, record, ("db",))
+    reg.set_account("opencode", name, record)
     reg.set_connection(project.name, "opencode", name)
     reg.save()
     print(f"{project.name}: opencode account '{name}' → {', '.join(sorted(found))} in {tilde(db)}")
+    if note:
+        print(note)
     return 0
 
 
@@ -898,7 +964,7 @@ def cmd_add_copilot(args) -> int:
 
     reg = Registry.load(args.registry)
     project = _project_from_args(reg, args)
-    if project is None:
+    if project is None or _bad_name(args.name):
         return 1
     github = project.connections.get("github")
     login = args.login or (github.get("login") if isinstance(github, dict) else None)
@@ -926,12 +992,14 @@ def cmd_add_copilot(args) -> int:
         print(f"gh's stored login for {login} actually authenticates as {actual}.\n"
               f"  Sign in again as {login}: {adapter.login_fix({'login': login})}", file=sys.stderr)
         return 1
-    name = args.name or login.lower()
+    name, note = _pick_name(reg, project, "copilot", args.name, login.lower(), {"login": login}, ("login",))
     reg.set_account("copilot", name, {"login": login})
     reg.set_connection(project.name, "copilot", name)
     reg.save()
     same = isinstance(github, dict) and str(github.get("login", "")).lower() == login.lower()
     print(f"{project.name}: copilot account '{name}' → GitHub {login}" + (", the project's GitHub account" if same else ""))
+    if note:
+        print(note)
     return 0
 
 
@@ -959,14 +1027,16 @@ def cmd_add_vercel(args) -> int:
     """Record which Vercel login (global config folder) and team a project uses. Default: the CLI's own login."""
     reg = Registry.load(args.registry)
     project = _project_from_args(reg, args)
-    if project is None:
+    if project is None or _bad_name(args.name):
         return 1
+    identity = ("config_dir", "user", "team_id")
     if args.new:
         if not args.name:
             print("--new needs --name (the account's short name)", file=sys.stderr)
             return 1
         folder = config_dir() / "vercel" / args.name
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)  # the CLI keeps the login's token here
+        _, note = _pick_name(reg, project, "vercel", args.name, args.name, {"config_dir": tilde(folder)}, identity)
         reg.set_account("vercel", args.name, {"config_dir": tilde(folder)})
         reg.set_connection(project.name, "vercel", args.name)
         reg.save()
@@ -974,6 +1044,8 @@ def cmd_add_vercel(args) -> int:
         print(f"Created {tilde(folder)}. Sign in once from inside {project.name} (Keyfit sends the login to that "
               f"folder), then record who it is:\n  vercel login\n"
               f"  keyfit add vercel --name {args.name} --config-dir {tilde(folder)}{team}")
+        if note:
+            print(note)
         return 0
     env = dict(os.environ)
     folder = canonical(args.config_dir) if args.config_dir else canonical(vercel_adapter.cli_default(env))
@@ -982,13 +1054,16 @@ def cmd_add_vercel(args) -> int:
         print(f"could not record the Vercel login: {problem}\n  sign in with: "
               f"{vercel_adapter.login_command(folder, env)}", file=sys.stderr)
         return 1
-    name = args.name or record.get("team") or record["user"]
-    reg.set_account("vercel", name, {"config_dir": tilde(folder), **record})
+    account = {"config_dir": tilde(folder), **record}
+    name, note = _pick_name(reg, project, "vercel", args.name, record.get("team") or record["user"], account, identity)
+    reg.set_account("vercel", name, account)
     reg.set_connection(project.name, "vercel", name)
     reg.save()
     team = f", team {record['team']}" + ("" if args.team else " (selected in that login; another: --team SLUG)") \
         if record.get("team") else ""
     print(f"{project.name}: vercel account '{name}' → {record['user']}{team} in {tilde(folder)}")
+    if note:
+        print(note)
     return 0
 
 
@@ -1161,8 +1236,6 @@ def _cloudflare_account(accounts: dict, wanted: str | None, profile: str, folder
 def cmd_add_cloudflare(args) -> int:
     """Record which wrangler profile (a sign-in wrangler keeps) and Cloudflare account a project uses. Keyfit keeps no
     token: the folder's binding picks wrangler's sign-in, Keyfit checks it and pins the account."""
-    import shlex
-
     reg = Registry.load(args.registry)
     project = _project_from_args(reg, args)
     if project is None:
@@ -1225,15 +1298,25 @@ def cmd_add_cloudflare(args) -> int:
     if problem is None:
         return 0
     detail, fix = problem
+    from .shim import binding_command
+
+    # the binding the shim would offer: the git checkout's top when it is the project's, else the project's root
+    bind = None
+    if fix.startswith("wrangler auth activate "):
+        root = resolve(folder, reg).root
+        for target in (fix, f"wrangler auth activate {profile} {cloudflare_adapter.shell_path(root)}" if root else ""):
+            bind = binding_command(Check("cloudflare", "fail", "", detail, target), reg.get(project.name), reg, env,
+                                   folder)
+            if bind:
+                fix = target
+                break
     print(f"  next: {detail}\n  → {fix}")
-    words = shlex.split(fix)
-    if words[:3] == ["wrangler", "auth", "activate"] and len(words) == 5 and sys.stdin.isatty() and _yes("Run it now?"):
-        target = os.path.expanduser(words[4])
-        reason = ADAPTERS["cloudflare"].activate(binary, words[3], target, env)
+    if bind and sys.stdin.isatty() and _yes("Run it now?"):
+        reason = ADAPTERS["cloudflare"].activate(binary, bind[0], bind[1], env)
         if reason:
             print(f"wrangler auth activate did not finish ({reason}); run it yourself: {fix}", file=sys.stderr)
             return 1
-        print(f"  bound {tilde(target)} to wrangler profile {words[3]}")
+        print(f"  bound {tilde(bind[1])} to wrangler profile {bind[0]}")
     return 0
 
 
@@ -1685,19 +1768,24 @@ def _configuration_line(name: str, settings: dict) -> str:
 
 def _gcloud_configuration(project: str, names: list[str], email: str | None, env: dict) -> tuple[str | None, str]:
     """The gcloud configuration a project uses, when not given: the only one signed in as the project's Google
-    account, else the only one, else one picked at the terminal."""
+    account (any one, when the project has no Google account yet), else one of them picked at the terminal. Never
+    another account's: setting the project's account there would move every gcloud that uses it (the configuration
+    active everywhere else, say)."""
     rows = {n: gcloud_adapter.read(env, n) or {} for n in names}
-    fits = [n for n in names if email and google_adapter.same(rows[n].get("account"), email)]
+    fits = [n for n in names if email is None or google_adapter.same(rows[n].get("account"), email)]
+    if not fits:
+        name = _account_name(project, "gcloud")
+        return None, (f"no gcloud configuration uses {email} (gcloud has {', '.join(names)}), and Keyfit takes no "
+                      f"other account's: gcloud uses it elsewhere\n  → gcloud config configurations create {name} "
+                      f"--no-activate, then: keyfit add gcloud --configuration {name} --project-id ID")
     if len(fits) == 1:
         return fits[0], ""
-    if len(names) == 1:
-        return names[0], ""
     if sys.stdin.isatty():
-        print("gcloud configurations on this Mac:")
-        options = [_configuration_line(n, rows[n]) for n in fits or names]
+        print("gcloud configurations on this Mac" + (f" signed in as {email}:" if email else ":"))
+        options = [_configuration_line(n, rows[n]) for n in fits]
         picked = _choose(f"gcloud configuration for {project}", options)
         if picked:
-            return (fits or names)[options.index(picked)], ""
+            return fits[options.index(picked)], ""
     return None, f"pick a gcloud configuration with --configuration NAME (this Mac has {', '.join(names)})"
 
 
@@ -2219,6 +2307,21 @@ def cmd_doctor(args) -> int:
                                 "codex, opencode, copilot and gemini sessions"))
         else:
             checks.append(Check(tool, "warn", "not found on PATH", "needed only if you use it", INSTALL[tool]))
+    import shutil
+    import subprocess
+
+    git = shutil.which("git", path=env.get("PATH"))
+    try:  # which project a repository belongs to comes from git: without it, tools do not start inside repositories
+        out = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=10, check=False)
+        reason = "" if out.returncode == 0 else (out.stderr.strip().splitlines() or [f"exit {out.returncode}"])[0]
+    except FileNotFoundError:
+        out, reason = None, "not found on PATH"
+    except (OSError, subprocess.SubprocessError) as err:
+        out, reason = None, getattr(err, "strerror", None) or "no answer within 10 seconds"
+    checks.append(Check("git", "ok", _short(git or "git"), out.stdout.strip()) if not reason else
+                  Check("git", "fail", _short(git or "git"), f"{reason} · tools do not start inside git repositories",
+                        "sudo xcodebuild -license accept" if out is not None and out.returncode == 69
+                        else "xcode-select --install"))
     path = Path(args.registry) if args.registry else default_path()
     try:
         reg = Registry.load(path)
@@ -2232,8 +2335,13 @@ def cmd_doctor(args) -> int:
     checks.append(Check("keychain", "fail", "macOS Keychain", reason,
                         "/usr/bin/security list-keychains   (then repair the login keychain in Keychain Access)")
                   if reason else Check("keychain", "ok", "macOS Keychain", "reachable"))
-    if reg is not None:
-        r = resolve(".", reg)
+    try:
+        r = resolve(".", reg) if reg is not None else None
+    except GitError as err:
+        r = None
+        checks.append(Check("project", "fail", "this folder", f"{err}: which project it belongs to is unknown, so "
+                            "tools do not start here", "git status shows git's whole message; fix what it says"))
+    if r is not None:
         if r.registered:
             checks.append(Check("project", "ok", r.project.name, r.how))
             conn = r.project.connections.get("cloudflare")
@@ -2559,4 +2667,8 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except RegistryError as err:  # a hand edit: say where and how to fix it, not a traceback
         print(f"keyfit: cannot use {tilde(err.path)}: {err}\n  → {err.fix}", file=sys.stderr)
+        return 1
+    except GitError as err:  # inside a repository git cannot read, the folder may be a project's: nothing is assumed
+        print(f"keyfit: {printable(err)}, so Keyfit cannot tell which project that folder belongs to.\n"
+              f"  → fix git (keyfit doctor shows how)", file=sys.stderr)
         return 1

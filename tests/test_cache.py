@@ -39,7 +39,19 @@ class CacheTests(unittest.TestCase):
     def test_unwritable_cache_never_breaks_a_launch(self):
         os.environ["KEYFIT_CONFIG_DIR"] = "/dev/null/keyfit"
         cache.put("a", "ok", "x")  # must not raise
+        cache.drop("a")
         self.assertIsNone(cache.get("a"))
+
+    def test_drop_forgets_one_entry(self):
+        cache.put("a", "ok", "x")
+        cache.put("b", "ok", "y")
+        cache.drop("a")
+        self.assertIsNone(cache.get("a"))
+        self.assertEqual(cache.get("b")["detail"], "y")
+
+    def test_drop_writes_nothing_when_there_is_nothing_to_forget(self):
+        cache.drop("a")
+        self.assertFalse((Path(os.environ["KEYFIT_CONFIG_DIR"]) / "cache").exists())
 
     def test_cache_and_registry_are_owner_only_from_the_first_byte(self):
         from keyfit.registry import Registry, write_private

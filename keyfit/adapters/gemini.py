@@ -19,11 +19,16 @@ inject  — GEMINI_CLI_HOME (none for your own home); a key account's key in GEM
 scrub   — where Gemini CLI starts (the shim and the remote check): the variables that would pick another sign-in, key,
           Google Cloud project, endpoint or credential store (GEMINI_API_KEY unless it is the account's, GOOGLE_API_KEY,
           GOOGLE_CLOUD_PROJECT, GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_GENAI_USE_VERTEXAI, …). Sessions of other agents
-          keep them. GEMINI_DEFAULT_AUTH_TYPE preselects the account's method in Gemini CLI's sign-in dialog.
+          keep them. GEMINI_DEFAULT_AUTH_TYPE preselects the account's method in Gemini CLI's sign-in dialog. Gemini CLI
+          loads one .env file (the nearest, from its folder up to /, else its home's) for each variable not set:
+          the local check fails when that file would bring one of them back. In the project's own .env (in one of
+          its folders) a key, Google Cloud project or method its app uses (APP_SETTINGS) only warns.
 forget  — in a project without a Gemini CLI account, what Keyfit set for another project goes.
-local   — Google: the home's sign-in method is Google's (or not chosen yet), it holds a Google sign-in, and that
-          sign-in's email is the project's Google account. Key: the key is there and the home uses the API-key method.
-          Only labels are read, never a token.
+local   — no .env file Gemini CLI may load sets a variable Keyfit removed (only the names are read); the project's
+          own .env setting its app's key, project or method gets a warning. Google: the
+          home's sign-in method is Google's (or not chosen yet), it holds a Google sign-in, and that sign-in's email
+          is the project's Google account. Key: the key is there and the home uses the API-key method. Only labels
+          are read, never a token.
 remote  — Google: when the sign-in's access token is still valid, Google's tokeninfo must name the account; an expired
           one is not renewed (that needs Gemini CLI's own OAuth client), so the local check decides until Gemini CLI
           renews it. Key: Google's Gemini API must accept the key (it lists one model; the key goes in a header).
@@ -62,8 +67,16 @@ SCRUB = ("GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_ACCES
          "GOOGLE_CLOUD_PROJECT_ID", "GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_QUOTA_PROJECT", "GOOGLE_CLOUD_ACCOUNT",
          "GOOGLE_CLOUD_UNIVERSE_DOMAIN", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_GCA", "GOOGLE_GEMINI_BASE_URL",
          "GOOGLE_VERTEX_BASE_URL", "GOOGLE_CREDENTIALS", "GOOGLE_SERVICE_ACCOUNT_AUTH", "GEMINI_CLI_AUTH_OVERRIDE",
-         "GEMINI_DEFAULT_AUTH_TYPE", "GEMINI_CLI_USE_COMPUTE_ADC", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE")
+         "GEMINI_DEFAULT_AUTH_TYPE", "GEMINI_CLI_USE_COMPUTE_ADC", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
+         "CODE_ASSIST_ENDPOINT")
 SCRUB_PREFIXES = ("GOOGLE_EXTERNAL_ACCOUNT_",)
+# Of those, what a project's own .env sets for its app (a key or credential, its Google Cloud project and location,
+# google-genai's method switches): there only a warning. Every other name (an endpoint, Gemini CLI's home, the
+# credential store, an external account) fails the check wherever it is set: a repository must never send the sign-in's
+# token to another host or move the sign-in.
+APP_SETTINGS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CREDENTIALS",
+                "GOOGLE_CLOUD_ACCESS_TOKEN", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID", "GOOGLE_CLOUD_LOCATION",
+                "GOOGLE_CLOUD_QUOTA_PROJECT", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_GCA")
 MODELS = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1"
 SHARED = ("GEMINI.md", "commands", "skills", "agents", "policies", "extensions")  # follow you into a new home
 EXPIRY_MARGIN = 60  # seconds: a token about to expire is treated as expired
@@ -101,7 +114,7 @@ def _jsonc(path: Path):
     from .cloudflare import _jsonc as strip
 
     try:
-        return json.loads(strip(path.read_text()))
+        return json.loads(strip(path.read_text(encoding="utf-8-sig")))
     except (OSError, UnicodeDecodeError, ValueError):
         return None
 
@@ -203,6 +216,112 @@ def scrub(conn, env: dict) -> None:
     env["GEMINI_DEFAULT_AUTH_TYPE"] = API_KEY if is_key(conn) else GOOGLE
     if isinstance(conn.get("cloud_project"), str) and conn["cloud_project"]:
         env["GOOGLE_CLOUD_PROJECT"] = conn["cloud_project"]
+
+
+def _env_file(start: Path, path: Path, trusted: bool, ignore: bool) -> Path | None:
+    """The .env file Gemini CLI loads when it starts in *start* with the home *path* (its findEnvFile, 0.64.0): the
+    first from the folder up to /, .gemini/.env (in a trusted folder) before .env (with --ignore-env, only the home's),
+    else the home's .gemini/.env (trusted) or .env."""
+    for here in (start, *start.parents):
+        if trusted and (folder(here) / ".env").exists():
+            return folder(here) / ".env"
+        if (here / ".env").exists() and (not ignore or here == path):
+            return here / ".env"
+    last = ([folder(path) / ".env"] if trusted else []) + [path / ".env"]
+    return next((file for file in last if file.exists()), None)
+
+
+def dotenv_files(start: Path, path: Path) -> list[Path]:
+    """The .env files Gemini CLI may load in *start*: whether the folder is trusted, and --ignore-env, are not known
+    here, so the one each of those starts would load counts (a false alarm, never a miss)."""
+    found: list[Path] = []
+    for trusted in (True, False):
+        for ignore in (False, True):
+            file = _env_file(canonical(start), canonical(path), trusted, ignore)
+            if file is not None and file not in found:
+                found.append(file)
+    return found
+
+
+def _excluded(path: Path, env: dict) -> set:
+    """advanced.excludedEnvVars of your settings and the system's (Gemini CLI merges them): names it never loads from a
+    .env outside a .gemini folder. The folder's own settings do not count: an untrusted folder's are ignored."""
+    names: set = set()
+    for _, file in settings_files(path, env):
+        data = _jsonc(file)
+        advanced = data.get("advanced") if isinstance(data, dict) else None
+        listed = advanced.get("excludedEnvVars") if isinstance(advanced, dict) else None
+        if isinstance(listed, list):
+            names.update(name for name in listed if isinstance(name, str))
+    return names
+
+
+def reloaded(conn, env: dict, start: Path) -> list[tuple[Path, list[str]]]:
+    """(file, names) for each .env file Gemini CLI may load in *start* that sets a variable Keyfit removed where Gemini
+    CLI starts and left unset: Gemini CLI would load it, and so use another key, sign-in method, Google Cloud project,
+    endpoint or home. Only names are read: a value is never kept or shown."""
+    from .cloudflare import DOTENV_LINE
+
+    started = dict(env)
+    scrub(conn, started)
+    path = home(conn, env)
+    excluded = None
+    found = []
+    for file in dotenv_files(start, path):
+        try:
+            if not file.is_file():  # a folder: Gemini CLI cannot read it either
+                continue
+            text = file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        seen = {m.group(1) for m in map(DOTENV_LINE.match, text.splitlines()) if m}
+        names = sorted(name for name in seen if name not in started and (
+            name in SCRUB or name.startswith(SCRUB_PREFIXES) or name in (KEY_VAR, HOME_VAR)))
+        if names and ".gemini" not in str(file):
+            excluded = _excluded(path, env) if excluded is None else excluded
+            names = [name for name in names if name not in excluded]
+        if names:
+            found.append((file, names))
+    return found
+
+
+def projects_own(file: Path, env: dict) -> bool:
+    """Whether *file* lies in a folder of the session's project (KEYFIT_PROJECT): under one of its roots, or in a folder
+    that resolves to it (a worktree). Such a .env holds the project's own settings, not another client's."""
+    from ..registry import Registry
+    from ..resolve import GitError, resolve
+
+    name = env.get("KEYFIT_PROJECT")
+    if not name:
+        return False
+    here = canonical(file.parent)
+    try:
+        registry = Registry.load()
+        project = registry.projects().get(name)
+        if project is None:
+            return False
+        if any(here == root or root in here.parents for root in project.canonical_roots()):
+            return True
+        found = resolve(here, registry)  # git, only for a .env outside the roots that sets such a name
+    except (GitError, OSError, ValueError):
+        return False
+    return found.project is not None and found.project.name == name
+
+
+def reloaded_problem(found: list[tuple[Path, list[str]]], path: Path, own: bool = False) -> tuple[str, str]:
+    """(detail, fix) for .env files that bring back what Keyfit removed: the files and the names, never a value. *own*:
+    the project's own files, which get a warning."""
+    files = "; ".join(f"{printable(tilde(file))} sets {', '.join(names)}" for file, names in found)
+    every = sorted({name for _, listed in found for name in listed})
+    where = printable(tilde(found[0][0])) if len(found) == 1 else "those files"
+    fix = f"remove {', '.join(every)} from {where}"
+    if not any(".gemini" in str(file) for file, _ in found):  # Gemini CLI skips the names listed there in such a file
+        settings = tilde(folder(path) / "settings.json")
+        fix += f', or add "advanced": {{"excludedEnvVars": {json.dumps(every)}}} to {settings}'
+    it = "it" if len(every) == 1 else "them"
+    if own:
+        return f"{files}: Gemini CLI uses {it} instead of the project's Gemini CLI account", fix
+    return f"{files}, which Gemini CLI would load although Keyfit removed {it} for the project's account", fix
 
 
 def seed(path: Path, env: dict, key: bool = False) -> list[str]:
@@ -314,6 +433,24 @@ class GeminiAdapter(Adapter):
         if not path.is_dir():
             return fail(f"Gemini CLI folder {tilde(path)} does not exist",
                         f"keyfit add gemini --name {name} " + ("--key" if is_key(conn) else "--new"))
+        own, others = [], []
+        for file, names in reloaded(conn, env, Path.cwd()):  # first: Gemini CLI's sign-in would load the file too
+            app = [name for name in names if name in APP_SETTINGS]
+            if app and not projects_own(file, env):  # outside the project's folders: another account's key, say
+                app = []
+            if app:
+                own.append((file, app))
+            if len(app) < len(names):
+                others.append((file, [name for name in names if name not in app]))
+        if others:
+            return fail(*reloaded_problem(others, path))
+
+        def ok(detail: str) -> Check:
+            if not own:
+                return Check(self.kind, "ok", label, detail, pending=True)
+            warning, fix = reloaded_problem(own, path, own=True)
+            return Check(self.kind, "warn", label, " · ".join(d for d in (detail, warning) if d), fix, pending=True)
+
         chosen, where = method(path, env, Path.cwd())
         wanted = API_KEY if is_key(conn) else GOOGLE
         if (chosen or wanted) != wanted or (is_key(conn) and chosen is None):
@@ -325,7 +462,7 @@ class GeminiAdapter(Adapter):
         if is_key(conn):
             if not env.get(KEY_VAR):
                 return fail(f"the API key ({secrets.describe(conn['key'])}) is missing", "keyfit add gemini --key")
-            return Check(self.kind, "ok", label, "", pending=True)
+            return ok("")
         account = conn.get("account")
         if not isinstance(account, str) or not EMAIL.fullmatch(account):
             return fail("the project has no Google account", "keyfit add google --email <the project's Google account>")
@@ -341,8 +478,7 @@ class GeminiAdapter(Adapter):
         if not same(login["email"], account):
             return fail(f"Gemini CLI is signed in as {printable(login['email'])}, the project's Google account is "
                         f"{account}", again)
-        return Check(self.kind, "ok", label, "Google sign-in" + ("" if is_default(path, env) else f" in {tilde(path)}"),
-                     pending=True)
+        return ok("Google sign-in" + ("" if is_default(path, env) else f" in {tilde(path)}"))
 
     def remote(self, conn, env: dict) -> Check:
         label = self.label(conn)

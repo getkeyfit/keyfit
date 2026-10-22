@@ -1,13 +1,22 @@
+import contextlib
+import io
 import json
 import os
 import stat
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from keyfit import mcp
+from keyfit.adapters import gemini
 from keyfit.adapters.claude import ClaudeAdapter, login_command, seed
+from keyfit.adapters.google_mcp import GoogleMcpAdapter
+from keyfit.cli import main
 from keyfit.realbin import find_real
-from keyfit.registry import Registry
+from keyfit.registry import Project, Registry
+from keyfit.shim import Refused, adjust_args
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -62,6 +71,18 @@ class ClaudeTests(unittest.TestCase):
         for var in ("CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
                     "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK"):
             self.assertNotIn(var, env)
+
+    def test_inject_removes_what_the_docs_say(self):
+        # docs/accounts.md: "API keys, OAuth tokens, gateway URLs and cloud-provider switches are removed."
+        documented = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+                      "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "ANTHROPIC_PROFILE", "ANTHROPIC_BASE_URL",
+                      "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                      "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_MANTLE",
+                      "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CONFIG_DIR")
+        env = self.env(ANTHROPIC_MODEL="claude-opus-5-5", **{var: "inherited" for var in documented})
+        self.claude.inject(self.work, env)
+        self.assertEqual([var for var in documented if var in env], [])
+        self.assertEqual(env["ANTHROPIC_MODEL"], "claude-opus-5-5")  # everything else stays as it was
 
     def test_other_account_sets_config_dir(self):
         env = self.env()
@@ -144,6 +165,227 @@ class ClaudeTests(unittest.TestCase):
         env = {"HOME": str(self.home), "PATH": f"{wrapper}{os.pathsep}{self.bin}"}
         self.assertEqual(find_real("claude", env, skip_wrappers=True), str(self.bin / "claude"))
         self.assertEqual(find_real("claude", env), str(wrapper / "claude"))
+
+
+class AddClaudeTests(unittest.TestCase):
+    """`keyfit add claude` from two projects, with a fake claude that has a personal login in ~/.claude and another
+    one in a second folder."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.home = self.tmp / "home"
+        (self.home / ".claude").mkdir(parents=True)
+        self.other = self.tmp / "accounts" / "globex"
+        self.other.mkdir(parents=True)
+        self.config = self.tmp / "keyfit"
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "claude").write_text(FAKE_CLAUDE)
+        (bin_dir / "claude").chmod(0o755)
+        logins = {str(self.home / ".claude"): {"authMethod": "claude.ai", "email": "me@home.io", "subscriptionType": "pro"},
+                  str(self.other): {"authMethod": "claude.ai", "email": "me@globex.io", "subscriptionType": "max"}}
+        for patcher in (mock.patch.dict(os.environ, {"HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config),
+                                                     "PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin",
+                                                     "FAKE_CLAUDE": json.dumps(logins)}, clear=True),
+                        mock.patch.object(Path, "home", return_value=self.home)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for name in ("acme", "globex"):
+            (self.tmp / name).mkdir()
+            self.run_main("init", "--yes", "--root", str(self.tmp / name), "--name", name)
+
+    def run_main(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def registry(self):
+        return tomllib.loads((self.config / "registry.toml").read_text())
+
+    def test_two_personal_logins_keep_their_own_accounts(self):
+        self.assertEqual(self.run_main("add", "claude", "--project", "acme"),
+                         (0, "acme: claude account 'personal' → personal (pro) in ~/.claude\n", ""))
+        self.assertEqual(self.run_main("add", "claude", "--project", "globex", "--config-dir", str(self.other)),
+                         (0, f"globex: claude account 'personal-2' → personal (max) in {self.other}\n", ""))
+        reg = self.registry()
+        self.assertEqual(reg["accounts"]["claude"]["personal"],
+                         {"config_dir": "~/.claude", "email": "me@home.io", "pin_email": True})
+        self.assertEqual(reg["accounts"]["claude"]["personal-2"]["config_dir"], str(self.other))
+        self.assertEqual((reg["projects"]["acme"]["claude"], reg["projects"]["globex"]["claude"]),
+                         ("personal", "personal-2"))
+
+    def test_new_with_a_shared_name_names_who_changed(self):
+        self.run_main("add", "claude", "--project", "acme", "--name", "work")
+        code, out, err = self.run_main("add", "claude", "--project", "globex", "--new", "--name", "work")
+        self.assertEqual(code, 0, err)
+        self.assertIn("  account 'work' was config_dir ~/.claude, email me@home.io; it changed for acme too\n", out)
+
+    def test_new_refuses_a_name_that_is_not_a_name(self):
+        for name in ("../x", "../../x", "a\nb"):
+            self.assertEqual(self.run_main("add", "claude", "--project", "acme", "--new", "--name", name),
+                             (1, "", "a name is letters, digits, '.', '_' and '-' (at most 64)\n"))
+        self.assertFalse((self.config / "x").exists() or (self.tmp / "x").exists())
+        self.assertNotIn("claude", self.registry().get("accounts", {}))
+
+
+GLOBEX_LINEAR = {"type": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_GLOBEX_API_KEY}"}}
+LINEAR = {"type": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}
+
+
+class McpTests(unittest.TestCase):
+    """The servers a Claude session of acme must not see: from the user scope, the local scope (`claude mcp add` without
+    --scope) of the folder and its repository, and a second login's ~/.claude.json, and the folder's .mcp.json."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+        self.repo = self.tmp / "repo"
+        (self.repo / ".git").mkdir(parents=True)
+        self.web = self.repo / "web"
+        self.web.mkdir()
+        self.acme = Project("acme", [str(self.repo)], {"linear": {"workspace": "acme", "key": "env:LINEAR_ACME_API_KEY"}})
+        self.owners = {"globex": ["globex_cloud_*"]}
+        self.env = {"HOME": str(self.home)}
+        self.system = mock.patch.object(gemini, "SYSTEM", self.tmp / "no-system")  # never this Mac's Gemini CLI settings
+        self.system.start()
+        self.addCleanup(self.system.stop)
+
+    def state(self, data, path=None):
+        (path or self.home / ".claude.json").write_text(json.dumps(data))
+
+    def denied(self, cwd=None, env=None):
+        settings = mcp.claude_settings(self.acme, env or self.env, cwd or self.repo, self.owners)
+        return sorted(s["serverName"] for s in settings.get("deniedMcpServers", []))
+
+    def test_local_scope_of_the_folder_and_the_repositorys_top(self):
+        self.state({"mcpServers": {"linear": LINEAR}, "projects": {
+            str(self.repo): {"mcpServers": {"linear_globex": GLOBEX_LINEAR}},
+            str(self.web): {"mcpServers": {"globex_cloud_eu": {"command": "globex-mcp"}}},
+            str(self.tmp / "elsewhere"): {"mcpServers": {"globex_cloud_us": {"command": "globex-mcp"}}}}})
+        self.assertEqual(self.denied(self.web), ["globex_cloud_eu", "linear_globex"])
+        self.assertEqual(self.denied(self.repo), ["linear_globex"])
+
+    def test_a_name_is_denied_when_any_of_its_definitions_must_be_hidden(self):
+        # the local server wins over the user server of its name, and the deny covers both
+        self.state({"mcpServers": {"linear": LINEAR}, "projects": {str(self.repo): {"mcpServers": {"linear": GLOBEX_LINEAR}}}})
+        self.assertEqual(self.denied(), ["linear"])
+
+    def test_local_scope_of_a_linked_worktrees_main_checkout(self):
+        worktree = self.tmp / "worktrees" / "feature"
+        worktree.mkdir(parents=True)
+        entry = self.repo / ".git" / "worktrees" / "feature"
+        entry.mkdir(parents=True)
+        (entry / "gitdir").write_text(f"{worktree / '.git'}\n")
+        (worktree / ".git").write_text(f"gitdir: {entry}\n")
+        self.state({"projects": {str(self.repo): {"mcpServers": {"linear_globex": GLOBEX_LINEAR}}}})
+        self.assertEqual(self.denied(worktree), ["linear_globex"])
+        (entry / "gitdir").write_text("/somewhere/else/.git\n")  # a .git file the repository doesn't list back
+        self.assertEqual(self.denied(worktree), [])
+
+    def test_a_second_logins_config_folder(self):
+        client = self.tmp / "accounts" / "client"
+        client.mkdir(parents=True)
+        self.state({"mcpServers": {"globex_cloud_eu": {"command": "x"}}}, client / ".claude.json")
+        self.state({"mcpServers": {"globex_cloud_home": {"command": "x"}}})
+        self.assertEqual(self.denied(env={**self.env, "CLAUDE_CONFIG_DIR": str(client)}), ["globex_cloud_eu"])
+
+    def test_mcp_json_with_a_byte_order_mark_or_comments(self):
+        servers = json.dumps({"mcpServers": {"linear": LINEAR, "globex_cloud_eu": {"command": "x"}}})
+        for text in ("\ufeff" + servers, "// the team's servers\n" + servers):
+            (self.repo / ".mcp.json").write_text(text, encoding="utf-8")
+            settings = mcp.claude_settings(self.acme, self.env, self.repo, self.owners)
+            self.assertEqual(sorted(settings["disabledMcpjsonServers"]), ["globex_cloud_eu", "linear"])
+
+    def test_a_file_claude_loads_that_cannot_be_parsed_stops_the_start(self):
+        for path in (self.repo / ".mcp.json", self.home / ".claude.json"):
+            path.write_text('{"mcpServers": {"linear": ')
+            with self.assertRaises(Refused) as refused:
+                adjust_args("claude", self.acme, ["-p", "hi"], dict(self.env), self.repo, self.owners)
+            self.assertEqual(str(refused.exception),
+                             f"keyfit: claude not started: Keyfit can't parse {path}, so it can't hide the MCP servers "
+                             f"there that acme must not see.\n  Fix the file (bypass once: KEYFIT_DISABLE=1 claude …)")
+            self.assertEqual(mcp.definitions(self.env, self.repo), [])  # the Google check reads on, without it
+            path.unlink()
+        self.assertEqual(adjust_args("claude", self.acme, ["-p", "hi"], dict(self.env), self.repo, self.owners)[2:],
+                         ["-p", "hi"])
+
+    def session(self, *args):
+        """Claude's command line for a session of acme, and the one --settings Keyfit gives it."""
+        out = adjust_args("claude", self.acme, list(args), dict(self.env), self.repo, self.owners)
+        self.assertEqual(out[:out.index("--") if "--" in out else len(out)].count("--settings"), 1, out)
+        return out[2:], json.loads(out[1])
+
+    def test_your_own_settings_get_keyfits_keys_merged_in(self):
+        self.state({"mcpServers": {"globex_cloud_eu": {"command": "x"}}})
+        (self.repo / ".mcp.json").write_text(json.dumps({"mcpServers": {"linear": LINEAR}}))
+        (self.repo / "mine.json").write_text(json.dumps({
+            "model": "opus", "disableAgentView": False, "statusLine": {"type": "command", "command": "mine"},
+            "deniedMcpServers": [{"serverUrl": "https://x.example/*"}], "disabledMcpjsonServers": ["noisy"]}))
+        for given in (["--settings", "mine.json"], [f"--settings={self.repo / 'mine.json'}"],
+                      ["--settings", (self.repo / "mine.json").read_text()]):
+            with self.subTest(given=given[0]):
+                rest, settings = self.session(*given, "-p", "hi")
+                self.assertEqual(rest, ["-p", "hi"])
+                self.assertEqual((settings["model"], settings["disableAgentView"], settings["statusLine"]["command"]),
+                                 ("opus", True, "mine"))
+                self.assertEqual(settings["deniedMcpServers"],
+                                 [{"serverUrl": "https://x.example/*"}, {"serverName": "globex_cloud_eu"}])
+                self.assertEqual(settings["disabledMcpjsonServers"], ["noisy", "linear"])
+        _, settings = self.session("--settings", '{"model": "opus"}', "-p", "hi")
+        self.assertIn("keyfit/statusline.py", settings["statusLine"]["command"])  # you set none: Keyfit's
+
+    def test_a_settings_file_with_variables_is_never_put_on_the_command_line(self):
+        secret = "sk-ant-never-on-argv-0000"
+        (self.repo / "mine.json").write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": secret}}))
+        with self.assertRaises(Refused) as refused:
+            adjust_args("claude", self.acme, ["--settings", "mine.json", "-p", "hi"], dict(self.env), self.repo, self.owners)
+        self.assertIn("keyfit: claude not started: your --settings file mine.json sets variables (env)", str(refused.exception))
+        self.assertNotIn(secret, str(refused.exception))
+        _, settings = self.session("--settings", json.dumps({"env": {"X": "1"}}), "-p", "hi")  # yours on it already
+        self.assertEqual(settings["env"], {"X": "1"})
+
+    def test_the_last_of_your_settings_counts_and_none_comes_after_keyfits(self):
+        rest, settings = self.session("--settings", '{"model": "a"}', "-p", "hi", "--settings={\"model\": \"b\"}",
+                                      "--", "--settings", "x")
+        self.assertEqual((settings["model"], rest), ("b", ["-p", "hi", "--", "--settings", "x"]))
+
+    def test_settings_keyfit_cannot_read_stop_the_start(self):
+        (self.repo / "broken.json").write_text('{"model": ')
+        for given, shown in ((["--settings", "broken.json"], f"Keyfit can't parse {self.repo / 'broken.json'}"),
+                             (["--settings", "missing.json"], f"Keyfit can't parse {self.repo / 'missing.json'}"),
+                             (["--settings", '{"model": '], "the JSON given to --settings is not a JSON object"),
+                             (["--mcp-config", "broken.json"], f"Keyfit can't parse {self.repo / 'broken.json'}"),
+                             (["--mcp-config", "[]"], f"Keyfit can't parse {self.repo / '[]'}"),
+                             (["--mcp-config", "{}x"], "the JSON given to --mcp-config is not a JSON object")):
+            with self.subTest(given=given):
+                with self.assertRaises(Refused) as refused:
+                    adjust_args("claude", self.acme, [*given, "-p", "hi"], dict(self.env), self.repo, self.owners)
+                self.assertIn(f"keyfit: claude not started: {shown}", str(refused.exception))
+                self.assertIn("KEYFIT_DISABLE=1 claude", str(refused.exception))
+
+    def test_servers_of_mcp_config_are_denied(self):
+        (self.repo / "globex.json").write_text(json.dumps({"mcpServers": {"globex_cloud_eu": {"command": "x"}}}))
+        inline = json.dumps({"mcpServers": {"linear_globex": GLOBEX_LINEAR, "paper": {"url": "http://p"}}})
+        for given in (["--mcp-config", "globex.json", inline], [f"--mcp-config={self.repo / 'globex.json'}",
+                                                                "--mcp-config", inline, "--strict-mcp-config"]):
+            with self.subTest(given=given):
+                rest, settings = self.session(*given, "-p", "hi")
+                self.assertEqual(rest, [*given, "-p", "hi"])
+                self.assertEqual(sorted(s["serverName"] for s in settings["deniedMcpServers"]),
+                                 ["globex_cloud_eu", "linear_globex"])
+
+    def test_a_local_definition_of_a_claimed_google_server_is_checked(self):
+        work, personal = self.home / ".gmail-mcp" / "work.json", self.home / ".gmail-mcp" / "personal.json"
+        gmail = {"command": "npx", "args": ["-y", "@gongrzhe/server-gmail-autoauth-mcp"]}
+        self.state({"mcpServers": {"gmail_work": {**gmail, "env": {"GMAIL_CREDENTIALS_PATH": str(work)}}},
+                    "projects": {str(self.repo): {"mcpServers": {
+                        "gmail_work": {**gmail, "env": {"GMAIL_CREDENTIALS_PATH": str(personal)}}}}}})
+        conn = {"name": "work", "account": "me@acme.io", "servers": {"gmail_work": {"type": "gmail-autoauth", "login": str(work)}}}
+        check = GoogleMcpAdapter().check_local(conn, self.env, self.repo)
+        self.assertTrue(check.failed)
+        self.assertEqual(check.detail, f"Claude's gmail_work reads {personal}, not {work}")
 
 
 if __name__ == "__main__":

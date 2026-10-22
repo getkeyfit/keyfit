@@ -242,6 +242,31 @@ class AdapterTests(SupabaseCase):
         self.assertIn(f"names {BRANCH_REF}, which this token does not find as a project (a preview branch?)",
                       check.detail)
 
+    def test_the_typescript_clis_other_links_are_checked_too(self):
+        # stack mode links through supabase/.link.json; `branches` acts on the parent in .temp/linked-project.json
+        self.keychain({"keyfit/supabase-acme": BOTH})
+        folder = self.repos["client"] / "supabase"
+        (folder / ".temp").mkdir(parents=True)
+        (folder / "config.toml").write_text('project_id = "app"\n')
+        (folder / ".link.json").write_text(json.dumps({"project": {"ref": GLOBEX_REF}, "fetchedAt": "x",
+                                                       "active_branch": {"ref": BRANCH_REF, "name": "dev"}}))
+        check = self.check(self.conn())
+        self.assertTrue(check.failed)
+        self.assertIn(f".link.json links this folder to project {GLOBEX_REF} of another organization (Globex)",
+                      check.detail)
+        (folder / ".link.json").unlink()
+        (folder / ".temp" / "project-ref").write_text(BRANCH_REF)
+        (folder / ".temp" / "linked-project.json").write_text(json.dumps({"ref": GLOBEX_REF, "name": "globex app"}))
+        check = self.check(self.conn())
+        self.assertTrue(check.failed)
+        self.assertIn(f"linked-project.json links this folder to project {GLOBEX_REF} of another organization",
+                      check.detail)
+        (folder / ".temp" / "linked-project.json").write_text(json.dumps({"ref": ACME_REF}))
+        self.assertEqual(self.check(self.conn()).status, "warn")  # the parent is Acme's, the branch is not checked
+        (folder / ".temp" / "project-ref").unlink()  # the CLI reads the parent only next to a linked ref
+        (folder / ".temp" / "linked-project.json").write_text(json.dumps({"ref": GLOBEX_REF}))
+        self.assertEqual(self.check(self.conn()).status, "ok")
+
     def test_project_id_variable_and_workdir_are_followed_like_the_cli(self):
         check = self.check(self.conn(), SUPABASE_PROJECT_ID=GLOBEX_REF)
         self.assertTrue(check.failed)
@@ -286,6 +311,8 @@ class AdapterTests(SupabaseCase):
         self.assertEqual(supabase.words(["--workdir", "w", "-o", "json", "projects", "delete", "--debug", "r"]),
                          ["projects", "delete", "r"])
         self.assertEqual(supabase.words(["link", "-p", "secret", "--project-ref=x", "--", "r"]), ["link"])
+        self.assertEqual(supabase.words(["--agent", "no", "--output-format", "json", "projects", "delete", "r"]),
+                         ["projects", "delete", "r"])  # root options of the Go and the TypeScript CLI
 
     def test_options_are_read_like_the_cli(self):
         self.assertEqual(supabase.options(["link", "--project-ref", "x", "--profile=p", "--workdir", "w", "--org-id"]),
@@ -404,6 +431,40 @@ class ShimTests(SupabaseCase):
         code, argv, _ = self.run_shim("link", "--project-ref", FOREIGN_REF)
         self.assertEqual(code, 1)
         self.assertIn(f"refusing --project-ref {FOREIGN_REF}: this token cannot reach that project", self.stderr)
+
+    def test_an_option_with_a_value_before_the_command_hides_no_ref(self):
+        self.keychain({"keyfit/supabase-acme": BOTH})
+        for args in (["--agent", "no", "projects", "delete", GLOBEX_REF],
+                     ["--agent", "yes", "gen", "types", "typescript", "--project-id", GLOBEX_REF],
+                     ["--output-format", "json", "link", GLOBEX_REF],
+                     ["--some-future-option", "value", "projects", "delete", GLOBEX_REF],  # unknown to Keyfit
+                     ["--some-future-option", "value", "gen", "types", "--project-id", GLOBEX_REF]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn("it belongs to another organization (globex-org)", self.stderr)
+        self.run_shim("--some-future-option", "value", "projects", "delete", GLOBEX_REF)
+        self.assertIn(f"refusing value projects delete {GLOBEX_REF}: it belongs", self.stderr)
+        code, argv, _ = self.run_shim("--agent", "no", "projects", "delete", ACME_REF)
+        self.assertIsNone(code, self.stderr)
+
+    def test_the_typescript_clis_links_count_as_the_folders_own(self):
+        self.keychain({"keyfit/supabase-acme": BOTH})
+        folder = self.repos["client"] / "supabase"
+        folder.mkdir()
+        (folder / "config.toml").write_text('project_id = "app"\n')
+        (folder / ".link.json").write_text(json.dumps({"project": {"ref": GLOBEX_REF}, "fetchedAt": "x",
+                                                       "active_branch": {"ref": GLOBEX_REF}}))
+        code, argv, _ = self.run_shim("db", "push")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn(f".link.json links this folder to project {GLOBEX_REF} of another organization", self.stderr)
+        other = self.repos["client"] / "apps" / "other" / "supabase"
+        (other / ".temp").mkdir(parents=True)
+        (other / ".temp" / "project-ref").write_text(ACME_REF)
+        (other / ".temp" / "linked-project.json").write_text(json.dumps({"ref": GLOBEX_REF}))
+        (folder / ".link.json").unlink()
+        code, argv, _ = self.run_shim("--workdir", "apps/other", "branches", "create", "x")
+        self.assertEqual(code, 1)
+        self.assertIn(f"refusing --workdir apps/other (linked to {GLOBEX_REF} in", self.stderr)
 
     def test_confirmed_project_refs_are_cached(self):
         self.run_shim("link", "--project-ref", ACME_REF)

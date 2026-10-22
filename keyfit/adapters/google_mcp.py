@@ -13,6 +13,8 @@ The servers (their packages were read at the versions named; none was run):
                        account, named after the email Google gave at sign-in. A call may name any of them
                        (user_google_email), so the folder must hold the project's account only. Its tokens carry
                        userinfo.email: tokeninfo names the account. Each file holds its OAuth client too.
+                       GOOGLE_SERVICE_ACCOUNT_KEY_FILE or _JSON make it a service account acting as any user of its
+                       domain.
   gmail-autoauth       npm @gongrzhe/server-gmail-autoauth-mcp 1.1.11: GMAIL_CREDENTIALS_PATH (else
                        ~/.gmail-mcp/credentials.json): tokens with Gmail scopes only and no email. Gmail's profile names
                        the account while the saved token is valid, and the server never saves a renewed one: that is
@@ -22,28 +24,35 @@ The servers (their packages were read at the versions named; none was run):
                        $XDG_CONFIG_HOME/google-calendar-mcp/tokens.json): accounts by nickname, all usable by a call,
                        each with the email the server noted once it used it (cached_email). The primary calendar's ID
                        names the account. Its OAuth client: GOOGLE_OAUTH_CREDENTIALS (else a file inside the
-                       package, which Keyfit does not look for).
+                       package, which Keyfit does not look for). GOOGLE_SERVICE_ACCOUNT_KEY (+ _SUBJECT), and
+                       GOOGLE_APPLICATION_CREDENTIALS when it has no client file, make it a service account.
   google-drive-mcp     npm @piotr-agier/google-drive-mcp 2.13.0: GOOGLE_DRIVE_MCP_TOKEN_PATH (else
                        $XDG_CONFIG_HOME/google-drive-mcp/tokens.json): {version: 2, accounts: {alias: {email, …}}}, all
                        usable by a call. Its tokens carry userinfo.email: tokeninfo names the account. Its OAuth
                        client: GOOGLE_DRIVE_OAUTH_CREDENTIALS, else gcp-oauth.keys.json in
-                       $XDG_CONFIG_HOME/google-drive-mcp.
+                       $XDG_CONFIG_HOME/google-drive-mcp. Ahead of its login: GOOGLE_APPLICATION_CREDENTIALS
+                       (+ GOOGLE_DRIVE_MCP_SUBJECT), a service account, then GOOGLE_DRIVE_MCP_ACCESS_TOKEN or
+                       _REFRESH_TOKEN (+ _CLIENT_ID, _CLIENT_SECRET). Into a missing login it moves an old token file:
+                       GOOGLE_TOKEN_PATH, else google-tokens.json or .gcp-saved-tokens.json in the folder it starts in.
   other                any other server: one JSON token file, given with --login; the email from its id_token (or an
                        email field), and online from tokeninfo when its scopes include the email. Its OAuth client
                        only if the file holds one (client_id and client_secret).
 
 inject  — removes inherited variables that would point a server at another login (TYPES' path variables and
-          USER_GOOGLE_EMAIL), so each server reads what its definition says, which is what Keyfit checked.
-local   — every definition of a claimed server in the five agents' configs (yours and the folder's) runs its type and
-          reads the recorded login, and every account in that login is the project's Google account. Only labels are
-          read (file names and emails), never a token. Not signed in yet is a warning, not a block: no account can be
-          wrong.
+          USER_GOOGLE_EMAIL) or sign it in some other way (the sources of the types the connection's servers run), so
+          each server reads what its definition says, which is what Keyfit checked.
+local   — every definition of a claimed server in the five agents' configs (yours and the folder's) runs its type,
+          reads the recorded login (a default one under the HOME and XDG_CONFIG_HOME it sets) and sets none of its
+          type's sources, and every account in that login is the project's Google account. Only labels are read (file
+          names and emails), never a token. Not signed in yet is a warning, not a block: no account can be wrong (unless
+          Google Drive MCP would take an old token file from the folder instead).
 remote  — Google (tokeninfo with the token in the request body, else Gmail's profile or the primary calendar with it in a
           header) must name the project's account: asked with the saved access token while it is valid, else with a
           fresh one renewed as the server itself would (TOKEN, pinned: a token_uri in a file is never followed; the
-          refresh token and the server's own OAuth client in the request body). The fresh token is used for that one
-          question and dropped; nothing is written to the login, and the refresh token, client secret and fresh token
-          are never kept, shown or cached. The only place Keyfit uses a refresh token. Without a refresh token or
+          refresh token and the server's own OAuth client in the request body: named in your own configs, never the
+          folder's, and read only from a regular file of at most CLIENT_MAX bytes). The fresh token is used for that
+          one question and dropped; nothing is written to the login, and the refresh token, client secret and fresh
+          token are never kept, shown or cached. The only place Keyfit uses a refresh token. Without a refresh token or
           client, the local check decides, and a login that names no account is reported as not confirmed — a
           warning, shown when an agent starts.
 mcp     — the claimed servers belong to the project (Project.mcp_claims), so every other project's sessions do not see
@@ -54,8 +63,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shlex
+import stat
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -79,6 +90,8 @@ EXPIRY_MARGIN = 60  # seconds: a token about to expire is treated as expired
 NO_REFRESH = "its saved token has expired, with no refresh token to renew it"
 NO_CLIENT = "its saved token has expired, with no OAuth client found to renew it"
 ERROR = re.compile(r"[a-z_]{1,40}")  # an OAuth error code, safe to show
+CLIENT_MAX = 64 * 1024  # bytes: an OAuth client file (gcp-oauth.keys.json) holds under 1 KB
+DRIVE_LEGACY = ("google-tokens.json", ".gcp-saved-tokens.json")  # Google Drive MCP's old token files, in its folder
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}"  # ${VAR}, ${VAR:-default}, $VAR, {env:VAR}
                  r"|\$([A-Za-z_][A-Za-z0-9_]*)|\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -95,11 +108,15 @@ class Type:
     sign_in: str = ""  # its own sign-in command
     client: tuple[str, ...] = ()  # the variables naming its OAuth client file; without them, the login holds the client
     client_default: tuple[str, ...] = ()  # the client file's place without them (under home, or XDG_CONFIG_HOME: config)
+    # variables that make it sign in some other way than with its login (a service account, a token of its own):
+    # removed from sessions, refused in a definition
+    sources: tuple[str, ...] = ()
 
 
 TYPES = {
     "workspace-mcp": Type("Google Workspace MCP", ("WORKSPACE_MCP_CREDENTIALS_DIR", "GOOGLE_MCP_CREDENTIALS_DIR"),
-                          (".google_workspace_mcp", "credentials"), folder=True),
+                          (".google_workspace_mcp", "credentials"), folder=True,
+                          sources=("GOOGLE_SERVICE_ACCOUNT_KEY_FILE", "GOOGLE_SERVICE_ACCOUNT_KEY_JSON")),
     "gmail-autoauth": Type("Gmail AutoAuth MCP", ("GMAIL_CREDENTIALS_PATH",), (".gmail-mcp", "credentials.json"),
                            whoami=GMAIL_PROFILE, field="emailAddress",
                            sign_in="npx @gongrzhe/server-gmail-autoauth-mcp auth", client=("GMAIL_OAUTH_PATH",),
@@ -107,11 +124,17 @@ TYPES = {
     "google-calendar-mcp": Type("Google Calendar MCP", ("GOOGLE_CALENDAR_MCP_TOKEN_PATH",),
                                 ("google-calendar-mcp", "tokens.json"), config=True, whoami=PRIMARY_CALENDAR,
                                 field="id", sign_in="npx @cocal/google-calendar-mcp auth",
-                                client=("GOOGLE_OAUTH_CREDENTIALS",)),
+                                client=("GOOGLE_OAUTH_CREDENTIALS",),
+                                sources=("GOOGLE_SERVICE_ACCOUNT_KEY", "GOOGLE_SERVICE_ACCOUNT_SUBJECT",
+                                         "GOOGLE_APPLICATION_CREDENTIALS")),
     "google-drive-mcp": Type("Google Drive MCP", ("GOOGLE_DRIVE_MCP_TOKEN_PATH",), ("google-drive-mcp", "tokens.json"),
                              config=True, sign_in="npx @piotr-agier/google-drive-mcp auth",
                              client=("GOOGLE_DRIVE_OAUTH_CREDENTIALS",),
-                             client_default=("google-drive-mcp", "gcp-oauth.keys.json")),
+                             client_default=("google-drive-mcp", "gcp-oauth.keys.json"),
+                             sources=("GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_DRIVE_MCP_SUBJECT",
+                                      "GOOGLE_DRIVE_MCP_ACCESS_TOKEN", "GOOGLE_DRIVE_MCP_REFRESH_TOKEN",
+                                      "GOOGLE_DRIVE_MCP_CLIENT_ID", "GOOGLE_DRIVE_MCP_CLIENT_SECRET",
+                                      "GOOGLE_TOKEN_PATH")),
     "other": Type("a Google server"),
 }
 SCRUB = ("USER_GOOGLE_EMAIL", *(var for kind in TYPES.values() for var in kind.variables))
@@ -121,6 +144,15 @@ def servers(conn) -> list[tuple[str, dict]]:
     """(name, record) of the servers a connection claims."""
     table = conn.get("servers") if isinstance(conn, dict) else None
     return [(n, s) for n, s in table.items() if isinstance(s, dict)] if isinstance(table, dict) else []
+
+
+def sources(conn) -> tuple[str, ...]:
+    """The sources (Type.sources) of the types a connection's servers run; every type's when one is "other" or unknown,
+    since its definitions may run any of them."""
+    kinds = {server.get("type") for _, server in servers(conn)}
+    if not kinds <= TYPES.keys() - {"other"}:
+        kinds = set(TYPES)
+    return tuple(dict.fromkeys(var for kind in TYPES if kind in kinds for var in TYPES[kind].sources))
 
 
 def _path(value: str, env: dict, cwd: Path) -> Path:
@@ -145,13 +177,20 @@ def default_login(kind: str, env: dict) -> Path | None:
     return _default(kind, TYPES[kind].default, env)
 
 
+def _server_env(spec: dict, env: dict, cwd: Path) -> dict:
+    """The session's environment as a server of this definition finds its default places: with the HOME and
+    XDG_CONFIG_HOME its definition sets."""
+    own = mcp.spec_env(spec)
+    return {**env, **{var: str(_path(own[var], env, cwd)) for var in ("HOME", "XDG_CONFIG_HOME") if own.get(var)}}
+
+
 def login_of(kind: str, spec: dict, env: dict, cwd: Path) -> Path | None:
     """The login a definition of a *kind* server reads: the variable its definition sets, else the type's default."""
     own = mcp.spec_env(spec)
     for var in TYPES[kind].variables:
         if own.get(var):
             return _path(own[var], env, cwd)
-    return default_login(kind, env)
+    return default_login(kind, _server_env(spec, env, cwd))
 
 
 def recorded(server: dict) -> Path | None:
@@ -278,12 +317,33 @@ def own_login(name: str, kind: str, account: str) -> str:
     return f"give {name} a login of its own for {account} (set {where}), sign in there, then: {add}"
 
 
+def _small_file(path: Path, limit: int) -> bytes | None:
+    """A regular file's bytes when it holds at most *limit*, else None: a FIFO, a device or a huge file never holds up
+    a check (it is opened without waiting, and checked again once open)."""
+    try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return None
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except (OSError, ValueError):
+        return None
+    try:
+        with os.fdopen(fd, "rb") as file:
+            info = os.fstat(file.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+                return None
+            data = file.read(limit + 1)
+    except OSError:
+        return None
+    return data if len(data) <= limit else None
+
+
 def client_file(path: Path) -> tuple[str, str] | None:
     """The OAuth client (ID, secret) in a gcp-oauth.keys.json, as the servers read it: under "installed", else "web",
-    else at the top."""
+    else at the top. Only a regular file of at most CLIENT_MAX bytes is read."""
+    raw = _small_file(path, CLIENT_MAX)
     try:
-        data = json.loads(path.read_text())
-    except (OSError, UnicodeDecodeError, ValueError):
+        data = json.loads(raw.decode()) if raw is not None else None
+    except ValueError:  # also UnicodeDecodeError
         return None
     if not isinstance(data, dict):
         return None
@@ -293,16 +353,18 @@ def client_file(path: Path) -> tuple[str, str] | None:
 
 
 def client_of(name: str, kind: str, env: dict, cwd: Path) -> tuple[str, str] | None:
-    """The OAuth client a server of *kind* renews its token with: the file its variable names (in a definition of
-    *name*, else in the session's environment), else the server's default file."""
+    """The OAuth client a server of *kind* renews its token with: the file its variable names (in your own definition of
+    *name*, never one a repository brings, else in the session's environment), else the server's default file."""
     t = TYPES[kind]
-    for _, defined, spec in mcp.definitions(env, cwd):
-        own = mcp.spec_env(spec) if defined == name else {}
+    mine = [spec for _, defined, spec in mcp.definitions(env, cwd, mine=True) if defined == name]
+    for spec in mine:
+        own = mcp.spec_env(spec)
         var = next((v for v in t.client if own.get(v)), None)
         if var:
             return client_file(_path(own[var], env, cwd))
     var = next((v for v in t.client if env.get(v)), None)
-    path = _path(env[var], env, cwd) if var else _default(kind, t.client_default, env)
+    path = _path(env[var], env, cwd) if var else \
+        _default(kind, t.client_default, _server_env(mine[0] if mine else {}, env, cwd))
     return client_file(path) if path else None
 
 
@@ -347,7 +409,7 @@ class GoogleMcpAdapter(Adapter):
         return ", ".join(name for name, _ in servers(conn)) or "no servers"
 
     def inject(self, conn, env: dict) -> None:
-        for var in SCRUB:
+        for var in (*SCRUB, *sources(conn)):
             env.pop(var, None)
 
     def fingerprint(self, conn, env: dict) -> str:
@@ -412,6 +474,11 @@ class GoogleMcpAdapter(Adapter):
         if entries is None:
             return fail(reason, sign_in(name, kind, login, account, env))
         if not entries:
+            old = next((cwd / n for n in DRIVE_LEGACY if (cwd / n).exists()), None) \
+                if kind == "google-drive-mcp" and not login.exists() else None
+            if old:  # Google Drive MCP would move it into the missing login and act as its account
+                return fail(f"not signed in yet ({tilde(login)}), and {name} would take the sign-in in {tilde(old)}",
+                            f"move {tilde(old)} out of this folder, then: {sign_in(name, kind, login, account, env)}")
             return Check(KIND, "warn", name, f"not signed in yet ({tilde(login)})",
                          sign_in(name, kind, login, account, env))
         others = sorted({e["email"].lower() for e in entries if e["email"] and not same(e["email"], account)})
@@ -425,7 +492,8 @@ class GoogleMcpAdapter(Adapter):
     def _definition(self, name: str, kind: str, login: Path, spec: dict, account: str, env: dict, cwd: Path,
                     agent: str) -> tuple[str, str] | None:
         """What is wrong with one definition of a claimed server, as (detail, fix), or None: it must run the recorded
-        type and read the recorded login, so the login Keyfit checks is the one the server uses."""
+        type, read the recorded login and set none of its type's sources, so the login Keyfit checks is the one the
+        server uses."""
         again = f"keyfit add google-mcp --server {name}"
         where = f"in {agent}'s MCP config"
         runs = mcp.google_type(spec)
@@ -443,6 +511,11 @@ class GoogleMcpAdapter(Adapter):
             var = TYPES[effective].variables[0]
             return (f"{agent}'s {name} reads {tilde(reads)}, not {tilde(login)}",
                     f"set {var}={tilde(login)} in {name}'s env {where}, or: {again}")
+        own = mcp.spec_env(spec)
+        source = next((var for var in TYPES[effective].sources if own.get(var)), None)
+        if source:
+            return (f"{agent}'s {name} sets {source}: {TYPES[effective].title} would sign in with it, not with "
+                    f"{tilde(login)}", f"remove {source} from {name}'s env {where}")
         user = mcp.spec_env(spec).get("USER_GOOGLE_EMAIL") if effective == "workspace-mcp" else None
         if user and not same(user, account):
             return (f"{agent}'s {name} sets USER_GOOGLE_EMAIL={printable(user)}, the project's Google account is "

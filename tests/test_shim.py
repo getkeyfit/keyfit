@@ -1,5 +1,7 @@
 """End-to-end: shims written by `keyfit setup`, run as real processes in temporary folders."""
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -11,10 +13,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from keyfit import mcp
+from keyfit import mcp, secrets
 from keyfit.cli import main
 from keyfit.registry import LEGACY_KINDS, Project, Registry
-from keyfit.shim import Refused, adjust_args, sign_in_command, subcommand, CLAUDE_SUBCOMMANDS, CODEX_SUBCOMMANDS
+from keyfit.shim import (Refused, adjust_args, is_login_command, sign_in_command, subcommand, CLAUDE_SUBCOMMANDS,
+                         CODEX_SUBCOMMANDS, COPILOT_SUBCOMMANDS, GEMINI_SUBCOMMANDS, OPENCODE_SUBCOMMANDS)
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -36,7 +39,8 @@ if args[:3] == ["auth", "status", "--json"]:
     folder = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude")
     print(json.dumps({"loggedIn": True, "authMethod": "claude.ai", "email": "me@work.io", "orgId": "org-work",
                       "orgName": "Work", "subscriptionType": "team", "configDirectory": folder})); sys.exit(0)
-print(json.dumps({"argv": args, "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY")}))
+print(json.dumps({"argv": args, "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY"),
+                  "CLAUDE_CODE_DISABLE_AGENT_VIEW": os.environ.get("CLAUDE_CODE_DISABLE_AGENT_VIEW")}))
 """
 
 
@@ -110,14 +114,14 @@ class ShimTests(unittest.TestCase):
         out = subprocess.run([tool, *args], cwd=cwd or self.repo, env=env, capture_output=True, text=True, timeout=60)
         return out
 
-    def run_in_terminal(self, tool, *args, answer: str):
+    def run_in_terminal(self, tool, *args, answer: str, **extra):
         """Run the shim with a terminal on stdin and stderr, as when you type the command; answer the prompt."""
         import pty
         import select
 
         env = {"PATH": f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin",
                "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config), "STS_COUNT": str(self.sts),
-               "SIGNED_IN": str(self.tmp / "signed-in")}
+               "SIGNED_IN": str(self.tmp / "signed-in"), **extra}
         master, slave = pty.openpty()
         proc = subprocess.Popen([tool, *args], cwd=self.repo, env=env, stdin=slave, stdout=subprocess.PIPE,
                                 stderr=slave)
@@ -162,6 +166,22 @@ class ShimTests(unittest.TestCase):
         self.assertNotIn("Sign in now?", out.stderr)
         self.assertTrue(out.stderr.endswith("    → claude auth login\n  (bypass once: KEYFIT_DISABLE=1 claude …)\n"))
 
+    def test_no_question_inside_a_session(self):
+        # agents run commands in a terminal of their own (KEYFIT_PROJECT set): nobody is there to answer
+        with open(self.home / ".aws" / "config", "a") as fh:
+            fh.write("[profile web]\nlogin_session = arn:aws:iam::444444444444:user/me\n")
+        registry = self.config / "registry.toml"
+        registry.write_text(registry.read_text().replace('profile = "iam"', 'profile = "web"'))
+        executable(self.bin / "claude", FAKE_CLAUDE_SIGNED_OUT)
+        for tool, args, fix in (("aws", ("s3", "ls"), "aws login --profile web"),
+                                ("claude", ("-p", "hi"), "claude auth login")):
+            with self.subTest(tool):
+                code, out, terminal = self.run_in_terminal(tool, *args, answer="\n", KEYFIT_PROJECT="demo")
+                self.assertEqual((code, out), (1, ""), terminal)
+                self.assertNotIn("Sign in now?", terminal)
+                self.assertIn(f"    → {fix}\n  (bypass once: KEYFIT_DISABLE=1 {tool} …)\n", terminal)
+        self.assertFalse((self.tmp / "signed-in").exists())
+
     def test_only_plain_sign_ins_are_offered(self):
         for fix, words in [
                 ("aws login --profile acme", ["aws", "login", "--profile", "acme"]),
@@ -189,6 +209,70 @@ class ShimTests(unittest.TestCase):
         self.run_tool("aws", "s3", "ls")
         self.run_tool("aws", "s3", "ls")
         self.assertEqual(self.sts.read_text(), "x")  # one STS call for two launches
+
+    def keyfit(self, *args, **extra):
+        """`keyfit …` from this checkout in its own process, with the shims' environment."""
+        env = {"PATH": f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin",
+               "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config), "STS_COUNT": str(self.sts), **extra}
+        code = "import sys; sys.path.insert(0, sys.argv.pop(1)); from keyfit.cli import main; sys.exit(main(sys.argv[1:]))"
+        return subprocess.run([sys.executable, "-I", "-c", code, str(Path(__file__).resolve().parent.parent), *args],
+                              cwd=self.repo, env=env, capture_output=True, text=True, timeout=60)
+
+    def test_a_failed_check_is_not_overruled_by_the_success_cached_before(self):
+        self.assertEqual(self.run_tool("aws", "s3", "ls").returncode, 0)  # checked and cached
+        status = self.keyfit("status", FAKE_ACCOUNT="999999999999")  # the profile now signs in to another account
+        self.assertEqual(status.returncode, 1, status.stdout)
+        self.assertIn("✘ aws", status.stdout)
+        out = self.run_tool("aws", "s3", "ls", FAKE_ACCOUNT="999999999999")
+        self.assertEqual((out.returncode, out.stdout), (1, ""))
+        self.assertIn("signed in to account …9999, project expects …4444", out.stderr)
+
+    def test_offline_fallback_is_said_for_every_tool(self):
+        self.run_tool("aws", "s3", "ls")  # checked and cached
+        cached = self.config / "cache" / "checks.json"
+        entries = json.loads(cached.read_text())
+        for entry in entries.values():
+            entry["at"] -= 3600  # an hour ago: no longer fresh, trusted for a day when AWS cannot be reached
+        cached.write_text(json.dumps(entries))
+        executable(self.bin / "aws", FAKE_AWS.replace('print(os.environ.get("FAKE_ACCOUNT", "444444444444")); sys.exit(0)',
+                                                      'sys.exit("Could not connect to the endpoint URL")'))
+        out = self.run_tool("aws", "s3", "ls")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(json.loads(out.stdout)["AWS_PROFILE"], "iam")
+        self.assertIn("keyfit: ! aws", out.stderr)
+        self.assertIn("account confirmed 1h 0m ago · could not re-check now (Could not connect to the endpoint URL)",
+                      out.stderr)
+
+    def test_failing_git_stops_tools_in_a_repository_but_not_outside(self):
+        # git broken by a macOS update (Xcode's licence not accepted): the repository may be a project's
+        executable(self.bin / "git", "#!/bin/sh\necho 'You have not agreed to the Xcode license agreements.' >&2\n"
+                                     "exit 69\n")
+        for tool, args in (("claude", ("-p", "hi")), ("aws", ("s3", "ls"))):
+            with self.subTest(tool):
+                out = self.run_tool(tool, *args, AWS_PROFILE="other")
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn(f"keyfit: {tool} not started: git failed in {self.repo} (You have not agreed to the "
+                              f"Xcode license agreements.), so Keyfit cannot tell which project that folder belongs "
+                              f"to.\n  Fix git (keyfit doctor shows how), or bypass once: KEYFIT_DISABLE=1 {tool} …\n",
+                              out.stderr)
+        out = self.run_tool("aws", "s3", "ls", cwd=self.outside, AWS_PROFILE="other")  # no .git here or above
+        self.assertEqual(json.loads(out.stdout)["AWS_PROFILE"], "other")
+        self.assertEqual(self.sts.read_text(), "")
+        here = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            with mock.patch.dict(os.environ, {"PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin", "HOME": str(self.home),
+                                              "KEYFIT_CONFIG_DIR": str(self.config)}), \
+                    mock.patch.object(secrets, "keychain_reachable", return_value=""), \
+                    contextlib.redirect_stdout(io.StringIO()) as doctor:
+                self.assertEqual(main(["doctor"]), 1)
+        finally:
+            os.chdir(here)
+        self.assertIn(f"  ✘ git        {self.bin / 'git'}   You have not agreed to the Xcode license agreements. · "
+                      f"tools do not start inside git repositories\n    → sudo xcodebuild -license accept\n",
+                      doctor.getvalue())
+        self.assertIn(f"  ✘ project    this folder   git failed in {self.repo} (You have not agreed", doctor.getvalue())
+        self.assertNotIn("All good", doctor.getvalue())
 
     def test_unregistered_folder_passes_through(self):
         out = self.run_tool("aws", "s3", "ls", cwd=self.outside, AWS_PROFILE="other")
@@ -323,7 +407,8 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("gh", "pr", "list")
         self.assertEqual(out.returncode, 1)
         self.assertEqual(out.stderr, "keyfit: project demo has no github account mapped, so gh was not started.\n"
-                                     "  Map one: keyfit add github --login <login>   (bypass once: KEYFIT_DISABLE=1 gh …)\n")
+                                     "  Map one: keyfit add github --login <a login gh auth status lists>   (bypass once: "
+                                     "KEYFIT_DISABLE=1 gh …)\n")
 
     def test_login_commands_run_even_when_a_check_fails(self):
         out = self.run_tool("aws", "sso", "login", FAKE_ACCOUNT="999999999999")
@@ -331,6 +416,34 @@ class ShimTests(unittest.TestCase):
         seen = json.loads(out.stdout)
         self.assertEqual(seen["argv"], ["sso", "login"])
         self.assertEqual(seen["AWS_PROFILE"], "iam")  # signs in for the project's profile
+
+    def test_sign_in_commands_of_another_profile_are_refused(self):
+        # they would print another profile's keys, write into its settings or sign it in
+        for args in (["configure", "export-credentials", "--profile", "other", "--format", "env"],
+                     ["configure", "get", "aws_secret_access_key", "--profile", "other"],
+                     ["configure", "set", "region", "us-east-1", "--profile=other"],
+                     ["sso", "login", "--profile", "other"], ["--profile", "other", "login"], ["logout", "--prof", "other"]):
+            with self.subTest(args=args):
+                out = self.run_tool("aws", *args, FAKE_ACCOUNT="999999999999")
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertEqual(out.stderr, "keyfit: this folder belongs to demo (AWS profile iam); refusing --profile "
+                                             "other.\n  Bypass once: KEYFIT_DISABLE=1 aws …\n")
+        # the project's own profile and the shared ones still run, although the check fails
+        for args in (["configure", "get", "region", "--profile", "iam"], ["sso", "login", "--profile", "ci-worker"],
+                     ["configure", "export-credentials"]):
+            out = self.run_tool("aws", *args, FAKE_ACCOUNT="999999999999")
+            self.assertEqual((out.returncode, json.loads(out.stdout)["argv"]), (0, args), out.stderr)
+
+    def test_a_project_without_an_aws_account_signs_in_to_any_profile(self):
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=plain, check=True)
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config)}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            main(["init", "--yes", "--root", str(plain), "--name", "plain"])
+        out = self.run_tool("aws", "sso", "login", "--profile", "other", cwd=plain)  # then: keyfit add aws
+        self.assertEqual((out.returncode, json.loads(out.stdout)["argv"]), (0, ["sso", "login", "--profile", "other"]),
+                         out.stderr)
 
     def test_disable_bypasses_once(self):
         out = self.run_tool("aws", "s3", "ls", KEYFIT_DISABLE="1", AWS_PROFILE="other")
@@ -365,6 +478,109 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("claude", "mcp", "list")
         self.assertEqual(json.loads(out.stdout)["argv"], ["mcp", "list"])
 
+    def test_claude_words_after_options_start_sessions(self):
+        # -c is --continue (no value): `fix` starts the prompt, so this is no sign-in; --add-dir takes several folders
+        for args in (["-c", "fix", "auth"], ["--add-dir", "../lib", "agents"], ["-p", "why", "mcp", "list", "fails"]):
+            with self.subTest(args=args):
+                out = self.run_tool("claude", *args, KEYFIT_DRY_RUN="1")
+                self.assertEqual((out.returncode, out.stdout), (0, ""), out.stderr)
+                self.assertIn("keyfit: project demo, checks ok\n", out.stderr)  # checked, not run as Claude's own command
+                self.assertIn(" --settings ", out.stderr)
+                seen = json.loads(self.run_tool("claude", *args).stdout)
+                self.assertEqual((seen["argv"][0], seen["argv"][2:]), ("--settings", args))
+
+    def test_claude_takes_one_settings_with_your_own_merged_in(self):
+        # Claude keeps the last of a repeated option: a --settings of yours after Keyfit's would undo the hiding
+        given = json.dumps({"disableAgentView": False, "deniedMcpServers": [{"serverName": "noisy"}], "model": "opus"})
+        seen = json.loads(self.run_tool("claude", "--settings", '{"model": "x"}', "-p", "hi", "--settings", given).stdout)
+        self.assertEqual((seen["argv"].count("--settings"), seen["argv"][2:]), (1, ["-p", "hi"]))
+        settings = json.loads(seen["argv"][1])
+        self.assertEqual((settings["model"], settings["disableAgentView"]), ("opus", True))
+        self.assertEqual([s["serverName"] for s in settings["deniedMcpServers"]], ["noisy", "linear_a", "linear_b"])
+
+    def test_claude_session_starts_with_background_sessions_off(self):
+        seen = json.loads(self.run_tool("claude", "-p", "hello").stdout)
+        self.assertIs(json.loads(seen["argv"][1])["disableAgentView"], True)
+        self.assertEqual(seen["CLAUDE_CODE_DISABLE_AGENT_VIEW"], "1")
+
+    BACKGROUND = (["--bg", "x"], ["--background", "x"], ["agents"], ["respawn", "7c5dcf5d"], ["attach", "7c5dcf5d"],
+                  ["daemon", "run"])
+
+    def test_claude_background_commands_are_refused_in_a_project(self):
+        for args in self.BACKGROUND:
+            with self.subTest(args=args):
+                out = self.run_tool("claude", *args)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))  # the real claude never started
+                self.assertIn("keyfit: claude not started: `claude ", out.stderr)
+                self.assertIn("background supervisor", out.stderr)
+                self.assertIn("demo's accounts", out.stderr)
+                self.assertIn("KEYFIT_DISABLE=1 claude", out.stderr)
+
+    def test_claude_background_commands_are_refused_inside_a_session(self):
+        for args in self.BACKGROUND:
+            with self.subTest(args=args):
+                out = self.run_tool("claude", *args, cwd=self.outside, KEYFIT_PROJECT="demo")
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn("inside a session of demo", out.stderr)
+
+    def test_claude_background_commands_run_unchanged_outside_projects(self):
+        for args in self.BACKGROUND:
+            with self.subTest(args=args):
+                seen = json.loads(self.run_tool("claude", *args, cwd=self.outside).stdout)
+                self.assertEqual(seen["argv"], args)
+                self.assertIsNone(seen["CLAUDE_CODE_DISABLE_AGENT_VIEW"])
+        seen = json.loads(self.run_tool("claude", "--bg", "x", KEYFIT_DISABLE="1").stdout)  # the bypass
+        self.assertEqual(seen["argv"], ["--bg", "x"])
+
+    def test_claude_daemon_status_and_stop_run_as_typed(self):
+        for args in (["daemon", "status"], ["daemon", "logs"], ["daemon", "stop", "--any"]):
+            with self.subTest(args=args):
+                self.assertEqual(json.loads(self.run_tool("claude", *args).stdout)["argv"], args)
+
+    CODEX_SESSIONS = ([], ["fix it"], ["resume", "--last"], ["fork", "--last"])
+    CODEX_SHARED = (["agents"], ["queue", "--thread", "t", "--message", "m"], ["remote-control"], ["app-server"])
+
+    def fake_codex(self):
+        executable(self.bin / "codex", '#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n')
+
+    def test_codex_inside_a_session_outside_projects_runs_without_daemon(self):
+        self.fake_codex()
+        for args in self.CODEX_SESSIONS:
+            with self.subTest(args=args):
+                out = self.run_tool("codex", *args, cwd=self.outside, KEYFIT_PROJECT="demo")
+                self.assertEqual(json.loads(out.stdout), ["--no-daemon", *args])
+        out = self.run_tool("codex", "exec", "x", cwd=self.outside, KEYFIT_PROJECT="demo")
+        self.assertEqual(json.loads(out.stdout), ["exec", "x"])
+
+    def test_codex_shared_server_commands_are_refused_inside_a_session(self):
+        self.fake_codex()
+        for args in self.CODEX_SHARED:
+            with self.subTest(args=args):
+                out = self.run_tool("codex", *args, cwd=self.outside, KEYFIT_PROJECT="demo")
+                self.assertEqual((out.returncode, out.stdout), (1, ""))  # the real codex never started
+                self.assertIn(f"inside a session of demo, `codex {args[0]}` could start Codex's shared app server",
+                              out.stderr)
+                self.assertIn("KEYFIT_DISABLE=1 codex", out.stderr)
+
+    def test_codex_outside_projects_and_sessions_is_unchanged(self):
+        self.fake_codex()
+        for args in self.CODEX_SESSIONS + self.CODEX_SHARED:
+            with self.subTest(args=args):
+                self.assertEqual(json.loads(self.run_tool("codex", *args, cwd=self.outside).stdout), args)
+
+    def test_codex_in_a_folder_of_another_project_is_refused(self):
+        self.fake_codex()
+        for args, cwd in ((["-C", str(self.outside)], self.repo), ([f"--cd={self.outside}", "exec", "x"], self.repo),
+                          ([f"-C{self.repo}"], self.outside), (["exec", "-C", str(self.repo), "x"], self.outside)):
+            with self.subTest(args=args):
+                out = self.run_tool("codex", *args, cwd=cwd)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn("keyfit: codex not started: ", out.stderr)
+                self.assertIn("Start it there: cd ", out.stderr)
+        (self.repo / "web").mkdir()
+        self.assertEqual(json.loads(self.run_tool("codex", "-C", "web", "exec", "x").stdout)[-4:],
+                         ["-C", "web", "exec", "x"])  # a folder of the same project
+
 
 class ArgumentTests(unittest.TestCase):
     def setUp(self):
@@ -378,9 +594,41 @@ class ArgumentTests(unittest.TestCase):
         self.env = {"HOME": str(self.tmp)}
 
     def test_subcommand_detection(self):
-        self.assertEqual(subcommand(["-m", "o3", "exec", "x"], CODEX_SUBCOMMANDS), "exec")
-        self.assertIsNone(subcommand(["-p", "update"], CLAUDE_SUBCOMMANDS))
-        self.assertIsNone(subcommand(["fix the update script"], CLAUDE_SUBCOMMANDS))
+        self.assertEqual(subcommand("codex", ["-m", "o3", "exec", "x"], CODEX_SUBCOMMANDS), "exec")
+        self.assertIsNone(subcommand("claude", ["-p", "update"], CLAUDE_SUBCOMMANDS))
+        self.assertIsNone(subcommand("claude", ["fix the update script"], CLAUDE_SUBCOMMANDS))
+
+    def test_only_the_first_command_word_is_a_subcommand(self):
+        sessions = (("gemini", ["summarize", "the", "mcp", "setup"], GEMINI_SUBCOMMANDS),
+                    ("gemini", ["why", "do", "my", "hooks", "fail"], GEMINI_SUBCOMMANDS),
+                    ("gemini", ["--include-directories", "../lib", "mcp"], GEMINI_SUBCOMMANDS),
+                    ("claude", ["--add-dir", "../lib", "agents"], CLAUDE_SUBCOMMANDS),
+                    ("claude", ["-c", "fix", "auth"], CLAUDE_SUBCOMMANDS),
+                    ("claude", ["--verbose", "mcp"], CLAUDE_SUBCOMMANDS),  # an option Keyfit doesn't know: unclear
+                    ("codex", ["explain", "the", "agents"], CODEX_SUBCOMMANDS),
+                    ("codex", ["-i", "a.png", "b.png", "exec"], CODEX_SUBCOMMANDS),
+                    ("copilot", ["explain", "the", "mcp", "setup"], COPILOT_SUBCOMMANDS),
+                    ("opencode", ["-c", ".", "auth"], OPENCODE_SUBCOMMANDS),
+                    ("opencode", ["fix", "the", "mcp", "setup"], OPENCODE_SUBCOMMANDS))
+        for tool, args, known in sessions:
+            self.assertIsNone(subcommand(tool, args, known), (tool, args))
+        commands = (("gemini", ["-m", "gemini-x", "mcp", "list"], GEMINI_SUBCOMMANDS, "mcp"),
+                    ("claude", ["--model", "opus", "agents"], CLAUDE_SUBCOMMANDS, "agents"),
+                    ("codex", ["-C", "web", "-c", "a=b", "agents"], CODEX_SUBCOMMANDS, "agents"),
+                    ("copilot", ["-C", "web", "mcp", "list"], COPILOT_SUBCOMMANDS, "mcp"),
+                    ("opencode", ["-m", "anthropic/claude-sonnet-4-5", "mcp", "list"], OPENCODE_SUBCOMMANDS, "mcp"))
+        for tool, args, known, sub in commands:
+            self.assertEqual(subcommand(tool, args, known), sub, (tool, args))
+
+    def test_each_agent_reads_its_own_options(self):
+        # `-c` takes no value in Claude and OpenCode: these are sessions, never sign-ins without checks
+        for tool, args in (("claude", ["-c", "fix", "auth"]), ("opencode", ["-c", ".", "auth"]),
+                           ("codex", ["-C", "login"]), ("claude", ["--add-dir", "auth"])):
+            self.assertFalse(is_login_command(tool, args), (tool, args))
+        for tool, args in (("claude", ["--model", "opus", "auth", "login"]), ("codex", ["-c", "a=b", "login"]),
+                           ("opencode", ["-m", "x", "auth", "login"]), ("copilot", ["-C", "web", "login"]),
+                           ("aws", ["--profile", "x", "sso", "login"])):
+            self.assertTrue(is_login_command(tool, args), (tool, args))
 
     def test_codex_tui_disables_other_linear_and_runs_without_daemon(self):
         args = adjust_args("codex", self.project, ["fix it"], self.env, self.tmp)
@@ -392,6 +640,24 @@ class ArgumentTests(unittest.TestCase):
 
     def test_codex_management_untouched(self):
         self.assertEqual(adjust_args("codex", self.project, ["login", "status"], self.env, self.tmp), ["login", "status"])
+
+    def test_codex_resume_and_fork_run_without_daemon(self):
+        for sub in ("resume", "fork"):
+            args = adjust_args("codex", self.project, [sub, "--last"], self.env, self.tmp)
+            self.assertEqual(args, ["-c", "mcp_servers.linear_b.enabled=false", "--no-daemon", sub, "--last"])
+
+    def test_codex_shared_server_commands_are_refused(self):
+        for args in (["agents"], ["queue", "--thread", "t", "--message", "m"], ["remote-control"], ["app-server"]):
+            with self.subTest(args=args):
+                with self.assertRaises(Refused) as refused:
+                    adjust_args("codex", self.project, args, self.env, self.tmp)
+                self.assertIn(f"`codex {args[0]}` works on Codex's shared app server", str(refused.exception))
+                self.assertIn("KEYFIT_DISABLE=1 codex", str(refused.exception))
+
+    def test_claude_daemon_commands_untouched(self):
+        env = dict(self.env)
+        self.assertEqual(adjust_args("claude", self.project, ["daemon", "status"], env, self.tmp), ["daemon", "status"])
+        self.assertNotIn("CLAUDE_CODE_DISABLE_AGENT_VIEW", env)
 
     def test_unverified_mcp_json_linear_is_disabled(self):
         (self.tmp / ".mcp.json").write_text(json.dumps({"mcpServers": {"linear": {"url": "https://mcp.linear.app/mcp"}}}))

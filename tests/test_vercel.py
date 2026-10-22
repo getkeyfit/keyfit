@@ -160,8 +160,11 @@ class AdapterTests(VercelCase):
                    NOW_ORG_ID="team_globex", NOW_PROJECT_ID="prj_1", VERCEL_TEAM_ID="team_globex",
                    VERCEL_TELEMETRY_DISABLED="1")
         self.vercel.inject(self.conn(), env)
-        for var in vercel.SCRUB:
-            self.assertNotIn(var, env)
+        # docs/accounts.md: "VERCEL_ORG_ID, VERCEL_PROJECT_ID, VERCEL_TEAM_ID (and their older NOW_ names) and
+        # VERCEL_TOKEN are removed."
+        documented = ("VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "VERCEL_TEAM_ID", "NOW_ORG_ID", "NOW_PROJECT_ID",
+                      "VERCEL_TOKEN")
+        self.assertEqual([var for var in documented if var in env], [])
         self.assertEqual(env["VERCEL_TELEMETRY_DISABLED"], "1")  # everything else stays as it was
         self.assertNotIn(TOKEN, json.dumps(env))  # the CLI takes no token from the environment; Keyfit sets none
 
@@ -254,6 +257,41 @@ class AdapterTests(VercelCase):
         self.assertEqual(self.check(self.conn()).status, "ok")
         (repo / ".vercel" / "repo.json").write_text(json.dumps({"orgId": "team_globex", "projects": []}))
         self.assertIn("repo.json links", self.check(self.conn()).detail)
+
+    def test_repo_json_links_each_folder_to_its_projects_team(self):
+        # the current format: a team per project (the top-level orgId is deprecated); the CLI takes the entry whose
+        # directory holds the folder, the deepest one
+        self.login(self.default)
+        repo = self.repos["client"]
+        (repo / ".vercel").mkdir()
+        for sub in ("apps/web/src", "apps/site"):
+            (repo / sub).mkdir(parents=True)
+        (repo / ".vercel" / "repo.json").write_text(json.dumps({"remoteName": "origin", "projects": [
+            {"id": "prj_1", "name": "web", "directory": "apps/web", "orgId": "team_globex"},
+            {"id": "prj_2", "name": "site", "directory": "apps/site", "orgId": "team_acme"}]}))
+        for cwd, failed in ((repo / "apps" / "web" / "src", True), (repo / "apps" / "site", False),
+                            (repo, True)):  # no entry for the root: any other team's entry counts
+            os.chdir(cwd)
+            check = self.check(self.conn())
+            self.assertEqual(check.failed, failed, cwd)
+        self.assertIn("repo.json links this repository to another Vercel team (team_globex)", check.detail)
+        for config, status in (({"orgId": "team_globex", "projects": [{"directory": "."}]}, "fail"),
+                               ({"orgId": "team_globex", "projects": [{"directory": ".", "orgId": "team_acme"}]}, "ok")):
+            (repo / ".vercel" / "repo.json").write_text(json.dumps(config))
+            self.assertEqual(self.check(self.conn()).status, status, config)
+
+    def test_targets_are_read_like_the_cli(self):
+        for args, expected in ((["deploy", "../x", "--prod"], ("deploy", ["../x"])),
+                               (["../x"], ("deploy", ["../x"])),
+                               (["--prod", "../x"], ("deploy", ["../x"])),  # an option of deploy: the default command
+                               (["--prod", "dev"], ("deploy", ["dev"])),
+                               (["-dS", "acme", "env", "ls"], ("deploy", ["env"])),  # env is a command, but Keyfit
+                               (["dev", "--listen", "3000", "web"], ("dev", ["3000", "web"])),  # keeps no list
+                               (["--cwd", "apps", "deploy", "--target", "production", "web"],
+                                ("deploy", ["production", "web"])),
+                               (["--", "../x"], ("deploy", ["../x"])),
+                               ([], ("deploy", []))):
+            self.assertEqual(vercel.targets(args), expected, args)
 
     def test_text_from_the_repository_cannot_drive_the_terminal(self):
         # a cloned repository controls .vercel/project.json; its orgId is printed in the failure
@@ -402,7 +440,8 @@ class ShimTests(VercelCase):
     def test_sign_in_commands_pass_through_into_the_projects_folder(self):
         # nobody is signed in yet: the checks would fail, sign-in still runs, and lands in the project's folder
         self.own.mkdir(parents=True)
-        for words in (["login"], ["logout"], ["switch", "globex"], ["whoami"], ["teams", "ls"]):
+        for words in (["login"], ["logout"], ["switch", "globex"], ["whoami"], ["teams", "ls"], ["teams", "list"],
+                      ["teams", "switch", "globex"], ["teams", "change", "globex"]):
             with self.subTest(words=words):
                 code, argv, env = self.run_shim(*words, cwd=self.repos["mine"], VERCEL_ORG_ID="team_acme")
                 self.assertIsNone(code, self.stderr)
@@ -412,6 +451,23 @@ class ShimTests(VercelCase):
         self.assertEqual(argv, ["vercel", "login"])
         code, argv, _ = self.run_shim("login", "-Q", "/tmp/x", cwd=self.repos["mine"])  # a folder the user named
         self.assertEqual(argv, ["vercel", "login", "-Q", "/tmp/x"])
+
+    def test_other_team_commands_are_checked_and_scoped_to_the_projects_team(self):
+        # they act on a team: the project's, never the one selected in the login folder
+        self.login(self.default, team="team_globex")
+        for words in (["teams", "invite", "a@example.com"], ["teams", "members"], ["teams", "add"],
+                      ["teams", "request"], ["teams", "sso"], ["teams"]):
+            with self.subTest(words=words):
+                code, argv, _ = self.run_shim(*words)
+                self.assertIsNone(code, self.stderr)
+                self.assertEqual(argv, ["vercel", "--scope", "acme", *words])
+        code, argv, _ = self.run_shim("teams", "invite", "--scope", "globex", "a@example.com")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn("refusing --scope globex", self.stderr)
+        self.login(self.default, HUBOT)  # another login: the check fails, and nothing runs
+        code, argv, _ = self.run_shim("teams", "invite", "a@example.com")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn("keyfit: vercel not started, client needs attention", self.stderr)
 
     def test_project_without_vercel_is_refused_like_aws(self):
         code, argv, _ = self.run_shim("ls", cwd=self.repos["plain"])
@@ -446,6 +502,41 @@ class ShimTests(VercelCase):
         code, argv, _ = self.run_shim("deploy", cwd=app)
         self.assertEqual(code, 1)
         self.assertIn("links this repository to another Vercel team (team_globex)", self.stderr)
+
+    def test_a_folder_to_deploy_linked_to_another_team_is_refused(self):
+        # the CLI deploys, or runs `vercel dev` in, the path's own link, whatever --scope says
+        self.login(self.default)
+        repo = self.repos["client"]
+        (repo / "apps" / "site").mkdir(parents=True)
+        (repo / ".vercel").mkdir()
+        (repo / ".vercel" / "repo.json").write_text(json.dumps({"remoteName": "origin", "projects": [
+            {"id": "prj_1", "name": "client", "directory": ".", "orgId": "team_acme"},
+            {"id": "prj_2", "name": "web", "directory": "apps/web", "orgId": "team_globex"}]}))
+        web = repo / "apps" / "web"
+        (web / ".vercel").mkdir(parents=True)
+        (web / ".vercel" / "project.json").write_text(json.dumps({"orgId": "team_globex", "projectId": "prj_2"}))
+        other = self.repos["mine"]
+        (other / ".vercel").mkdir()
+        (other / ".vercel" / "project.json").write_text(json.dumps({"orgId": "team_globex", "projectId": "prj_3"}))
+        for args, refused in ((["deploy", "apps/web"], "refusing deploy apps/web"),
+                              (["apps/web"], "refusing deploy apps/web"),
+                              (["--prod", "apps/web"], "refusing deploy apps/web"),
+                              (["deploy", "--prod", str(other)], f"refusing deploy {other}"),
+                              (["--cwd", "apps", "deploy", "web"], "refusing deploy web"),
+                              (["dev", "apps/web"], "refusing dev apps/web")):
+            with self.subTest(args=args):
+                code, argv, _ = self.run_shim(*args)
+                self.assertEqual((code, argv), (1, None))
+                self.assertIn("links ", self.stderr)
+                self.assertIn("to another Vercel team (team_globex), but this folder belongs to client (Vercel team "
+                              f"acme); {refused}.\n  Bypass once: KEYFIT_DISABLE=1 vercel …", self.stderr)
+        (web / ".vercel" / "project.json").unlink()  # the repository's link alone: its entry for apps/web
+        code, argv, _ = self.run_shim("deploy", "apps/web")
+        self.assertEqual(code, 1)
+        self.assertIn("repo.json links apps/web to another Vercel team (team_globex)", self.stderr)
+        for args in (["deploy", "apps/site"], ["deploy"], ["env", "ls"], ["dev"]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual(argv, ["vercel", "--scope", "acme", *args], self.stderr)
 
     def test_session_keeps_vercel_on_its_project(self):
         self.login(self.own, HUBOT)
@@ -567,6 +658,32 @@ class AddVercelTests(VercelCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(self.registry()["accounts"]["vercel"]["own"],
                          {"config_dir": str(self.own), "user": "hubot", "team": "globex", "team_id": "team_globex"})
+
+    def test_a_second_login_in_the_same_team_never_takes_over_the_first_projects_account(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["init", "--yes", "--root", str(self.repos["mine"]), "--name", "mine"])
+        self.login(self.default, team="team_acme")
+        self.assertEqual(self.add()[0], 0)  # client: octocat in team acme → 'acme'
+        self.login(self.own, HUBOT, team="team_acme")
+        with mock.patch.dict(MEMBERS, {"hubot": {"team_acme"}}):
+            code, out, err = self.add("--project", "mine", "--config-dir", str(self.own))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, "mine: vercel account 'acme-2' → hubot, team acme (selected in that login; another: "
+                              f"--team SLUG) in {self.own}\n")
+        reg = self.registry()
+        self.assertEqual(reg["accounts"]["vercel"]["acme"],
+                         {"config_dir": "~/Library/Application Support/com.vercel.cli", "user": "octocat",
+                          "team": "acme", "team_id": "team_acme"})
+        self.assertEqual(reg["accounts"]["vercel"]["acme-2"],
+                         {"config_dir": str(self.own), "user": "hubot", "team": "acme", "team_id": "team_acme"})
+        self.assertEqual((reg["projects"]["client"]["vercel"], reg["projects"]["mine"]["vercel"]), ("acme", "acme-2"))
+
+    def test_new_refuses_a_name_that_is_not_a_name(self):
+        for name in ("../x", "../../x", "a\nb"):
+            self.assertEqual(self.add("--new", "--name", name),
+                             (1, "", "a name is letters, digits, '.', '_' and '-' (at most 64)\n"))
+        self.assertFalse((self.config / "x").exists() or (self.tmp / "x").exists())
+        self.assertNotIn("vercel", self.registry()["projects"]["client"])
 
     def test_new_and_config_dir_exclude_each_other(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

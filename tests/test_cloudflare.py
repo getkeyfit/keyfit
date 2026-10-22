@@ -41,6 +41,21 @@ ELSEWHERE = {"CLOUDFLARE_API_BASE_URL": "https://evil.example/client/v4", "WRANG
              "WRANGLER_AUTH_URL": "https://evil.example/auth", "WRANGLER_TOKEN_URL": "https://evil.example/token",
              "WRANGLER_REVOKE_URL": "https://evil.example/revoke", "WRANGLER_CLIENT_ID": "evil"}
 
+# node_modules/.bin/wrangler as pnpm writes it: a script that runs the package's bin/wrangler.js, not a link to it.
+PNPM_BIN = """#!/bin/sh
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\\\,/,g')")
+
+case `uname` in
+    *CYGWIN*) basedir=`cygpath -w "$basedir"`;;
+esac
+
+if [ -x "$basedir/node" ]; then
+  exec "$basedir/node"  "$basedir/../wrangler/bin/wrangler.js" "$@"
+else
+  exec node  "$basedir/../wrangler/bin/wrangler.js" "$@"
+fi
+"""
+
 # A wrangler on PATH for the shim to start; Keyfit's own calls go to FakeWrangler (or, in one test, to this script).
 FAKE_WRANGLER = """#!/bin/sh
 echo "wrangler ran" >&2
@@ -140,7 +155,11 @@ class CloudflareCase(unittest.TestCase):
             (self.store / "config" / f"{profile}.{ext}").write_text('{"v": 1, "ciphertext": "not a real sign-in"}')
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
-        executable(self.bin / "wrangler", FAKE_WRANGLER)
+        package = self.tmp / "lib" / "node_modules" / "wrangler"  # as npm installs it: bin/wrangler links into it
+        (package / "bin").mkdir(parents=True)
+        (package / "package.json").write_text(json.dumps({"name": "wrangler", "version": "4.152.0"}))
+        executable(package / "bin" / "wrangler.js", FAKE_WRANGLER)
+        (self.bin / "wrangler").symlink_to(package / "bin" / "wrangler.js")
         self.config = self.tmp / "config"
         self.repos = {}
         for name in ("client", "mine", "plain"):
@@ -274,6 +293,7 @@ class AdapterTests(CloudflareCase):
                                           f"print({answer!r})\n")
         env = dict(self.env, SEEN=str(seen), **ELSEWHERE)
         cf = CloudflareAdapter(cli_timeout=30)
+        self.enterContext(mock.patch.dict(os.environ, env))  # the shell's: the check starts wrangler with it
         for prepared in (False, True):  # the environment as it is, and as the shim builds it
             if prepared:
                 cf.inject(self.conn(), env)
@@ -344,10 +364,10 @@ class AdapterTests(CloudflareCase):
         self.assertEqual(self.check(folder=self.tmp).fix, "run wrangler inside the project's folder")
 
     def test_paths_with_spaces_are_quoted_for_the_shell(self):
-        spaced = self.tmp / "GTM Engine" / "blocklist"
+        spaced = self.tmp / "Acme Corp" / "blocklist"
         spaced.mkdir(parents=True)
         check = self.check(folder=spaced)
-        self.assertEqual(check.fix, f"wrangler auth activate acme {self.tmp}/GTM\\ Engine/blocklist")
+        self.assertEqual(check.fix, f"wrangler auth activate acme {self.tmp}/Acme\\ Corp/blocklist")
 
     def test_missing_profile_fails_with_the_sign_in(self):
         (self.store / "config" / "acme.enc").unlink()
@@ -458,7 +478,8 @@ class AdapterTests(CloudflareCase):
 
     def test_options_and_words_are_read_like_wrangler(self):
         args = ["--cwd", "apps/x", "-c=w.toml", "--profile", "p", "-e", "prod", "deploy", "--minify", "--", "--profile"]
-        self.assertEqual(cloudflare.options(args), [("--cwd", "apps/x"), ("--config", "w.toml"), ("--profile", "p")])
+        self.assertEqual(cloudflare.options(args), [("--cwd", "apps/x"), ("--config", "w.toml"), ("--profile", "p"),
+                                                    ("--env", "prod")])
         self.assertEqual(cloudflare.words(args), ["deploy"])
         self.assertEqual(cloudflare.words(["--x-provision", "auth", "activate", "acme", "."]),
                          ["auth", "activate", "acme", "."])
@@ -475,7 +496,7 @@ class AdapterTests(CloudflareCase):
                              (["-c=w.toml", "deploy"], "w.toml"), (["-ec=w.toml", "deploy"], "w.toml"),
                              (["--c", "w.toml", "deploy"], "w.toml"), (["--c=w.toml", "deploy"], "w.toml"),
                              (["-c123", "deploy"], "123"), (["-c-", "deploy"], "-")):
-            self.assertEqual(cloudflare.options(args), [("--config", config)], args)
+            self.assertEqual([o for o in cloudflare.options(args) if o[0] == "--config"], [("--config", config)], args)
             self.assertEqual(cloudflare.words(args), ["deploy"], args)
         self.assertEqual(cloudflare.options(["-cc", "w.toml", "deploy"]), [("--config", None), ("--config", "w.toml")])
         # `-cw.toml` is the flags c, w, ., t, o, m and l; `-c./w.toml` a dotted key, and wrangler gets an object for
@@ -502,6 +523,169 @@ class AdapterTests(CloudflareCase):
         self.assertNotIn("CLOUDFLARE_API_TOKEN", names)
         self.assertIn("WRANGLER_SEND_METRICS", names)
 
+
+    # Configs, versions and the check's environment (KEY-74) -----------------------------------------------------
+
+    def test_a_deploy_redirect_to_a_generated_config_is_checked(self):
+        """deploy, dev and versions upload follow .wrangler/deploy/config.json to the config a build generated (the
+        Vite plugin's dist/<name>/wrangler.json): a stale one keeps another account after wrangler.jsonc was fixed."""
+        repo = self.repos["client"]
+        (repo / "wrangler.jsonc").write_text(json.dumps({"account_id": ACME_ID}))
+        generated = repo / "dist" / "app" / "wrangler.json"
+        generated.parent.mkdir(parents=True)
+        generated.write_text(json.dumps({"account_id": GLOBEX_ID}))
+        redirect = repo / ".wrangler" / "deploy" / "config.json"
+        redirect.parent.mkdir(parents=True)
+        redirect.write_text('{"configPath": "../../dist/app/wrangler.json"}')
+        check = self.check()
+        self.assertTrue(check.failed)
+        self.assertEqual(check.detail, f"{generated} (where {redirect} sends wrangler deploy) sets account_id "
+                                       f"{GLOBEX_ID}, project expects Acme ({ACME_ID})")
+        self.assertEqual(check.fix, f"build again, or delete {redirect} if a build left it behind")
+        sub = repo / "src"
+        sub.mkdir()
+        self.assertTrue(self.check(folder=sub).failed)  # looked for upwards, like the config
+        app = repo / "app"
+        app.mkdir()
+        (app / "wrangler.jsonc").write_text(json.dumps({"account_id": ACME_ID}))
+        self.assertEqual(self.check(folder=app).status, "ok")  # not beside the config found there: wrangler stops
+        redirect.write_text('{"configPath": "../../dist/app/wrangler.json",}  // a build wrote it')
+        self.assertTrue(self.check().failed)  # read as JSON with comments, like wrangler
+        redirect.write_text("{not json")
+        check = self.check()
+        self.assertEqual((check.detail, check.fix),
+                         (f"Keyfit cannot read {redirect}, so it cannot tell which account_id wrangler would use",
+                          f"fix {redirect}: Keyfit reads it as JSON with comments, or delete it if a build left it "
+                          f"behind"))
+        redirect.write_text('{"configPath": "../../dist/app/wrangler.json"}')
+        generated.write_text(json.dumps({"account_id": ACME_ID}))  # built again
+        self.assertEqual(self.check().status, "ok")
+        self.assertEqual(self.wrangler.calls[-1]["argv"], ["whoami", "--json"])
+
+    def test_a_config_keyfit_cannot_parse_fails_the_check(self):
+        """wrangler drops a byte order mark and replaces bytes that are not UTF-8, and its TOML parser reads newer
+        syntax than tomllib: a config Keyfit cannot parse fails the check instead of skipping it."""
+        repo = self.repos["client"]
+        toml = repo / "wrangler.toml"
+        for what, start in (("a byte order mark", b"\xef\xbb\xbf"), ("bytes that are not UTF-8", b"# caf\xe9\n")):
+            toml.write_bytes(start + f'account_id = "{GLOBEX_ID}"\n'.encode())
+            self.assertEqual(self.check().detail,
+                             f"{toml} sets account_id {GLOBEX_ID}, project expects Acme ({ACME_ID})", what)
+        toml.write_text(f'account_id = "{GLOBEX_ID}"\nlimits = {{ cpu_ms = 50, }}\n')  # TOML 1.1: a trailing comma
+        check = self.check()
+        self.assertEqual((check.detail, check.fix),
+                         (f"Keyfit cannot read {toml}, so it cannot tell which account_id wrangler would use",
+                          f"fix {toml}: Keyfit reads it as TOML 1.0 (not yet TOML 1.1)"))
+        toml.unlink()
+        jsonc = repo / "wrangler.jsonc"
+        jsonc.write_text(f'{{\n  // the worker\r  "account_id": "{GLOBEX_ID}"\n}}\n')  # a comment ended by a lone CR
+        self.assertIn(f"wrangler.jsonc sets account_id {GLOBEX_ID}", self.check().detail)
+        jsonc.write_text('{"account_id": ')
+        self.assertIn("Keyfit cannot read", self.check().detail)
+        self.assertEqual(self.wrangler.calls, [])
+        other = repo / "w.yaml"  # wrangler reads settings only from .toml, .json and .jsonc
+        other.write_text(f'account_id = "{GLOBEX_ID}"\n')
+        self.assertEqual(cloudflare.account_ids(other), [])
+
+    def test_an_entry_files_config_is_looked_for_like_wrangler(self):
+        """With an entry file, wrangler looks for its config from the file's folder; wrangler 4.152 starts that search
+        a folder deeper (path.resolve(dir, dir)), so Keyfit checks what both searches find."""
+        other = self.tmp / "other"
+        (other / "src").mkdir(parents=True)
+        (other / "wrangler.toml").write_text(f'account_id = "{GLOBEX_ID}"\n')
+        client = self.repos["client"]
+        self.assertEqual(cloudflare.configs(client, "../other/src/index.ts"), [(other / "wrangler.toml", None)])
+        (other / "src" / "wrangler.json").write_text("{}")
+        self.assertEqual(cloudflare.configs(client, "../other/src/index.ts"),
+                         [(other / "src" / "wrangler.json", None), (other / "wrangler.toml", None)])
+        self.assertEqual(cloudflare.configs(client, str(other / "src" / "index.ts")),
+                         [(other / "src" / "wrangler.json", None)])
+        self.assertEqual(cloudflare.configs(client, "index.ts"), cloudflare.configs(client))
+        mismatch = cloudflare.mismatch(self.conn(), client, self.env, entry="../other/src/index.ts")
+        self.assertEqual(mismatch[0], f"{other / 'wrangler.toml'} sets account_id {GLOBEX_ID}, project expects Acme "
+                                      f"({ACME_ID})")
+
+    def test_pnpm_layouts_and_the_wrangler_on_path_are_version_checked(self):
+        """pnpm's node_modules/.bin/wrangler is a script, not a link; `wrangler` runs the one on PATH while agents'
+        `npx wrangler` runs the project's: both must be new enough, and a version Keyfit cannot tell is a warning."""
+        client = self.repos["client"]
+        store = client / "node_modules" / ".pnpm" / "wrangler@4.100.0" / "node_modules" / "wrangler"
+        (store / "bin").mkdir(parents=True)
+        (store / "package.json").write_text(json.dumps({"name": "wrangler", "version": "4.100.0"}))
+        executable(store / "bin" / "wrangler.js", "#!/bin/sh\n")
+        (client / "node_modules" / "wrangler").symlink_to(store)
+        (client / "node_modules" / ".bin").mkdir()
+        executable(client / "node_modules" / ".bin" / "wrangler", PNPM_BIN)
+        check = self.check()
+        self.assertEqual((check.detail, check.fix),
+                         (f"{client / 'node_modules/.bin/wrangler'} is wrangler 4.100.0, which ignores profiles "
+                          f"(4.106 or newer needed)", "npm install --save-dev wrangler@latest"))
+        (store / "package.json").write_text(json.dumps({"name": "wrangler", "version": "4.152.0"}))
+        self.assertEqual(self.check().status, "ok")
+        package = self.tmp / "lib" / "node_modules" / "wrangler"  # the one `wrangler` runs, on PATH
+        (package / "package.json").write_text(json.dumps({"name": "wrangler", "version": "4.90.1"}))
+        script = package / "bin" / "wrangler.js"  # what PATH's wrangler links to, named in messages
+        check = self.check()
+        self.assertEqual((check.detail, check.fix),
+                         (f"{script} is wrangler 4.90.1, which ignores profiles (4.106 or newer needed)",
+                          "npm install -g wrangler@latest"))
+        (package / "package.json").unlink()
+        check = self.check()
+        self.assertEqual(check.status, "warn")  # wrangler still starts
+        self.assertEqual(check.detail, f"bound at {client} · could not tell which wrangler {script} is · profile and "
+                                       f"account confirmed")
+        self.assertEqual(check.fix, f"{script} --version must be 4.106 or newer (older ones ignore profiles)")
+
+    def test_the_online_check_gets_none_of_the_projects_other_tokens(self):
+        """At an agent start the environment holds every account of the project. The repository's own wrangler, which
+        the online check runs, gets the shell's environment and the Cloudflare account only."""
+        client = self.repos["client"]
+        seen = self.tmp / "seen.json"
+        (client / "node_modules" / ".bin").mkdir(parents=True)
+        answer = json.dumps({"loggedIn": True, "accounts": [{"id": ACME_ID}]})
+        executable(client / "node_modules" / ".bin" / "wrangler",
+                   f"#!{sys.executable}\nimport json, os\n"
+                   "open(os.environ['SEEN'], 'w').write(json.dumps(sorted(os.environ)))\n"  # names only
+                   f"print({answer!r})\n")
+        self.enterContext(mock.patch.dict(os.environ, SEEN=str(seen), YOURS="from the shell"))
+        env = dict(os.environ, CONVEX_OVERRIDE_ACCESS_TOKEN="the project's", GH_TOKEN="the project's",
+                   KEYFIT_SHIM_DEPTH="1")  # what Keyfit set for the project's other accounts
+        cf = CloudflareAdapter(cli_timeout=30)
+        cf.inject(self.conn(), env)
+        check = cf.verify(self.conn(), env)
+        self.assertFalse(check.failed, check.detail)
+        self.assertIn("profile and account confirmed", check.detail)
+        names = json.loads(seen.read_text())
+        self.assertNotIn("CONVEX_OVERRIDE_ACCESS_TOKEN", names)
+        self.assertNotIn("GH_TOKEN", names)
+        for name in ("YOURS", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_BASE_URL", "KEYFIT_SHIM_DEPTH"):
+            self.assertIn(name, names)
+
+    def test_dotenv_that_moves_wranglers_config_folder_fails(self):
+        """XDG_CONFIG_HOME picks wrangler's config folder (profiles and bindings) when ~/.wrangler does not exist."""
+        client = self.repos["client"]
+        (client / ".env").write_text("XDG_CONFIG_HOME=./.config\n")
+        check = self.check()
+        self.assertEqual((check.detail, check.fix),
+                         (f"{client / '.env'} sets XDG_CONFIG_HOME, which would decide where wrangler keeps its "
+                          f"profiles", f"remove XDG_CONFIG_HOME from {client / '.env'}   (Keyfit keeps wrangler on the "
+                                       f"profiles it checks)"))
+        (client / ".env").write_text("XDG_CONFIG_HOME=x\nWRANGLER_AUTH_URL=y\n")
+        self.assertEqual(self.check().detail, f"{client / '.env'} sets WRANGLER_AUTH_URL, XDG_CONFIG_HOME, which would "
+                                              f"decide where wrangler sends the profile's sign-in and where wrangler "
+                                              f"keeps its profiles")
+        self.assertEqual(self.wrangler.calls, [])
+
+    def test_values_of_options_that_require_one_are_read_like_yargs(self):
+        """wrangler declares --config, --cwd, --env, --profile and --script with requiresArg, which yargs reads like
+        nargs 1: the next argument is the value unless it starts with `-` and a non-digit (KEY-74)."""
+        for args, value in ((["--config", "-", "deploy"], "-"), (["--config", "-0x.toml", "deploy"], "-0x.toml"),
+                            (["-c", "-0x.toml", "deploy"], "-0x.toml"), (["-ec", "-", "deploy"], "-"),
+                            (["--config", "--minify", "deploy"], None), (["--config", "-x", "deploy"], None)):
+            self.assertEqual([o for o in cloudflare.options(args) if o[0] == "--config"], [("--config", value)], args)
+            self.assertEqual(cloudflare.words(args), ["deploy"], args)
+        self.assertEqual(cloudflare.options(["--env", "-1", "--cwd", "-", "--profile", "-p", "deploy"]),
+                         [("--env", "-1"), ("--cwd", "-"), ("--profile", None)])
 
 class ShimTests(CloudflareCase):
     """The wrangler shim, run in-process with os.execve caught."""
@@ -954,6 +1138,156 @@ class ShimTests(CloudflareCase):
         self.assertNotIn("inherited", self.stderr)
 
 
+    # Configs and binding commands Keyfit did not check (KEY-74) ------------------------------------------------
+
+    def other_worker(self) -> Path:
+        """A Worker outside every project whose config names another account: ../other/src/index.ts from client."""
+        other = self.tmp / "other"
+        (other / "src").mkdir(parents=True, exist_ok=True)
+        (other / "src" / "index.ts").write_text("export default {}\n")
+        (other / "wrangler.toml").write_text(f'account_id = "{GLOBEX_ID}"\n')
+        return other
+
+    def test_an_entry_file_whose_folder_has_another_config_is_refused(self):
+        """`wrangler deploy ../other/src/index.ts` reads ../other/wrangler.toml, whose account_id beats the pinned
+        CLOUDFLARE_ACCOUNT_ID; so do versions upload, dev and preview, and --script."""
+        other = self.other_worker()
+        for args in (["deploy", "../other/src/index.ts"], ["versions", "upload", "../other/src/index.ts"],
+                     ["dev", "../other/src/index.ts"], ["preview", "../other/src/index.ts"],
+                     ["deploy", "--script", "../other/src/index.ts"], ["deploy", "--path=../other/src/index.ts"],
+                     ["deploy", "--name", "x", "../other/src/index.ts"],  # --name's value is taken for one too
+                     ["d1", "list", "--script", "../other/src/index.ts"]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"refusing ../other/src/index.ts: {other / 'wrangler.toml'} sets account_id {GLOBEX_ID}, "
+                          f"project expects Acme ({ACME_ID}).\n  → run wrangler on client's own folders and configs "
+                          f"({other / 'src'} is outside every project)", self.stderr, args)
+        (other / "public").mkdir()
+        (self.repos["client"] / "src").mkdir()
+        for args in (["deploy", "src/index.ts"], ["deploy", "../other/public"],  # a folder: static assets
+                     ["versions", "upload", "../other/public"],
+                     ["deploy", "-c", "wrangler.toml", "../other/src/index.ts"],
+                     ["d1", "list", "../other/src/index.ts"],  # the config, not the entry file, decides
+                     ["deploy", "--", "../other/src/index.ts"]):  # after `--`: not the entry file (yargs)
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual(argv, ["wrangler", *args], self.stderr)
+
+    def test_cwd_through_a_symlink_is_resolved_like_wrangler(self):
+        """wrangler moves to --cwd with process.chdir, so it reads the binding and the config of the folder a symlink
+        points at; the advice never binds another project's folder."""
+        client, mine = self.repos["client"], self.repos["mine"]
+        (client / "link").symlink_to(mine)
+        for args, shown in ((["--cwd", "link", "deploy"], "--cwd link"),
+                            (["--cwd", "../mine", "deploy"], "--cwd ../mine")):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"refusing {shown}: {mine} uses wrangler profile globex (bound at {mine}), project expects "
+                          f"acme.\n  → run wrangler on client's own folders and configs ({mine} belongs to mine)\n",
+                          self.stderr)
+        (mine / ".env").write_text("WRANGLER_TOKEN_URL=https://evil.example/token\n")
+        (client / "up").symlink_to(mine / "src", target_is_directory=True)
+        (mine / "src").mkdir()
+        code, argv, _ = self.run_shim("--cwd", "up/..", "deploy")  # client/up/.. is mine, not client
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn(f"refusing wrangler: {mine / '.env'} sets WRANGLER_TOKEN_URL", self.stderr)
+        (mine / ".env").unlink()
+        code, argv, _ = self.run_shim("--cwd", "up/..", "auth", "activate", "acme")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn(f"refusing `wrangler auth activate acme` for {mine}: that folder belongs to mine", self.stderr)
+
+    def test_binding_commands_outside_every_project_are_checked_too(self):
+        client = self.repos["client"]
+        rel = os.path.relpath(client, self.outside)
+        activate = f"refusing `wrangler auth activate globex` for {client}: that folder belongs to client"
+        for args, shown in ((["auth", "activate", "globex", str(client)], activate),
+                            (["auth", "deactivate", str(client)], f"refusing `wrangler auth deactivate` for {client}: "
+                                                                  f"client uses wrangler profile acme there"),
+                            (["auth", "delete", "acme"],
+                             "refusing `wrangler auth delete acme`: client uses that profile"),
+                            (["--cwd", rel, "auth", "activate", "globex"], activate)):
+            code, argv, _ = self.run_shim(*args, cwd=self.outside)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(shown, self.stderr, args)
+        for args in (["auth", "activate", "acme", str(client)], ["auth", "create", "acme"], ["auth", "list"], ["login"],
+                     ["auth", "activate", "globex"], ["deploy"]):
+            code, argv, env = self.run_shim(*args, cwd=self.outside, CLOUDFLARE_API_TOKEN="yours")
+            self.assertEqual(argv, ["wrangler", *args], self.stderr)
+            self.assertEqual(env["CLOUDFLARE_API_TOKEN"], "yours")  # outside every project: unchanged
+        self.assertEqual(self.wrangler.calls, [])
+
+    def test_a_folder_that_holds_a_projects_folder_is_checked(self):
+        """`..`, ~/code or / hold projects' folders: binding them to another profile, or unbinding them, moves every
+        folder that uses their binding (a folder bound itself keeps its own: the longest binding wins)."""
+        client, tmp = self.repos["client"], self.tmp
+        self.bind({str(tmp): "acme", str(self.repos["mine"]): "globex"})  # client is acme through the folder above
+        for args, shown in ((["auth", "activate", "globex", ".."], "`wrangler auth activate globex`"),
+                            (["auth", "deactivate", ".."], "`wrangler auth deactivate`"),
+                            (["--cwd", "..", "auth", "activate", "globex"], "`wrangler auth activate globex`")):
+            for cwd in (client, self.outside):
+                code, argv, _ = self.run_shim(*args, cwd=cwd)
+                self.assertEqual((code, argv), (1, None), (args, cwd))
+                self.assertIn(f"refusing {shown} for {tmp}: it holds {client}, where client uses wrangler profile "
+                              f"acme.", self.stderr)
+        code, argv, _ = self.run_shim("auth", "activate", "acme", "..")  # the profile it has
+        self.assertEqual(argv, ["wrangler", "auth", "activate", "acme", ".."], self.stderr)
+        self.bind({str(client): "acme", str(self.repos["mine"]): "globex"})
+        code, argv, _ = self.run_shim("auth", "activate", "globex", "..")  # client and mine are bound themselves
+        self.assertEqual(argv, ["wrangler", "auth", "activate", "globex", ".."], self.stderr)
+        reg = Registry.load(self.config / "registry.toml")
+        reg.set_account("cloudflare", "own",
+                        {"profile": "default", "account_id": INITECH_ID, "account_name": "Initech"})
+        reg.set_connection("plain", "cloudflare", "own")  # on wrangler's default login: no binding of its own
+        reg.save()
+        code, argv, _ = self.run_shim("auth", "activate", "globex", "..")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn(f"it holds {self.repos['plain']}, where plain uses wrangler profile default.", self.stderr)
+
+    def test_the_folder_that_holds_superset_worktrees_is_checked(self):
+        """Binding ~/.superset/worktrees/<repo> covers every worktree of the repository (Bind … now? offers it)."""
+        workspace = self.superset_worktree("client", "ws1")
+        holder = workspace.parent
+        self.bind({str(holder): "acme", str(self.repos["client"]): "acme", str(self.repos["mine"]): "globex"})
+        for args in (["auth", "activate", "globex", str(holder)], ["auth", "deactivate", str(holder)]):
+            for cwd in (self.repos["client"], self.outside, workspace):
+                code, argv, _ = self.run_shim(*args, cwd=cwd)
+                self.assertEqual((code, argv), (1, None), (args, cwd))
+                self.assertIn(f"for ~/.superset/worktrees/client: it holds ~/.superset/worktrees/client/ws1, where "
+                              f"client uses wrangler profile acme.", self.stderr)
+        code, argv, _ = self.run_shim("auth", "activate", "acme", str(holder), cwd=self.outside)
+        self.assertEqual(argv, ["wrangler", "auth", "activate", "acme", str(holder)], self.stderr)
+
+    def test_env_and_config_values_are_read_like_wrangler(self):
+        """`--env NAME` loads .env.NAME as path.resolve reads it (`--env /../x` loads x); `--config -0x.toml` names a
+        file, as yargs reads options declared with requiresArg."""
+        client = self.repos["client"]
+        (client / "deploy-settings.txt").write_text("WRANGLER_TOKEN_URL=https://evil.example/token\n")
+        for args in (["deploy", "--env", "/../deploy-settings.txt"], ["deploy", "-e=/../deploy-settings.txt"],
+                     ["-e", "/../deploy-settings.txt", "auth", "create", "acme"]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"refusing wrangler: {client / 'deploy-settings.txt'} sets WRANGLER_TOKEN_URL", self.stderr)
+        (client / "deploy-settings.txt").unlink()
+        (client / "-0x.toml").write_text(f'account_id = "{GLOBEX_ID}"\n')
+        for args in (["deploy", "--config", "-0x.toml"], ["deploy", "-c", "-0x.toml"]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"refusing --config -0x.toml: {client / '-0x.toml'} sets account_id {GLOBEX_ID}", self.stderr)
+        (client / "w.yaml").write_text(f'account_id = "{GLOBEX_ID}"\n')
+        code, argv, _ = self.run_shim("deploy", "--config", "w.yaml")  # wrangler reads no settings from it
+        self.assertEqual(argv, ["wrangler", "deploy", "--config", "w.yaml"], self.stderr)
+
+    def test_a_dotenv_that_moves_wranglers_config_folder_stops_its_sign_ins(self):
+        """With XDG_CONFIG_HOME from the folder's .env, `wrangler auth create` (Sign in now?) would write the new
+        sign-in where Keyfit does not look."""
+        client = self.repos["client"]
+        (client / ".env").write_text("XDG_CONFIG_HOME=./.config\n")
+        for args in (["auth", "create", "acme"], ["deploy"]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"{client / '.env'} sets XDG_CONFIG_HOME, which would decide where wrangler keeps its "
+                          f"profiles", self.stderr)
+        self.assertEqual(self.wrangler.calls, [])
+
 class AddCloudflareTests(CloudflareCase):
     def setUp(self):
         super().setUp()
@@ -1010,6 +1344,36 @@ class AddCloudflareTests(CloudflareCase):
         call = self.wrangler.calls[-1]  # the same runner as the shim's Bind this folder now?
         self.assertEqual(call["argv"], ["auth", "activate", "acme", str(client)])
         self.assertNotEqual(call["cwd"], str(client))
+
+    def test_run_it_now_binds_the_project_not_the_checkout_above_it(self):
+        """A project registered at a subfolder of a repository (~/mono/apps/web), whose checkout holds another
+        project: the fix and `Run it now?` bind the project's own folder, never the checkout's top (KEY-74)."""
+        mono = self.tmp / "mono"
+        web, api = mono / "apps" / "web", mono / "apps" / "api"
+        for folder in (web, api):
+            folder.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=mono, check=True)
+        reg = Registry.load(self.config / "registry.toml")
+        reg.add_project("web", web)
+        reg.add_project("api", api)
+        reg.set_account("cloudflare", "globex", {"profile": "globex", "account_id": GLOBEX_ID, "account_name": "Globex"})
+        reg.set_connection("api", "cloudflare", "globex")
+        reg.save()
+        self.bind({})
+        os.chdir(web)
+        with mock.patch.object(cli, "_ask", return_value="y"), mock.patch.object(sys, "stdin", Terminal("")), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(main(["add", "cloudflare", "--profile", "acme"]), 0)
+        self.assertIn(f"  next: {web} is not bound to wrangler profile acme (wrangler would use its default login)\n"
+                      f"  → wrangler auth activate acme {web}\n  bound {web} to wrangler profile acme\n",
+                      out.getvalue())
+        self.assertEqual(self.bindings(), {str(web): "acme"})
+        self.bind({})
+        os.chdir(self.outside)  # --project from elsewhere: the project's root, which binding fixes
+        with mock.patch.object(cli, "_ask", return_value="y"), mock.patch.object(sys, "stdin", Terminal("")), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(main(["add", "cloudflare", "--profile", "acme", "--project", "web"]), 0)
+        self.assertEqual(self.bindings(), {str(web): "acme"})
 
     def test_unknown_or_signed_out_profile_and_no_profiles(self):
         code, out, err = self.add("--profile", "nope")

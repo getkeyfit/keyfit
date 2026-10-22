@@ -41,7 +41,8 @@ FAKE_COPILOT = """#!/usr/bin/env python3
 import json, os, sys
 print(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "env": {k: os.environ.get(k) for k in (
     "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "COPILOT_GH_HOST", "COPILOT_PROVIDER_API_KEY",
-    "COPILOT_PROVIDER_BASE_URL", "GITHUB_COPILOT_AGENT_GITHUB_TOKEN", "KEYFIT_COPILOT_LOGIN", "KEYFIT_PROJECT")}}))
+    "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDERS_CONFIG", "GITHUB_COPILOT_AGENT_GITHUB_TOKEN",
+    "KEYFIT_COPILOT_LOGIN", "KEYFIT_PROJECT")}}))
 """
 
 TOKENS = {"octocat": "gho_octocat", "hubot": "gho_hubot"}
@@ -94,6 +95,21 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual((env["GH_TOKEN"], env["GITHUB_TOKEN"], env["COPILOT_MODEL"]), ("gho_kept", "kept", "gpt-5"))
         self.assertTrue(all(call[:2] == ["auth", "token"] for call in self.gh_calls()))
 
+    def test_inject_removes_what_the_docs_say(self):
+        # docs/accounts.md: "Inherited Copilot tokens, `COPILOT_GH_HOST`, `GH_HOST` and the `COPILOT_PROVIDER_…`
+        # variables (a model provider of your own instead of the GitHub account) are removed."
+        documented = ("GITHUB_COPILOT_GITHUB_TOKEN", "GITHUB_COPILOT_AGENT_GITHUB_TOKEN",
+                      "GITHUB_COPILOT_INFERENCE_TOKEN", "GITHUB_COPILOT_API_TOKEN", "COPILOT_GH_HOST", "GH_HOST",
+                      "COPILOT_PROVIDER_BASE_URL",
+                      "COPILOT_PROVIDER_TYPE", "COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_API_KEY_COMMAND",
+                      "COPILOT_PROVIDER_BEARER_TOKEN", "COPILOT_PROVIDER_HEADERS")
+        env = self.env(COPILOT_PROVIDERS_CONFIG="/Users/me/.copilot/providers.json", **{v: "x" for v in documented})
+        self.adapter.inject(self.conn, env)
+        self.assertEqual([var for var in documented if var in env], [])
+        # providers come from a file before those variables (yours by default, in every project): one that never exists
+        self.assertEqual(env["COPILOT_PROVIDERS_CONFIG"], "/var/empty/providers.json")
+        self.assertFalse(os.path.lexists(env["COPILOT_PROVIDERS_CONFIG"]))
+
     def test_confirmed(self):
         _, check = self.verify()
         self.assertEqual((check.status, check.label, check.detail), ("ok", "octocat", "login confirmed"))
@@ -134,10 +150,10 @@ class AdapterTests(unittest.TestCase):
         env = self.env()
         self.adapter.inject(self.conn, env)
         self.adapter.forget(env)
-        self.assertFalse({"COPILOT_GITHUB_TOKEN", "KEYFIT_COPILOT_LOGIN"} & set(env))
-        own = {"COPILOT_GITHUB_TOKEN": "mine"}
+        self.assertFalse({"COPILOT_GITHUB_TOKEN", "KEYFIT_COPILOT_LOGIN", "COPILOT_PROVIDERS_CONFIG"} & set(env))
+        own = {"COPILOT_GITHUB_TOKEN": "mine", "COPILOT_PROVIDERS_CONFIG": "/mine.json"}
         self.adapter.forget(own)
-        self.assertEqual(own, {"COPILOT_GITHUB_TOKEN": "mine"})
+        self.assertEqual(own, {"COPILOT_GITHUB_TOKEN": "mine", "COPILOT_PROVIDERS_CONFIG": "/mine.json"})
 
     def test_a_project_without_a_copilot_account_forgets_anothers(self):
         env = self.env()
@@ -185,9 +201,11 @@ class AdapterTests(unittest.TestCase):
     def test_other_agents_sessions_get_the_projects_copilot_token(self):
         # npx @github/copilot inside a Claude session does not go through the shim: the session has the account
         project = Project("demo", [str(self.tmp)], {"copilot": self.conn})
-        env = environment.build(project, self.env(COPILOT_PROVIDER_API_KEY="sk-x"))
+        env = environment.build(project, self.env(COPILOT_PROVIDER_API_KEY="sk-x",
+                                                  COPILOT_PROVIDERS_CONFIG="/mine.json"))
         self.assertEqual(env["COPILOT_GITHUB_TOKEN"], "gho_octocat")
         self.assertNotIn("COPILOT_PROVIDER_API_KEY", env)
+        self.assertEqual(env["COPILOT_PROVIDERS_CONFIG"], "/var/empty/providers.json")
 
 
 class McpTests(unittest.TestCase):
@@ -259,10 +277,24 @@ class McpTests(unittest.TestCase):
         self.assertEqual(self.hidden(additional=given),
                          ["globex_cloud_eu", "globex_cloud_file", "globex_cloud_json", "linear_b"])
 
-    def test_unreadable_files_hide_nothing_from_them(self):
+    def test_files_that_cannot_be_parsed_stop_the_start(self):
+        (self.repo / ".mcp.json").write_text(json.dumps({"mcpServers": ["a"]}))  # parsed: no servers in it
+        self.assertEqual(self.hidden(), ["globex_cloud_eu", "linear_b"])
         (self.home / ".copilot" / "mcp-config.json").write_text("{not json")
-        (self.repo / ".mcp.json").write_text(json.dumps({"mcpServers": ["a"]}))
-        self.assertEqual(self.hidden(), [])
+        with self.assertRaises(mcp.Unreadable):
+            self.hidden()
+
+    def test_files_with_a_byte_order_mark_or_comments(self):
+        (self.home / ".copilot" / "mcp-config.json").write_text(
+            "\ufeff// mine\n" + json.dumps({"mcpServers": {"globex_cloud_eu": {"command": "x"}}}), encoding="utf-8")
+        self.assertEqual(self.hidden(), ["globex_cloud_eu"])
+
+    def test_linear_through_mcp_remote(self):
+        remote = ["-y", "mcp-remote", "https://mcp.linear.app/mcp"]
+        self.user({"linear_b": {"command": "npx", "args": [*remote, "--header", "Authorization: Bearer ${LINEAR_B_API_KEY}"]},
+                   "linear_a": {"command": "npx", "args": [*remote, "--header", "Authorization: Bearer ${LINEAR_A_API_KEY}"]},
+                   "linear_oauth": {"command": "npx", "args": remote}})
+        self.assertEqual(self.hidden(), ["linear_b", "linear_oauth"])
 
 
 class ArgumentTests(unittest.TestCase):
@@ -291,8 +323,14 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(self.args("--acp"), [*flags, "--acp"])
 
     def test_management_commands_run_as_typed(self):
-        for given in (["mcp", "list"], ["config", "--list"], ["update"], ["help", "config"], ["plugin", "list"]):
+        for given in (["mcp", "list"], ["config", "--list"], ["update"], ["help", "config"], ["plugin", "list"],
+                      ["-C", "web", "mcp", "list"]):
             self.assertEqual(self.args(*given), given)
+
+    def test_a_later_word_is_never_copilots_own_command(self):
+        flags = ["--disable-mcp-server=-odd name", "--disable-mcp-server=globex_cloud_eu"]
+        for given in (["explain", "the", "mcp", "setup"], ["-p", "update", "the", "config"], ["--new-option", "mcp"]):
+            self.assertEqual(self.args(*given), [*flags, *given], given)
 
     def test_servers_of_the_folder_copilot_works_in(self):
         web = self.repo / "web"
@@ -301,6 +339,16 @@ class ArgumentTests(unittest.TestCase):
         self.assertIn("--disable-mcp-server=globex_cloud_web", self.args("-C", "web"))
         self.assertIn("--disable-mcp-server=globex_cloud_web", self.args(f"-C{web}", cwd=self.tmp))
         self.assertNotIn("--disable-mcp-server=globex_cloud_web", self.args())
+
+    def test_a_file_copilot_loads_that_cannot_be_parsed_stops_the_start(self):
+        (self.repo / ".github").mkdir()
+        (self.repo / ".github" / "mcp.json").write_text("{not json")
+        with self.assertRaises(Refused) as refused:
+            self.args()
+        self.assertEqual(str(refused.exception),
+                         f"keyfit: copilot not started: Keyfit can't parse {self.repo / '.github' / 'mcp.json'}, so it "
+                         f"can't hide the MCP servers there that demo must not see.\n"
+                         f"  Fix the file (bypass once: KEYFIT_DISABLE=1 copilot …)")
 
     def test_another_projects_server_cannot_be_enabled(self):
         for given in (["--enable-mcp-server", "globex_cloud_eu"], ["--enable-mcp-server=globex_cloud_eu"]):
@@ -388,13 +436,15 @@ class ShimTests(unittest.TestCase):
     def test_session_starts_as_the_projects_github_account_with_its_mcp_servers(self):
         confirm(self.config, "demo", "octocat", "gho_octocat", self.home)
         seen = self.started(self.run_tool("-p", "hi", COPILOT_GITHUB_TOKEN="gho_hubot", GH_HOST="ghe.example",
-                                          COPILOT_PROVIDER_API_KEY="sk-x", GITHUB_TOKEN="gho_kept"))
+                                          COPILOT_PROVIDER_API_KEY="sk-x", GITHUB_TOKEN="gho_kept",
+                                          COPILOT_PROVIDERS_CONFIG="/mine.json"))
         self.assertEqual(seen["argv"], ["--disable-mcp-server=globex_cloud_eu", "-p", "hi"])
         env = seen["env"]
         self.assertEqual((env["COPILOT_GITHUB_TOKEN"], env["KEYFIT_COPILOT_LOGIN"], env["KEYFIT_PROJECT"]),
                          ("gho_octocat", "octocat", "demo"))
         self.assertEqual((env["GH_HOST"], env["COPILOT_PROVIDER_API_KEY"], env["GITHUB_TOKEN"]),
                          (None, None, "gho_kept"))
+        self.assertEqual(env["COPILOT_PROVIDERS_CONFIG"], "/var/empty/providers.json")
 
     def test_a_mismatch_blocks_with_the_fix(self):
         out = self.run_tool("-p", "hi", tokens={})
@@ -511,6 +561,18 @@ class AddTests(unittest.TestCase):
         code, out, err = self.run_main("add", "copilot", "--login", "hubot")
         self.assertEqual(code, 0, err)
         self.assertEqual(out, "acme: copilot account 'hubot' → GitHub hubot\n")
+
+    def test_a_shared_name_given_to_another_login_names_who_changed(self):
+        (self.tmp / "globex").mkdir()
+        self.run_main("init", "--yes", "--root", str(self.tmp / "globex"), "--name", "globex")
+        self.run_main("add", "copilot", "--login", "octocat", "--name", "bot")
+        self.assertEqual(self.run_main("add", "copilot", "--project", "globex", "--login", "octocat", "--name", "bot"),
+                         (0, "globex: copilot account 'bot' → GitHub octocat\n", ""))  # the same login: shared
+        self.assertEqual(self.run_main("add", "copilot", "--project", "globex", "--login", "hubot", "--name", "bot"),
+                         (0, "globex: copilot account 'bot' → GitHub hubot\n"
+                             "  account 'bot' was login octocat; it changed for acme too\n", ""))
+        self.assertEqual(self.run_main("add", "copilot", "--login", "hubot", "--name", "../x"),
+                         (1, "", "a name is letters, digits, '.', '_' and '-' (at most 64)\n"))
 
     def test_no_github_account_and_no_login(self):
         code, out, err = self.run_main("add", "copilot")

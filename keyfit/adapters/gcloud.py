@@ -22,7 +22,8 @@ inject  — remove inherited CLOUDSDK_* variables that could pick another config
           starts (bq and gsutil too) works as the project's account on its project.
 forget  — in a project without a Google Cloud account, the variables Keyfit set for another project go.
 local   — the configuration exists, its account is the project's Google account and its project the expected one, it
-          takes no credentials from a file, and gcloud holds a sign-in for the account.
+          takes no credentials from a file, acts as no service account and sends nothing elsewhere than to Google (no
+          token host, endpoint overrides or disabled TLS checks), and gcloud holds a sign-in for the account.
 remote  — `gcloud auth print-access-token` with that configuration (gcloud renews the token first, as every gcloud
           command does): Google's tokeninfo must name the account, and the Cloud Resource Manager must show the
           project to it. The token is held in memory for those two requests only.
@@ -60,16 +61,24 @@ KEEP = ("CLOUDSDK_PYTHON", "CLOUDSDK_GSUTIL_PYTHON", "CLOUDSDK_BQ_PYTHON", "CLOU
         "CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE", "CLOUDSDK_CORE_USER_OUTPUT_ENABLED", "CLOUDSDK_CORE_MAX_LOG_DAYS")
 # Settings in a configuration's [auth] that take credentials from somewhere else than the account's sign-in.
 ELSEWHERE = ("access_token_file", "credential_file_override", "disable_credentials")
+# Settings in [auth] that make gcloud act as someone else or send the account's sign-in elsewhere than to Google.
+AWAY = {"impersonate_service_account": "would act as {value}, not as {account}",
+        "token_host": "would renew {account}'s sign-in at {value}",
+        "mtls_token_host": "would renew {account}'s sign-in at {value}",
+        "disable_ssl_validation": "would not check that it talks to Google"}
+TRACKS = ("alpha", "beta", "preview")  # release tracks: `gcloud beta auth login` is `gcloud auth login`
 # gcloud's options that take a value (`--name value` or `--name=value`; gcloud takes no abbreviations): the global
 # ones, those of list commands, and those of the commands Keyfit looks at.
 VALUED = {"--account", "--billing-project", "--configuration", "--flags-file", "--flatten", "--format", "--project",
           "--verbosity", "--impersonate-service-account", "--access-token-file", "--trace-token", "--filter",
-          "--limit", "--page-size", "--sort-by", "--cred-file", "--scopes", "--client-id-file", "--login-config"}
+          "--limit", "--page-size", "--sort-by", "--cred-file", "--scopes", "--client-id-file", "--login-config",
+          "--remote-bootstrap", "--key-file", "--password-file"}
 FLAGS = {"-q", "--quiet", "-h", "--help", "--log-http", "--no-log-http", "--user-output-enabled",
          "--no-user-output-enabled", "--activate", "--no-activate", "--brief", "--launch-browser",
          "--no-launch-browser", "--browser", "--no-browser", "--update-adc", "--no-update-adc",
          "--enable-gdrive-access", "--force", "--all"}
-OPTIONS = ("--account", "--configuration", "--project", "--access-token-file", "--flags-file")
+OPTIONS = ("--account", "--configuration", "--project", "--access-token-file", "--flags-file",
+           "--impersonate-service-account")
 UNREACHABLE = ("unable to find the server", "failed to establish a new connection", "max retries exceeded",
                "name resolution", "nodename nor servname", "timed out", "connection aborted", "connection reset",
                "network is unreachable", "transporterror", "httpsconnectionpool")
@@ -112,8 +121,8 @@ def active(env: dict) -> str:
 
 
 def read(env: dict, name: str) -> dict | None:
-    """A configuration's settings: {"account", "project", "auth": {…}}, or {"unreadable": True}; None when gcloud has
-    no such configuration."""
+    """A configuration's settings: {"account", "project", "auth": {…}, "overrides": {…}} (overrides: its
+    api_endpoint_overrides), or {"unreadable": True}; None when gcloud has no such configuration."""
     path = config_file(env, name)
     if not path.is_file():
         return None
@@ -127,8 +136,11 @@ def read(env: dict, name: str) -> dict | None:
         value = cfg.get(section, key).strip() if cfg.has_option(section, key) else ""
         return value or None
 
-    auth = {key: cfg.get("auth", key).strip() for key in cfg.options("auth")} if cfg.has_section("auth") else {}
-    return {"account": get("core", "account"), "project": get("core", "project"), "auth": auth}
+    def section(name: str) -> dict:
+        return {key: cfg.get(name, key).strip() for key in cfg.options(name)} if cfg.has_section(name) else {}
+
+    return {"account": get("core", "account"), "project": get("core", "project"), "auth": section("auth"),
+            "overrides": section("api_endpoint_overrides")}
 
 
 def signed_in(env: dict) -> list[str] | None:
@@ -170,13 +182,15 @@ def options(args: list[str]) -> list[tuple[str, str | None]]:
 
 
 def words(args: list[str]) -> list[str]:
-    """The command words and arguments, without options and the values of VALUED options. An option Keyfit does not
-    know may take the next word as its value, so the words stop there: an unclear command line is never taken for a
-    sign-in command, which would skip every check."""
+    """The command words and arguments, without options and the values of VALUED options, and without a leading release
+    track (alpha, beta, preview); everything after `--` is an argument. An option Keyfit does not know may take the
+    next word as its value, so the words stop there: an unclear command line is never taken for a sign-in command,
+    which would skip every check."""
     out, i = [], 0
     while i < len(args):
         arg = args[i]
         if arg == "--":
+            out += args[i + 1:]
             break
         if arg.startswith("-") and len(arg) > 1:
             if arg in VALUED:
@@ -188,7 +202,7 @@ def words(args: list[str]) -> list[str]:
             continue
         out.append(arg)
         i += 1
-    return out
+    return out[1:] if out[:1] and out[0] in TRACKS else out
 
 
 def sign_in(account: str) -> str:
@@ -288,6 +302,16 @@ class GcloudAdapter(Adapter):
             if settings["auth"].get(key):
                 return fail(f"configuration {name} sets auth/{key}, so gcloud would not use {account}'s sign-in",
                             f"gcloud config unset auth/{key} --configuration {name}")
+        for key, what in AWAY.items():
+            if settings["auth"].get(key):
+                return fail(f"configuration {name} sets auth/{key}, so gcloud "
+                            f"{what.format(account=account, value=printable(settings['auth'][key]))}",
+                            f"gcloud config unset auth/{key} --configuration {name}")
+        for key, value in settings["overrides"].items():
+            if value:
+                return fail(f"configuration {name} sets api_endpoint_overrides/{printable(key)}, so gcloud would send "
+                            f"{account}'s requests to {printable(value)}",
+                            f"gcloud config unset api_endpoint_overrides/{printable(key)} --configuration {name}")
         accounts = signed_in(env)
         held = accounts is None or any(same(a, account) for a in accounts)  # unreadable: the online check decides
         if not same(settings["account"], account):
@@ -302,8 +326,7 @@ class GcloudAdapter(Adapter):
             what = f"works on project {printable(settings['project'])}" if settings["project"] else "has no project"
             return fail(f"configuration {name} {what}, the project expects {project}",
                         f"gcloud config set project {project} --configuration {name}")
-        acting = settings["auth"].get("impersonate_service_account")
-        return Check(self.kind, "ok", label, account + (f" as {printable(acting)}" if acting else ""), pending=True)
+        return Check(self.kind, "ok", label, account, pending=True)
 
     def remote(self, conn, env: dict) -> Check:
         label = self.label(conn)
@@ -320,16 +343,14 @@ class GcloudAdapter(Adapter):
             return Check(self.kind, "fail", label, reason,
                          f"KEYFIT_DISABLE=1 gcloud projects describe {project} --configuration {name}   "
                          f"(shows the full error)")
-        settings = read(env, name) or {}
-        expected = settings.get("auth", {}).get("impersonate_service_account") or account
         who, reason, state = self.whose(token)
         if who is None:
             return Check(self.kind, "fail", label, reason,
                          "check the network and retry" if state == "transient" else sign_in(account),
                          transient=state == "transient")
-        if not same(who, expected):
+        if not same(who, account):
             return Check(self.kind, "fail", label, f"gcloud's token for configuration {name} belongs to "
-                                                   f"{printable(who)}, the project's Google account is {expected}",
+                                                   f"{printable(who)}, the project's Google account is {account}",
                          sign_in(account))
         reason, state = self.reaches(token, project, who)
         if reason:

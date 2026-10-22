@@ -26,6 +26,10 @@ spec = json.loads(os.environ.get("FAKE_AWS", "{}")).get(profile, {})
 time.sleep(spec.get("sleep", 0))
 if "error" in spec:
     print(spec["error"], file=sys.stderr); sys.exit(255)
+# an endpoint override (a variable, or the profile's endpoint_url unless ignored) is another host: it answers anything
+if any(k.startswith("AWS_ENDPOINT_URL") for k in os.environ) or (
+        spec.get("profile_endpoint") and os.environ.get("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS") != "true"):
+    print(spec.get("override_account", "000000000000")); sys.exit(0)
 print(spec.get("account", "000000000000"))
 """
 
@@ -114,6 +118,39 @@ class AwsTests(unittest.TestCase):
     def test_inject_sets_region_when_mapped(self):
         env = self.env_for({"profile": "iam", "account": "444444444444", "region": "eu-west-1"})
         self.assertEqual(env["AWS_REGION"], "eu-west-1")
+
+    def test_inject_removes_what_the_docs_say(self):
+        # docs/accounts.md: "Inherited AWS keys, tokens, profile, config-file and region variables are removed."
+        # Bedrock's API key (AWS_BEARER_TOKEN_<signing name>) comes first in the CLI's token chain.
+        documented = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN",
+                      "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN", "AWS_ROLE_SESSION_NAME",
+                      "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+                      "AWS_CONTAINER_AUTHORIZATION_TOKEN", "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+                      "AWS_SESSION_EXPIRATION", "AWS_CREDENTIAL_EXPIRATION", "AWS_DEFAULT_PROFILE",
+                      "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "AWS_DEFAULT_REGION",
+                      "AWS_BEARER_TOKEN_BEDROCK", "AWS_BEARER_TOKEN_SOMESERVICE")
+        env = dict(self.env, AWS_CLI_AUTO_PROMPT="off", **{var: "inherited" for var in documented})
+        self.aws.inject({"profile": "iam", "account": "444444444444"}, env)
+        self.assertEqual([var for var in documented if var in env], [])
+        self.assertEqual(env["AWS_CLI_AUTO_PROMPT"], "off")  # everything else stays as it was
+
+    def test_the_check_asks_awss_own_sts_not_an_endpoint_override(self):
+        # an override host answers the expected account; AWS's own STS knows the profile is in another one
+        fake = {"iam": {"account": "555555555555", "override_account": "444444444444"}}
+        conn = {"profile": "iam", "account": "444444444444"}
+        for override in ({"AWS_ENDPOINT_URL": "https://sts.example"}, {"AWS_ENDPOINT_URL_STS": "https://sts.example"}):
+            env = self.env_for(conn, fake, **override)
+            c = self.aws.remote(conn, env)
+            self.assertTrue(c.failed, override)
+            self.assertIn("is signed in to account", c.detail)
+        # a profile's endpoint_url (or a services section) counts unless AWS_IGNORE_CONFIGURED_ENDPOINT_URLS is true
+        fake["iam"]["profile_endpoint"] = True
+        c = self.aws.remote(conn, self.env_for(conn, fake))
+        self.assertTrue(c.failed)
+        self.assertIn("is signed in to account", c.detail)
+        fake["iam"]["account"] = "444444444444"
+        self.assertEqual(self.aws.remote(conn, self.env_for(conn, fake, AWS_ENDPOINT_URL_STS="https://x")).detail,
+                         "account confirmed")
 
     # local --------------------------------------------------------------------
 

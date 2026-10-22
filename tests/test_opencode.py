@@ -21,7 +21,7 @@ from keyfit import environment  # noqa: E402
 from keyfit.adapters.opencode import OpenCodeAdapter, default_db, scrub, signed_in  # noqa: E402
 from keyfit.cli import main  # noqa: E402
 from keyfit.registry import Project, Registry  # noqa: E402
-from keyfit.shim import Refused, adjust_args, sign_in_command  # noqa: E402
+from keyfit.shim import Refused, adjust_args, opencode_folder, sign_in_command  # noqa: E402
 from test_vercel import executable  # noqa: E402
 
 SCHEMA = ("CREATE TABLE credential (id text PRIMARY KEY, integration_id text, label text NOT NULL, value text NOT NULL, "
@@ -369,6 +369,28 @@ class McpTests(unittest.TestCase):
         with self.assertRaises(mcp.Unreadable):
             self.hide(env={**self.env, "OPENCODE_CONFIG_CONTENT": "[1, 2]"})
 
+    def test_linear_servers_by_their_command_and_environment(self):
+        (self.config / "opencode.json").write_text(json.dumps({"mcp": {
+            "linear_local": {"type": "local", "command": ["npx", "linear-mcp-server"],
+                             "environment": {"LINEAR_API_KEY": "lin_api_" + "B" * 40}},
+            "linear_remote": {"type": "local", "command": ["npx", "mcp-remote", "https://mcp.linear.app/mcp", "--header",
+                                                           "Authorization: Bearer {env:LINEAR_B_API_KEY}"]}}}))
+        names, env = self.hide()
+        self.assertEqual(names, ["globex_cloud_eu", "linear_b", "linear_local", "linear_remote"])
+        self.assertNotIn("lin_api_", env["OPENCODE_CONFIG_CONTENT"])
+
+    def test_files_with_a_byte_order_mark_and_ones_that_cannot_be_parsed(self):
+        folder = self.repo / "opencode.json"
+        folder.write_text("\ufeff// the team's\n" + json.dumps({"mcp": {"globex_cloud_us": {"type": "local", "command": ["x"]}}}),
+                          encoding="utf-8")
+        self.assertEqual(self.hide()[0], ["globex_cloud_eu", "globex_cloud_us", "linear_b"])
+        folder.write_text('{"mcp": {')
+        with self.assertRaises(Refused) as refused:
+            adjust_args("opencode", self.registry.get("acme"), [], dict(self.env), self.repo, self.registry.mcp_owners())
+        self.assertEqual(str(refused.exception),
+                         f"keyfit: opencode not started: Keyfit can't parse {folder}, so it can't hide the MCP servers "
+                         f"there that acme must not see.\n  Fix the file (bypass once: KEYFIT_DISABLE=1 opencode …)")
+
 
 class ShimTests(unittest.TestCase):
     """The opencode shim written by `keyfit setup`, run as a real process in temporary folders."""
@@ -561,6 +583,10 @@ class ShimTests(unittest.TestCase):
         seen = self.started(self.run_tool("web"))
         self.assertEqual(sorted(json.loads(seen["env"]["OPENCODE_CONFIG_CONTENT"])["mcp"]),
                          ["globex_cloud_eu", "globex_cloud_web"])
+        for args in (["-m", "anthropic/claude-sonnet-4-5", "web"], ["run", "--dir", "web", "hi"], ["acp", "--cwd=web"]):
+            seen = self.started(self.run_tool(*args))
+            self.assertEqual(sorted(json.loads(seen["env"]["OPENCODE_CONFIG_CONTENT"])["mcp"]),
+                             ["globex_cloud_eu", "globex_cloud_web"], args)
 
     def test_a_directory_of_another_project_is_refused(self):
         database(self.db, ("anthropic", "Anthropic"))
@@ -571,6 +597,32 @@ class ShimTests(unittest.TestCase):
         sub = self.repo / "src"
         sub.mkdir()
         self.assertEqual(self.started(self.run_tool(str(sub)))["argv"], [str(sub), "--standalone"])
+
+    def test_a_directory_of_another_project_after_options_is_refused(self):
+        database(self.db, ("anthropic", "Anthropic"))
+        other = str(self.other)
+        for args in (["-m", "anthropic/claude-sonnet-4-5", other], ["--agent", "build", "--port", "4096", other],
+                     ["-c", other], ["run", "--dir", other, "hi"], ["run", f"--dir={other}", "hi"],
+                     ["acp", "--cwd", other]):
+            with self.subTest(args=args):
+                out = self.run_tool(*args)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn(f"opencode not started: {other} belongs to globex, this folder to demo", out.stderr)
+        for args in (["--newer-option", other], ["--cors", "http://a", other]):  # its value, or the folder?
+            with self.subTest(args=args):
+                out = self.run_tool(*args)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn(f"Keyfit can't tell whether {other} is a value of {args[0]} or the folder OpenCode "
+                              f"opens", out.stderr)
+
+    def test_continue_is_a_session_not_a_sign_in(self):
+        out = self.run_tool("-c", ".", "auth")  # -c takes no value: `.` is the folder, so this is no sign-in
+        self.assertEqual((out.returncode, out.stdout), (1, ""))
+        self.assertIn("keyfit: opencode not started, demo needs attention", out.stderr)  # checked
+        database(self.db, ("anthropic", "Anthropic"))
+        seen = self.started(self.run_tool("-c", ".", "auth"))
+        self.assertEqual(seen["argv"], ["-c", ".", "auth", "--standalone"])
+        self.assertEqual(sorted(json.loads(seen["env"]["OPENCODE_CONFIG_CONTENT"])["mcp"]), ["globex_cloud_eu"])
 
     def test_project_without_an_opencode_account_forgets_another_projects_database(self):
         seen = self.started(self.run_tool(cwd=self.other, OPENCODE_DB=str(self.db), KEYFIT_OPENCODE="work"))
@@ -595,6 +647,17 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(self.args("session"), ["session"])  # its help takes no --standalone
         self.assertEqual(self.args("acp"), ["acp"])  # always a private server
         self.assertEqual(self.args("--standalone", "run", "x"), ["--standalone", "run", "x"])
+
+    def test_the_folder_opencode_opens(self):
+        (self.tmp / "web").mkdir()
+        for args, folder in ((["web"], "web"), (["-c", "web"], "web"), (["-m", "x/y", "--port", "1", "web"], "web"),
+                             (["--cors", "http://a", "--fork", "web"], "web"), (["run", "--dir", "web", "x"], "web"),
+                             (["acp", "--cwd", "web"], "web"), (["run", "web"], None), (["mcp", "web"], None),
+                             (["missing"], None), (["--", "web"], None), (["--new-option", "."], None),
+                             (["--new-option", "value", "-c", "web"], "web")):
+            self.assertEqual(opencode_folder(args, self.tmp), folder, args)
+        with self.assertRaises(Refused):
+            opencode_folder(["--new-option", "web"], self.tmp)
 
     def test_server_option_is_refused(self):
         for given in (["--server", "http://x"], ["run", "--server=http://x", "hi"]):
@@ -661,6 +724,38 @@ class AddTests(unittest.TestCase):
         code, out, _ = self.run_main("add", "opencode", "--name", "globex", "--db", str(folder / "opencode.db"))
         self.assertEqual(code, 0)
         self.assertEqual(self.registry()["accounts"]["opencode"]["globex"]["logins"], ["anthropic"])
+
+    def two_databases(self):
+        """Two OpenCode databases in folders of the same name, and a second project, globex."""
+        (self.tmp / "globex").mkdir()
+        self.run_main("init", "--yes", "--root", str(self.tmp / "globex"), "--name", "globex")
+        return (database(self.tmp / "acme-data" / "work" / "opencode.db", ("anthropic", "Anthropic")),
+                database(self.tmp / "globex-data" / "work" / "opencode.db", ("openai", "OpenAI")))
+
+    def test_another_database_never_takes_over_the_first_projects_account(self):
+        one, two = self.two_databases()
+        self.assertEqual(self.run_main("add", "opencode", "--db", str(one))[1],
+                         f"acme: opencode account 'work' → anthropic in {one}\n")
+        self.assertEqual(self.run_main("add", "opencode", "--project", "globex", "--db", str(two))[1],
+                         f"globex: opencode account 'work-2' → openai in {two}\n")
+        accounts = self.registry()["accounts"]["opencode"]
+        self.assertEqual((accounts["work"]["db"], accounts["work-2"]["db"]), (str(one), str(two)))
+
+    def test_a_shared_name_given_to_another_database_names_who_changed(self):
+        one, two = self.two_databases()
+        self.run_main("add", "opencode", "--name", "shared", "--db", str(one))
+        self.assertEqual(self.run_main("add", "opencode", "--project", "globex", "--name", "shared", "--db", str(one)),
+                         (0, f"globex: opencode account 'shared' → anthropic in {one}\n", ""))  # the same: shared
+        self.assertEqual(self.run_main("add", "opencode", "--project", "globex", "--name", "shared", "--db", str(two)),
+                         (0, f"globex: opencode account 'shared' → openai in {two}\n"
+                             f"  account 'shared' was db {one}; it changed for acme too\n", ""))
+
+    def test_new_refuses_a_name_that_is_not_a_name(self):
+        for name in ("../x", "../../x", "a\nb"):
+            self.assertEqual(self.run_main("add", "opencode", "--new", "--name", name),
+                             (1, "", "a name is letters, digits, '.', '_' and '-' (at most 64)\n"))
+        self.assertFalse((self.config / "x").exists() or (self.tmp / "x").exists())
+        self.assertNotIn("opencode", self.registry()["projects"]["acme"])
 
     def test_init_offers_the_sign_ins_opencode_has(self):
         from keyfit import cli

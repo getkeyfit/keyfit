@@ -5,8 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from keyfit import secrets
+from keyfit import mcp, secrets
 from keyfit.adapters.linear import LinearAdapter, parse_envrc
+from keyfit.registry import Project
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -43,6 +44,17 @@ class LinearTests(unittest.TestCase):
         # the project's own variable stays (its MCP server reads it); every other workspace's key is gone
         self.assertEqual(linear_vars, ["LINEAR_ACME_API_KEY", "LINEAR_API_KEY"])
         self.assertEqual(env["KEYFIT_LINEAR_WORKSPACE"], "acme")
+
+    def test_inject_removes_every_other_linear_key_variable(self):
+        # docs/accounts.md: "Every other Linear key variable is removed."
+        others = ("LINEAR_GLOBEX_API_KEY", "LINEAR_API_TOKEN", "LINEAR_TOKEN", "LINEAR_ACCESS_TOKEN", "LINEAR_KEY",
+                  "GLOBEX_LINEAR_KEY", "linear_api_key", "Linear_Token")
+        env = self.shell(LINEAR_TEAM="eng", LINEARB_API_TOKEN="linearb", **{name: OTHER for name in others})
+        self.linear.inject(self.conn, env)
+        self.assertEqual([name for name in others if name in env], [])
+        self.assertEqual((env["LINEAR_API_KEY"], env["LINEAR_ACME_API_KEY"]), (GOOD, GOOD))
+        self.assertEqual((env["LINEAR_TEAM"], env["KEYFIT_LINEAR_WORKSPACE"]), ("eng", "acme"))  # not keys: they stay
+        self.assertEqual(env["LINEARB_API_TOKEN"], "linearb")  # LinearB's, another product (as for MCP servers)
 
     def test_missing_key_never_falls_back_to_inherited_one(self):
         env = self.shell()
@@ -125,6 +137,95 @@ class LinearTests(unittest.TestCase):
         self.assertEqual(parse_envrc(text, {"ACME_LINEAR_API_KEY": GOOD}), "env:ACME_LINEAR_API_KEY")
         self.assertEqual(parse_envrc(text, {"LINEAR_ACME_API_KEY": GOOD}), "env:LINEAR_ACME_API_KEY")
         self.assertIsNone(parse_envrc("use aws x 123456789012\n", {}))
+
+
+class McpServerTests(unittest.TestCase):
+    """Which Linear MCP servers a session of acme sees: found by their address, their command or their env, and kept
+    only when every key they read or carry is acme's."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.home = self.tmp / "home"
+        (self.home / ".codex").mkdir(parents=True)
+        self.repo = self.tmp / "repo"
+        self.repo.mkdir()
+        self.acme = Project("acme", [str(self.repo)], {"linear": {"workspace": "acme", "key": "env:LINEAR_ACME_API_KEY"}})
+        # the session's environment once Keyfit put acme's checked key in it
+        self.env = {"HOME": str(self.home), "LINEAR_API_KEY": GOOD, "LINEAR_ACME_API_KEY": GOOD}
+
+    def claude(self, servers, project=None, owners=None):
+        (self.home / ".claude.json").write_text(json.dumps({"mcpServers": servers}))
+        settings = json.dumps(mcp.claude_settings(project or self.acme, self.env, self.repo, owners))
+        self.assertNotIn("lin_api_", settings)  # a key is compared, never copied
+        return sorted(s["serverName"] for s in json.loads(settings).get("deniedMcpServers", []))
+
+    def codex(self, toml):
+        (self.home / ".codex" / "config.toml").write_text(toml)
+        args = mcp.codex_overrides(self.acme, self.env, cwd=self.repo)
+        self.assertNotIn("lin_api_", json.dumps(args))
+        return sorted(a.split(".")[1] for a in args if a.startswith("mcp_servers."))
+
+    def test_a_key_in_a_local_servers_env_must_be_the_projects(self):
+        # the server's own env beats the session's LINEAR_API_KEY
+        local = {"command": "npx", "args": ["-y", "linear-mcp-server"]}
+        self.assertEqual(self.claude({
+            "linear_globex": {**local, "env": {"LINEAR_API_KEY": OTHER}},
+            "linear_renamed": {**local, "env": {"TOKEN": OTHER}},
+            "linear_var": {**local, "env": {"LINEAR_API_KEY": "${LINEAR_GLOBEX_API_KEY}"}},
+            "linear_mine": {**local, "env": {"LINEAR_API_KEY": GOOD}},
+            "linear_session": {**local, "env": {"LINEAR_TEAM": "ENG"}},  # reads LINEAR_API_KEY: acme's key
+        }), ["linear_globex", "linear_renamed", "linear_var"])
+
+    def test_codex_definitions_name_their_variables_bare(self):
+        local = 'command = "npx"\nargs = ["-y", "linear-mcp-server"]\n'
+        self.assertEqual(self.codex(
+            f'[mcp_servers.linear_globex]\n{local}env = {{ LINEAR_API_KEY = "{OTHER}" }}\n'
+            f'[mcp_servers.linear_mine]\n{local}env = {{ LINEAR_API_KEY = "{GOOD}" }}\n'
+            f'[mcp_servers.linear_forwarded]\n{local}env_vars = ["LINEAR_GLOBEX_API_KEY"]\nenv = {{ LINEAR_TEAM = "ENG" }}\n'
+            '[mcp_servers.linear_headers]\nurl = "https://mcp.linear.app/mcp"\n'
+            'env_http_headers = { Authorization = "LINEAR_GLOBEX_API_KEY" }\n'
+            f'[mcp_servers.linear_literal]\nurl = "https://mcp.linear.app/mcp"\nhttp_headers = {{ Authorization = "{OTHER}" }}\n'
+            '[mcp_servers.linear]\nurl = "https://mcp.linear.app/mcp"\nbearer_token_env_var = "LINEAR_API_KEY"\n'),
+            ["linear_forwarded", "linear_globex", "linear_headers", "linear_literal"])
+
+    def test_mcp_remote_reaching_linear(self):
+        remote = ["-y", "mcp-remote", "https://mcp.linear.app/mcp"]
+        self.assertEqual(self.claude({
+            "linear_globex": {"command": "npx", "args": [*remote, "--header", "Authorization: Bearer ${LINEAR_GLOBEX_API_KEY}"]},
+            "linear_oauth": {"command": "npx", "args": remote},
+            "linear": {"command": "npx", "args": [*remote, "--header", "Authorization: Bearer ${LINEAR_API_KEY}"]},
+        }), ["linear_globex", "linear_oauth"])
+
+    def test_the_address_in_any_case_and_with_a_port(self):
+        globex = {"Authorization": "Bearer ${LINEAR_GLOBEX_API_KEY}"}
+        self.assertEqual(self.claude({
+            "upper": {"type": "http", "url": "https://MCP.LINEAR.APP/mcp", "headers": globex},
+            "port": {"type": "http", "url": "https://mcp.linear.app:443/mcp", "headers": globex},
+            "linear": {"type": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}},
+        }), ["port", "upper"])
+
+    def test_every_variable_counts_not_only_the_first(self):
+        self.assertEqual(self.claude({"linear": {"type": "http", "url": "https://mcp.linear.app/mcp", "headers": {
+            "X-Note": "${LINEAR_API_KEY}", "Authorization": "Bearer ${LINEAR_GLOBEX_API_KEY:-}"}}}), ["linear"])
+
+    def test_a_server_signed_in_inside_the_agent_is_visible_only_where_claimed(self):
+        servers = {"linear_oauth": {"type": "http", "url": "https://mcp.linear.app/mcp"}}
+        self.assertEqual(self.claude(servers), ["linear_oauth"])  # which workspace it acts on, only the agent knows
+        acme = Project("acme", [str(self.repo)], self.acme.connections, ["linear_oauth"])  # keyfit add mcp linear_oauth
+        globex = Project("globex", [str(self.tmp / "globex")],
+                         {"linear": {"workspace": "globex", "key": "env:LINEAR_GLOBEX_API_KEY"}})
+        owners = {"acme": ["linear_oauth"]}
+        self.assertEqual(self.claude(servers, acme, owners), [])
+        self.assertEqual(self.claude(servers, globex, owners), ["linear_oauth"])
+
+    def test_without_a_linear_account_every_linear_server_is_hidden(self):
+        plain = Project("plain", [str(self.repo)], {})
+        self.assertEqual(self.claude({
+            "linear": {"type": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}},
+            "linear_local": {"command": "npx", "args": ["linear-mcp-server"], "env": {"LINEAR_API_KEY": GOOD}},
+            "paper": {"type": "http", "url": "http://127.0.0.1:29979/mcp"},
+            "linearb": {"command": "npx", "args": ["linearb-mcp"], "env": {"LINEARB_TOKEN": "${LINEARB_TOKEN}"}},  # not Linear
+        }, plain), ["linear", "linear_local"])
 
 
 if __name__ == "__main__":

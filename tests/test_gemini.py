@@ -49,7 +49,7 @@ if args[-2:] == ["--prompt-interactive", "/quit"] and os.environ.get("FAKE_SIGN_
 print(json.dumps({"argv": args, "env": {k: os.environ.get(k) for k in (
     "GEMINI_CLI_HOME", "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS",
     "GOOGLE_GENAI_USE_VERTEXAI", "GEMINI_DEFAULT_AUTH_TYPE", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", "GOOGLE_MAPS_KEY",
-    "KEYFIT_GEMINI", "KEYFIT_PROJECT")}}))
+    "CODE_ASSIST_ENDPOINT", "KEYFIT_GEMINI", "KEYFIT_PROJECT")}}))
 """
 
 
@@ -102,6 +102,11 @@ class AdapterTests(unittest.TestCase):
         self.system = mock.patch.object(gemini, "SYSTEM", self.tmp / "no-system")  # never this Mac's settings
         self.system.start()
         self.addCleanup(self.system.stop)
+        self.repo = self.tmp / "repo"
+        self.repo.mkdir()
+        cwd = os.getcwd()
+        os.chdir(self.repo)  # the local check reads the .env files from here up: never this checkout's or yours
+        self.addCleanup(os.chdir, cwd)
 
     def env(self, **extra):
         return {"HOME": str(self.home), **extra}
@@ -140,16 +145,146 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse({"GEMINI_CLI_HOME", "GEMINI_API_KEY", "KEYFIT_GEMINI", "KEYFIT_GEMINI_KEY"} & set(env))
 
     def test_scrub_removes_what_would_pick_another_sign_in(self):
-        inherited = {var: "x" for var in gemini.SCRUB}
-        env = self.env(GEMINI_API_KEY="other", GOOGLE_EXTERNAL_ACCOUNT_AUDIENCE="x", GOOGLE_MAPS_KEY="kept", **inherited)
+        # docs/accounts.md and docs/security.md: `gemini` starts without these (GEMINI_DEFAULT_AUTH_TYPE: the account's)
+        documented = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS",
+                      "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_GCA", "GOOGLE_GEMINI_BASE_URL",
+                      "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", "CODE_ASSIST_ENDPOINT", "GOOGLE_CLOUD_ACCESS_TOKEN",
+                      "GOOGLE_CLOUD_PROJECT_ID", "GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_QUOTA_PROJECT",
+                      "GOOGLE_CLOUD_ACCOUNT", "GOOGLE_CLOUD_UNIVERSE_DOMAIN", "GOOGLE_VERTEX_BASE_URL",
+                      "GOOGLE_CREDENTIALS", "GOOGLE_SERVICE_ACCOUNT_AUTH", "GEMINI_CLI_AUTH_OVERRIDE",
+                      "GEMINI_DEFAULT_AUTH_TYPE", "GEMINI_CLI_USE_COMPUTE_ADC", "GOOGLE_EXTERNAL_ACCOUNT_AUDIENCE")
+        env = self.env(GOOGLE_MAPS_KEY="kept", **{var: "x" for var in documented})
         gemini.scrub(self.conn, env)
-        self.assertEqual(sorted(k for k in env if k.startswith(("GOOGLE_", "GEMINI_"))),
+        self.assertEqual([var for var in documented if var in env], ["GEMINI_DEFAULT_AUTH_TYPE"])
+        self.assertEqual(sorted(k for k in env if k.startswith(("GOOGLE_", "GEMINI_", "CODE_"))),
                          ["GEMINI_DEFAULT_AUTH_TYPE", "GOOGLE_MAPS_KEY"])
         self.assertEqual(env["GEMINI_DEFAULT_AUTH_TYPE"], "oauth-personal")  # Sign in with Google, preselected
         env = self.env(GEMINI_API_KEY=KEY, GOOGLE_CLOUD_PROJECT="other-project")
         gemini.scrub({"key": "env:X", "cloud_project": "acme-ai"}, env)
         self.assertEqual((env["GEMINI_API_KEY"], env["GOOGLE_CLOUD_PROJECT"], env["GEMINI_DEFAULT_AUTH_TYPE"]),
                          (KEY, "acme-ai", "gemini-api-key"))
+
+    def test_a_dotenv_that_brings_back_a_removed_variable_blocks(self):
+        sign_in(self.own, ACME, valid=True)
+        (self.repo / ".env").write_text("APP_PORT=3000\nGEMINI_API_KEY=AIzaNeverShown\n"
+                                        "export GOOGLE_CLOUD_PROJECT=other\n"
+                                        "CODE_ASSIST_ENDPOINT: https://proxy.example\nGEMINI_DEFAULT_AUTH_TYPE=x\n")
+        check = self.verify()
+        self.assertTrue(check.failed)
+        self.assertEqual(check.detail, f"{self.repo / '.env'} sets CODE_ASSIST_ENDPOINT, GEMINI_API_KEY, "
+                                       f"GOOGLE_CLOUD_PROJECT, which Gemini CLI would load although Keyfit removed "
+                                       f"them for the project's account")
+        self.assertEqual(check.fix, f"remove CODE_ASSIST_ENDPOINT, GEMINI_API_KEY, GOOGLE_CLOUD_PROJECT from "
+                                    f"{self.repo / '.env'}, or add \"advanced\": {{\"excludedEnvVars\": "
+                                    f"[\"CODE_ASSIST_ENDPOINT\", \"GEMINI_API_KEY\", \"GOOGLE_CLOUD_PROJECT\"]}} to "
+                                    f"{self.own / '.gemini' / 'settings.json'}")
+        self.assertNotIn("AIzaNeverShown", check.detail + check.fix)
+        # names Keyfit sets for Gemini CLI itself are not loaded from a .env: the account's project, its key
+        project = dict(self.conn, cloud_project="acme-ai")
+        (self.repo / ".env").write_text("GOOGLE_CLOUD_PROJECT=other\nGEMINI_DEFAULT_AUTH_TYPE=x\n")
+        self.assertEqual(self.verify(project).status, "ok")
+        settings(self.own, {"security": {"auth": {"selectedType": "gemini-api-key"}}})
+        (self.repo / ".env").write_text("GEMINI_API_KEY=AIzaOther\n")
+        key = {"name": "key", "home": str(self.own), "key": "env:ACME_KEY"}
+        self.assertEqual(self.verify(key, ACME_KEY=KEY).status, "ok")
+
+    def register(self):
+        """Register self.repo as project acme (KEYFIT_PROJECT=acme makes it the session's project)."""
+        config = self.tmp / "config"
+        config.mkdir()
+        (config / "registry.toml").write_text(f'[projects.acme]\nroots = ["{self.repo}"]\n')
+        patcher = mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(config)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_projects_own_dotenv_warns_and_one_outside_its_folders_fails(self):
+        self.register()
+        sign_in(self.own, ACME, valid=True)
+        (self.repo / ".env").write_text("GOOGLE_CLOUD_PROJECT=acme-app\nGEMINI_API_KEY=AIzaNeverShown\n")
+        check = self.verify(KEYFIT_PROJECT="acme")  # the project's own settings: its key, its Google Cloud project
+        self.assertEqual(check.status, "warn")
+        self.assertEqual(check.detail, f"Google sign-in in {self.own} · {self.repo / '.env'} sets GEMINI_API_KEY, "
+                                       f"GOOGLE_CLOUD_PROJECT: Gemini CLI uses them instead of the project's Gemini "
+                                       f"CLI account · confirmed by Google")
+        self.assertTrue(check.fix.startswith(f"remove GEMINI_API_KEY, GOOGLE_CLOUD_PROJECT from {self.repo / '.env'}, "
+                                             f"or add"), check.fix)
+        self.assertNotIn("AIzaNeverShown", check.detail + check.fix)
+        self.assertTrue(self.verify(KEYFIT_PROJECT="globex").failed)  # another project's folder
+        self.assertTrue(self.verify().failed)  # no project: nothing is the project's own
+        (self.repo / ".env").unlink()
+        (self.tmp / ".env").write_text("GEMINI_API_KEY=AIzaNeverShown\n")  # a folder above: anyone's
+        check = self.verify(KEYFIT_PROJECT="acme")
+        self.assertTrue(check.failed)
+        self.assertIn(f"{self.tmp / '.env'} sets GEMINI_API_KEY, which Gemini CLI would load", check.detail)
+
+    def test_an_endpoint_or_the_home_fails_also_in_the_projects_own_dotenv(self):
+        # a repository must never send the sign-in's token to another host or move the sign-in
+        self.register()
+        sign_in(self.own, ACME, valid=True)
+        for name in ("CODE_ASSIST_ENDPOINT", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL",
+                     "GOOGLE_CLOUD_UNIVERSE_DOMAIN", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
+                     "GOOGLE_EXTERNAL_ACCOUNT_X"):
+            (self.repo / ".env").write_text(f"{name}=x\n")
+            check = self.verify(KEYFIT_PROJECT="acme")
+            self.assertTrue(check.failed, name)
+            self.assertIn(f"sets {name}, which Gemini CLI would load", check.detail)
+        # with the app's key next to it: the endpoint fails, and only the endpoint is named
+        (self.repo / ".env").write_text("GEMINI_API_KEY=x\nCODE_ASSIST_ENDPOINT=https://proxy.example\n")
+        check = self.verify(KEYFIT_PROJECT="acme")
+        self.assertEqual(check.detail, f"{self.repo / '.env'} sets CODE_ASSIST_ENDPOINT, which Gemini CLI would load "
+                                       f"although Keyfit removed it for the project's account")
+        # your own ~/.gemini: GEMINI_CLI_HOME there would move the sign-in
+        sign_in(self.home, ACME, valid=True)
+        (self.repo / ".env").write_text("GEMINI_CLI_HOME=/elsewhere\n")
+        self.assertIn("sets GEMINI_CLI_HOME, which", self.verify({"name": "personal", "account": ACME},
+                                                                 KEYFIT_PROJECT="acme").detail)
+
+    def test_only_the_dotenv_gemini_cli_loads_counts(self):
+        sign_in(self.own, ACME, valid=True)
+        (self.repo / ".env").write_text("GOOGLE_GENAI_USE_VERTEXAI=true\n")
+        (self.repo / "app").mkdir()
+        (self.repo / "app" / ".env").write_text("APP_PORT=3000\n")
+        os.chdir(self.repo / "app")  # the nearest .env: the folder's own, not the one above it
+        self.assertEqual(self.verify().status, "ok")
+        (self.repo / "app" / ".gemini").mkdir()
+        (self.repo / "app" / ".gemini" / ".env").write_text("APP_PORT=3000\n")
+        (self.repo / "app" / ".env").write_text("GOOGLE_API_KEY=x\n")  # an untrusted folder skips .gemini/.env
+        self.assertIn("app/.env sets GOOGLE_API_KEY", self.verify().detail)
+        os.chdir(self.repo)
+        self.assertIn(f"{self.repo / '.env'} sets GOOGLE_GENAI_USE_VERTEXAI", self.verify().detail)
+
+    def test_the_homes_dotenv_counts_where_the_folder_has_none(self):
+        sign_in(self.own, ACME, valid=True)
+        (self.own / ".gemini" / ".env").write_text("GOOGLE_API_KEY=x\n")
+        check = self.verify()
+        self.assertIn(f"{self.own / '.gemini' / '.env'} sets GOOGLE_API_KEY", check.detail)
+        self.assertEqual(check.fix, f"remove GOOGLE_API_KEY from {self.own / '.gemini' / '.env'}")  # always loaded
+        (self.own / ".gemini" / ".env").unlink()
+        (self.own / ".env").write_text("GOOGLE_API_KEY=x\n")
+        self.assertIn(f"{self.own / '.env'} sets GOOGLE_API_KEY", self.verify().detail)
+        # your own home: a .env there could also point Gemini CLI at another home
+        (self.own / ".env").write_text("GEMINI_CLI_HOME=/elsewhere\n")
+        self.assertEqual(self.verify().status, "ok")  # with a home of its own, GEMINI_CLI_HOME is set: never loaded
+        sign_in(self.home, ACME, valid=True)
+        (self.home / ".env").write_text("GEMINI_CLI_HOME=/elsewhere\n")
+        self.assertIn("sets GEMINI_CLI_HOME", self.verify({"name": "personal", "account": ACME}).detail)
+
+    def test_excluded_names_are_not_loaded_from_a_folders_dotenv(self):
+        sign_in(self.own, ACME, valid=True)
+        (self.repo / ".env").write_text("GOOGLE_CLOUD_PROJECT=app\nGOOGLE_APPLICATION_CREDENTIALS=app.json\n")
+        settings(self.own, {"advanced": {"excludedEnvVars": ["GOOGLE_CLOUD_PROJECT"]}})
+        self.assertIn(".env sets GOOGLE_APPLICATION_CREDENTIALS, which", self.verify().detail)
+        both = {"advanced": {"excludedEnvVars": ["GOOGLE_CLOUD_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS"]}}
+        settings(self.own, both)
+        self.assertEqual(self.verify().status, "ok")
+        # the folder's own settings do not count (an untrusted folder's are ignored), nor in a .gemini/.env
+        settings(self.own, {})
+        settings(self.repo, both)
+        self.assertTrue(self.verify().failed)
+        settings(self.own, {"advanced": {"excludedEnvVars": ["GOOGLE_API_KEY"]}})
+        (self.own / ".gemini" / ".env").write_text("GOOGLE_API_KEY=x\n")
+        (self.repo / ".env").unlink()
+        self.assertIn("sets GOOGLE_API_KEY", self.verify().detail)
 
     def test_confirmed_by_google_while_the_token_is_valid(self):
         sign_in(self.own, ACME, valid=True)
@@ -344,9 +479,22 @@ class McpTests(unittest.TestCase):
         (self.home / ".gemini" / "settings.json").write_text(json.dumps({"mcpServers": {"paper": {"url": "http://p"}}}))
         self.assertEqual(self.hidden(), ([], []))
 
-    def test_unreadable_files_hide_nothing_from_them(self):
+    def test_files_that_cannot_be_parsed_stop_the_start(self):
         (self.home / ".gemini" / "settings.json").write_text("{not json")
-        self.assertEqual(self.hidden(), ([], []))
+        with self.assertRaises(mcp.Unreadable):
+            self.hidden()
+
+    def test_files_with_a_byte_order_mark_and_a_comment_before_them(self):
+        (self.home / ".gemini" / "settings.json").write_text(
+            "\ufeff// yours\n" + json.dumps({"mcpServers": {"globex_cloud_eu": {"command": "x"}, "paper": {"url": "http://p"}}}),
+            encoding="utf-8")
+        self.assertEqual(self.hidden(), (["globex_cloud_eu"], ["paper"]))
+
+    def test_linear_servers_reading_a_variable_without_braces(self):
+        (self.home / ".gemini" / "settings.json").write_text(json.dumps({"mcpServers": {
+            "linear_globex": {"httpUrl": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer $LINEAR_GLOBEX_API_KEY"}},
+            "linear": LINEAR}}))
+        self.assertEqual(self.hidden(), (["linear_globex"], ["linear"]))
 
     def test_the_allowlist_on_the_command_line(self):
         self.assertEqual(mcp.gemini_allowed(["--allowed-mcp-server-names", "a,b", "--allowed-mcp-server-names=c",
@@ -363,9 +511,26 @@ class ShimArgsTests(McpTests):
         for args in ([], ["-p", "hi"], ["explain this"], ["-m", "gemini-x"]):
             self.assertEqual(self.adjust(*args)[0], ["--allowed-mcp-server-names=paper,linear", *args])
 
+    def test_a_later_word_is_never_gemini_clis_own_command(self):
+        # only the first word can be one: these are queries
+        for args in (["summarize", "the", "mcp", "setup"], ["why", "do", "my", "hooks", "fail"],
+                     ["explain", "the", "mcp", "setup"], ["--include-directories", "../lib", "mcp"], ["-p", "mcp"]):
+            self.assertEqual(self.adjust(*args)[0], ["--allowed-mcp-server-names=paper,linear", *args])
+
     def test_gemini_clis_own_commands_run_as_typed(self):
-        for args in (["mcp", "list"], ["extensions", "install", "x"], ["skills", "list"], ["hooks", "migrate"]):
+        for args in (["mcp", "list"], ["extensions", "install", "x"], ["skills", "list"], ["hooks", "migrate"],
+                     ["-m", "gemini-x", "mcp", "list"]):
             self.assertEqual(self.adjust(*args)[0], args)
+
+    def test_a_file_gemini_loads_that_cannot_be_parsed_stops_the_start(self):
+        (self.cwd / ".gemini").mkdir()
+        (self.cwd / ".gemini" / "settings.json").write_text('{"mcpServers": ')
+        with self.assertRaises(Refused) as refused:
+            self.adjust()
+        self.assertEqual(str(refused.exception),
+                         f"keyfit: gemini not started: Keyfit can't parse {self.cwd / '.gemini' / 'settings.json'}, so it "
+                         f"can't hide the MCP servers there that acme must not see.\n"
+                         f"  Fix the file (bypass once: KEYFIT_DISABLE=1 gemini …)")
 
     def test_when_nothing_may_stay_the_allowlist_names_no_server(self):
         (self.home / ".gemini" / "settings.json").write_text(json.dumps({"mcpServers": {"globex_cloud_eu": {}}}))
@@ -450,13 +615,14 @@ class ShimTests(unittest.TestCase):
         seen = self.started(self.run_tool("-p", "hi", GEMINI_API_KEY="AIzaOther", GOOGLE_API_KEY="x",
                                           GOOGLE_CLOUD_PROJECT="other", GOOGLE_GENAI_USE_VERTEXAI="true",
                                           GOOGLE_APPLICATION_CREDENTIALS="/keys/x.json", GOOGLE_MAPS_KEY="kept",
-                                          GEMINI_FORCE_ENCRYPTED_FILE_STORAGE="true"))
+                                          GEMINI_FORCE_ENCRYPTED_FILE_STORAGE="true",
+                                          CODE_ASSIST_ENDPOINT="https://proxy.example"))
         self.assertEqual(seen["argv"], ["--allowed-mcp-server-names=paper", "-p", "hi"])
         self.assertEqual(seen["env"], {
             "GEMINI_CLI_HOME": str(self.work), "GEMINI_API_KEY": None, "GOOGLE_API_KEY": None, "GOOGLE_CLOUD_PROJECT": None,
             "GOOGLE_APPLICATION_CREDENTIALS": None, "GOOGLE_GENAI_USE_VERTEXAI": None,
             "GEMINI_DEFAULT_AUTH_TYPE": "oauth-personal", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE": None,
-            "GOOGLE_MAPS_KEY": "kept", "KEYFIT_GEMINI": "work", "KEYFIT_PROJECT": "demo"})
+            "GOOGLE_MAPS_KEY": "kept", "CODE_ASSIST_ENDPOINT": None, "KEYFIT_GEMINI": "work", "KEYFIT_PROJECT": "demo"})
 
     def test_a_mismatch_blocks_with_the_fix(self):
         creds = sign_in(self.work, PERSONAL)
@@ -467,6 +633,30 @@ class ShimTests(unittest.TestCase):
                       f"{ACME}\n    → rm {creds}, then: GEMINI_CLI_HOME={self.work} gemini --prompt-interactive /quit\n",
                       out.stderr)
         self.assertNotIn("Sign in now?", out.stderr)
+
+    def test_a_dotenv_outside_the_project_blocks_before_any_sign_in(self):
+        (self.tmp / ".env").write_text("GOOGLE_GENAI_USE_VERTEXAI=true\nGEMINI_API_KEY=AIzaNeverShown\n")
+        out = self.run_tool("-p", "hi")  # not signed in either: the .env comes first, so no sign-in that would load it
+        self.assertEqual((out.returncode, out.stdout), (1, ""))
+        self.assertIn(f"  ✘ gemini     {ACME}   {self.tmp / '.env'} sets GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, "
+                      f"which Gemini CLI would load although Keyfit removed them for the project's account\n"
+                      f"    → remove GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI from {self.tmp / '.env'}, or add ",
+                      out.stderr)
+        self.assertNotIn("AIzaNeverShown", out.stderr)
+        self.assertNotIn("Sign in now?", out.stderr)
+
+    def test_the_projects_own_dotenv_warns_and_the_session_starts_also_in_a_worktree(self):
+        sign_in(self.work, ACME)  # an expired token: no online question at all
+        git = ["git", "-C", str(self.repo), "-c", "user.email=t@example.com", "-c", "user.name=t"]
+        subprocess.run([*git, "commit", "--allow-empty", "-qm", "init"], check=True)
+        subprocess.run([*git, "worktree", "add", "-q", str(self.tmp / "wt")], check=True)
+        for folder in (self.repo, self.tmp / "wt"):
+            (folder / ".env").write_text("GOOGLE_CLOUD_PROJECT=acme-app\n")
+            out = self.run_tool("-p", "hi", cwd=folder)
+            self.assertEqual(self.started(out)["argv"][-2:], ["-p", "hi"])
+            self.assertIn(f"keyfit: ! gemini     {ACME}   Google sign-in in {self.work} · {folder / '.env'} sets "
+                          f"GOOGLE_CLOUD_PROJECT: Gemini CLI uses it instead of the project's Gemini CLI account",
+                          out.stderr)
 
     def test_not_signed_in_blocks_and_nothing_is_asked_without_a_terminal(self):
         out = self.run_tool("-p", "hi")
