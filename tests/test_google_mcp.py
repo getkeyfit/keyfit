@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -22,7 +23,8 @@ os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the re
 
 from keyfit import cli, mcp  # noqa: E402
 from keyfit.adapters import ADAPTERS, gemini, google_mcp  # noqa: E402
-from keyfit.adapters.google_mcp import GMAIL_PROFILE, PRIMARY_CALENDAR, TOKEN, TOKENINFO, GoogleMcpAdapter  # noqa: E402
+from keyfit.adapters.google_mcp import (CLIENT_MAX, GMAIL_PROFILE, PRIMARY_CALENDAR, TOKEN, TOKENINFO,  # noqa: E402
+                                        TYPES, GoogleMcpAdapter)
 from keyfit.cli import main  # noqa: E402
 from keyfit.registry import Registry  # noqa: E402
 from test_vercel import executable  # noqa: E402
@@ -112,6 +114,17 @@ class Google:
         fresh = f"ya29.fresh-{len(self.issued)}"
         self.issued[fresh] = refresh[len("1//"):]
         return 200, {"access_token": fresh, "expires_in": 3599, "token_type": "Bearer"}
+
+
+def within(seconds: float, call):
+    """call()'s result, failing the test instead of hanging when it doesn't return in time."""
+    out = []
+    thread = threading.Thread(target=lambda: out.append(call()), daemon=True)
+    thread.start()
+    thread.join(seconds)
+    if thread.is_alive():
+        raise AssertionError(f"still running after {seconds} seconds")
+    return out[0]
 
 
 def no_network(test: unittest.TestCase) -> None:
@@ -515,6 +528,188 @@ class AdapterTests(unittest.TestCase):
         self.adapter.inject(self.conn(), env)
         self.assertEqual(sorted(env), ["GOOGLE_OAUTH_CREDENTIALS", "HOME", "XDG_CONFIG_HOME"])
 
+    def test_inject_removes_what_would_sign_a_server_in_another_way(self):
+        """The variables each server signs in with ahead of its login (a service account, a token of its own) go, for
+        the types the project's servers run; a project with only Gmail AutoAuth keeps GOOGLE_APPLICATION_CREDENTIALS
+        (for Terraform and the like)."""
+        self.assertEqual({kind: t.sources for kind, t in TYPES.items() if t.sources}, {
+            "workspace-mcp": ("GOOGLE_SERVICE_ACCOUNT_KEY_FILE", "GOOGLE_SERVICE_ACCOUNT_KEY_JSON"),
+            "google-calendar-mcp": ("GOOGLE_SERVICE_ACCOUNT_KEY", "GOOGLE_SERVICE_ACCOUNT_SUBJECT",
+                                    "GOOGLE_APPLICATION_CREDENTIALS"),
+            "google-drive-mcp": ("GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_DRIVE_MCP_SUBJECT",
+                                 "GOOGLE_DRIVE_MCP_ACCESS_TOKEN", "GOOGLE_DRIVE_MCP_REFRESH_TOKEN",
+                                 "GOOGLE_DRIVE_MCP_CLIENT_ID", "GOOGLE_DRIVE_MCP_CLIENT_SECRET", "GOOGLE_TOKEN_PATH")})
+        every = {var for t in TYPES.values() for var in t.sources}
+        for kind in TYPES:
+            with self.subTest(kind):
+                env = self.env(**dict.fromkeys(every, "/p"))
+                self.adapter.inject(self.conn(s={"type": kind, "login": "/l"}), env)
+                gone = every if kind == "other" else set(TYPES[kind].sources)  # an other server may run any of them
+                self.assertEqual(set(env) & every, every - gone)
+        env = self.env(**dict.fromkeys(every, "/p"))
+        self.adapter.inject(self.conn(d={"type": "google-drive-mcp", "login": "/l"},
+                                      w={"type": "workspace-mcp", "login": "/l"}), env)
+        self.assertEqual(set(env) & every, {"GOOGLE_SERVICE_ACCOUNT_KEY", "GOOGLE_SERVICE_ACCOUNT_SUBJECT"})
+
+    def test_a_definition_that_signs_in_another_way_fails(self):
+        """Each of those variables in a definition of a claimed server: the server would not act as its login's
+        account, so the check fails before Google is asked, naming the variable, never its value."""
+        logins = {"workspace-mcp": ("WORKSPACE_MCP_CREDENTIALS_DIR", WORKSPACE, workspace(self.home / "ws", ACME)),
+                  "google-calendar-mcp": ("GOOGLE_CALENDAR_MCP_TOKEN_PATH", CALENDAR,
+                                          write(self.tmp / "cal.json", {"normal": tokens(ACME, cached_email=ACME)})),
+                  "google-drive-mcp": ("GOOGLE_DRIVE_MCP_TOKEN_PATH", DRIVE, write(self.tmp / "drive.json", {
+                      "version": 2, "accounts": {"a": {"email": ACME, "accessToken": "ya29.x",
+                                                       "expiryDate": expiry(False)}}}))}
+        for kind, (variable, spec, login) in logins.items():
+            conn = self.conn(s={"type": kind, "login": str(login)})
+            self.claude(s={**spec, "env": {variable: str(login)}})
+            self.assertFalse(self.verify(conn, remote=False).failed)
+            for var in TYPES[kind].sources:
+                with self.subTest(var=var, kind=kind):
+                    self.claude(s={**spec, "env": {variable: str(login), var: "1//fake-secret-value"}})
+                    check = self.verify(conn)
+                    self.assertEqual((check.status, check.detail, check.fix),
+                                     ("fail", f"Claude's s sets {var}: {TYPES[kind].title} would sign in with it, not "
+                                              f"with {login}", f"remove {var} from s's env in Claude's MCP config"))
+                    self.assertNotIn("1//fake-secret-value", " ".join(check.lines()))
+        self.claude(s={**GMAIL, "env": {"GMAIL_CREDENTIALS_PATH": str(self.gmail),
+                                        "GOOGLE_APPLICATION_CREDENTIALS": "/sa.json"}})  # Gmail AutoAuth reads none
+        self.assertFalse(self.verify(self.conn(s={"type": "gmail-autoauth", "login": str(self.gmail)})).failed)
+        self.assertEqual(self.google.calls, [])
+
+    def test_a_default_login_is_under_the_home_its_definition_sets(self):
+        """A server finds its default login (and OAuth client) under its own HOME and XDG_CONFIG_HOME, which its
+        definition may set: those are the ones checked, the definition's variables filled in from the session."""
+        other = self.tmp / "other-home"
+        cases = [(GMAIL, {"HOME": str(other)}, "gmail-autoauth", other / ".gmail-mcp" / "credentials.json"),
+                 (WORKSPACE, {"HOME": str(other)}, "workspace-mcp", other / ".google_workspace_mcp" / "credentials"),
+                 (CALENDAR, {"HOME": str(other)}, "google-calendar-mcp",
+                  other / ".config" / "google-calendar-mcp" / "tokens.json"),
+                 (DRIVE, {"HOME": str(other), "XDG_CONFIG_HOME": "${HOME}/xdg"}, "google-drive-mcp",
+                  self.home / "xdg" / "google-drive-mcp" / "tokens.json")]
+        for spec, env, kind, login in cases:
+            self.assertEqual(google_mcp.login_of(kind, {**spec, "env": env}, self.env(), self.repo), login)
+        default = write(self.home / ".gmail-mcp" / "credentials.json", tokens(ACME, valid=True))
+        self.claude(gmail={**GMAIL, "env": {"HOME": str(other)}})
+        check = self.verify(self.conn(gmail={"type": "gmail-autoauth", "login": str(default)}))
+        self.assertEqual((check.status, check.detail),
+                         ("fail", f"Claude's gmail reads {other / '.gmail-mcp' / 'credentials.json'}, not {default}"))
+        # Drive's login and client in the config folder its definition names: renewed with that client
+        xdg = self.tmp / "xdg"
+        drive = write(xdg / "google-drive-mcp" / "tokens.json", {"version": 2, "accounts": {"a": {
+            "email": ACME, "accessToken": f"ya29.{ACME}", "refreshToken": f"1//{ACME}", "expiryDate": expiry(False)}}})
+        oauth_client(xdg / "google-drive-mcp" / "gcp-oauth.keys.json")
+        oauth_client(self.home / ".config" / "google-drive-mcp" / "gcp-oauth.keys.json", client=("another", "client"))
+        self.claude(gdrive={**DRIVE, "env": {"XDG_CONFIG_HOME": str(xdg)}})
+        check = self.verify(self.conn(gdrive={"type": "google-drive-mcp", "login": str(drive)}))
+        self.assertEqual((check.status, check.detail), ("ok", f"{ACME} · confirmed by Google"))
+        self.assertEqual(self.google.calls, [TOKEN, TOKENINFO])
+
+    def test_a_repository_cannot_choose_the_oauth_client(self):
+        """A definition the folder brings (.mcp.json, opencode.json up the tree, .github/mcp.json, .gemini/settings.json,
+        Codex's project config) may name another OAuth client: Keyfit renews with yours, so Google still names the other
+        account. With the folder's client Google would refuse the renewal, and the check would only warn."""
+        write(self.gmail, tokens(PERSONAL))
+        oauth_client(self.home / ".gmail-mcp" / "gcp-oauth.keys.json")
+        oauth_client(self.repo / "x.json", client=("another", "client"))
+        env = {"GMAIL_CREDENTIALS_PATH": str(self.gmail), "GMAIL_OAUTH_PATH": "./x.json"}
+        spec = {**GMAIL, "env": env}
+        opencode = {"mcp": {"gmail_work": {"type": "local", "command": ["npx", "@gongrzhe/server-gmail-autoauth-mcp"],
+                                           "environment": env}}}
+        brought = [(self.repo / ".mcp.json", {"mcpServers": {"gmail_work": spec}}),
+                   (self.repo / ".github" / "mcp.json", {"mcpServers": {"gmail_work": spec}}),
+                   (self.repo / ".gemini" / "settings.json", {"mcpServers": {"gmail_work": spec}}),
+                   (self.repo / "opencode.json", opencode), (self.tmp / "opencode.json", opencode)]
+        for path, data in brought:
+            with self.subTest(path=path):
+                write(path, data)
+                self.assertIn(("gmail_work", spec["env"]), [(n, mcp.spec_env(s)) for _, n, s in
+                                                            mcp.definitions(self.env(), self.repo)])
+                check = self.verify()
+                self.assertEqual((check.status, check.detail),
+                                 ("fail", f"the token in {self.gmail} belongs to {PERSONAL}, the project's Google "
+                                          f"account is {ACME}"))
+                path.unlink()
+        (self.home / ".codex").mkdir()
+        (self.home / ".codex" / "config.toml").write_text(f'[projects."{self.repo}"]\ntrust_level = "trusted"\n')
+        (self.repo / ".codex").mkdir()
+        (self.repo / ".codex" / "config.toml").write_text(
+            '[mcp_servers.gmail_work]\ncommand = "npx"\nargs = ["@gongrzhe/server-gmail-autoauth-mcp"]\n'
+            f'env = {{ GMAIL_CREDENTIALS_PATH = "{self.gmail}", GMAIL_OAUTH_PATH = "./x.json" }}\n')
+        self.assertIn("Codex", [agent for agent, n, _ in mcp.definitions(self.env(), self.repo) if n == "gmail_work"])
+        self.assertTrue(self.verify().failed)
+        # your own definition's client file still counts (here a relative one: the server reads it from the folder)
+        write(self.gmail, tokens(ACME))
+        self.claude(gmail_work=spec)
+        check = self.verify()
+        self.assertEqual((check.status, check.detail), ("warn", f"account not confirmed: {self.gmail} names no account, "
+                                                                 f"and Google did not renew its token: invalid_client"))
+
+    def test_an_oauth_client_file_is_read_only_when_it_is_a_small_regular_file(self):
+        """A FIFO, a device or a huge file as the client file is no client: the check doesn't hang on it."""
+        fifo = self.tmp / "fifo"
+        os.mkfifo(fifo)
+        huge = write(self.tmp / "huge.json", {"installed": {"client_id": CLIENT[0], "client_secret": CLIENT[1],
+                                                            "padding": "x" * CLIENT_MAX}})
+        small = oauth_client(self.tmp / "small.json")
+        files = (fifo, Path("/dev/zero"), huge, self.tmp, self.tmp / "missing.json", small)
+        self.assertEqual(within(10, lambda: [google_mcp.client_file(f) for f in files]),
+                         [None, None, None, None, None, CLIENT])
+        write(self.gmail, tokens(ACME))
+        for path in (fifo, Path("/dev/zero")):
+            with self.subTest(path=path):
+                self.claude(gmail_work={**GMAIL, "env": {"GMAIL_CREDENTIALS_PATH": str(self.gmail),
+                                                         "GMAIL_OAUTH_PATH": str(path)}})
+                check = within(10, self.verify)
+                self.assertEqual((check.status, check.detail),
+                                 ("warn", f"account not confirmed: {self.gmail} names no account, and its saved token "
+                                          f"has expired, with no OAuth client found to renew it"))
+        self.assertEqual(self.google.calls, [])
+
+    def test_claudes_local_scope_counts(self):
+        """`claude mcp add` without --scope keeps the server in ~/.claude.json for the folder, where it wins over the
+        user scope's: its login is checked, it may set no source, and its OAuth client counts as yours."""
+        write(self.gmail, tokens(ACME))
+        user = {**GMAIL, "env": {"GMAIL_CREDENTIALS_PATH": str(self.gmail)}}
+
+        def claude(**local):
+            write(self.home / ".claude.json", {"mcpServers": {"gmail_work": user},
+                                               "projects": {str(self.repo): {"mcpServers": local}}})
+
+        claude(gmail_work=GMAIL)
+        check = self.verify(remote=False)
+        self.assertEqual(check.detail, f"Claude's gmail_work reads {self.home / '.gmail-mcp' / 'credentials.json'}, not "
+                                       f"{self.gmail}")
+        drive = self.home / ".config" / "google-drive-mcp" / "tokens.json"
+        claude(gdrive={**DRIVE, "env": {"GOOGLE_APPLICATION_CREDENTIALS": "/sa.json"}})
+        check = self.verify(self.conn(gdrive={"type": "google-drive-mcp", "login": str(drive)}), remote=False)
+        self.assertEqual(check.detail, f"Claude's gdrive sets GOOGLE_APPLICATION_CREDENTIALS: Google Drive MCP would "
+                                       f"sign in with it, not with {drive}")
+        claude(gmail_work={**user, "env": {**user["env"],
+                                           "GMAIL_OAUTH_PATH": str(oauth_client(self.home / "keys.json"))}})
+        self.assertEqual(self.verify().detail, "confirmed by Google")
+        self.assertEqual(self.google.calls, [TOKEN, GMAIL_PROFILE])
+
+    def test_drive_would_take_an_old_token_file_from_the_folder(self):
+        """Google Drive MCP moves google-tokens.json or .gcp-saved-tokens.json from the folder it starts in into a
+        missing login, and acts as its account: not signed in yet is then a block."""
+        drive = self.home / ".config" / "google-drive-mcp" / "tokens.json"
+        conn = self.conn(gdrive={"type": "google-drive-mcp", "login": str(drive)})
+        self.assertEqual(self.verify(conn).status, "warn")
+        for name in ("google-tokens.json", ".gcp-saved-tokens.json"):
+            with self.subTest(name):
+                old = write(self.repo / name, tokens(PERSONAL))
+                check = self.verify(conn)
+                self.assertEqual((check.status, check.detail, check.fix),
+                                 ("fail", f"not signed in yet ({drive}), and gdrive would take the sign-in in {old}",
+                                  f"move {old} out of this folder, then: npx @piotr-agier/google-drive-mcp auth   "
+                                  f"(as {ACME})"))
+                old.unlink()
+        write(self.repo / "google-tokens.json", tokens(PERSONAL))  # a login of its own: the server never looks
+        write(drive, {"version": 2, "accounts": {"a": {"email": ACME, "accessToken": "ya29.x", "expiryDate": 1}}})
+        self.assertFalse(self.verify(conn).failed)
+        self.assertEqual(self.google.calls, [])
+
     def test_the_fingerprint_follows_the_login(self):
         before = self.adapter.fingerprint(self.conn(), self.env())
         write(self.gmail, tokens(None))
@@ -762,7 +957,8 @@ class CliTests(unittest.TestCase):
 FAKE_CLAUDE = """#!/usr/bin/env python3
 import json, os, sys
 print(json.dumps({"argv": sys.argv[1:], "env": {k: os.environ.get(k) for k in (
-    "GMAIL_CREDENTIALS_PATH", "USER_GOOGLE_EMAIL", "KEYFIT_PROJECT")}}))
+    "GMAIL_CREDENTIALS_PATH", "USER_GOOGLE_EMAIL", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_DRIVE_MCP_REFRESH_TOKEN",
+    "KEYFIT_PROJECT")}}))
 """
 
 
@@ -828,8 +1024,9 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("-p", "hi", GMAIL_CREDENTIALS_PATH="/elsewhere.json", USER_GOOGLE_EMAIL=PERSONAL)
         seen = self.started(out)
         self.assertEqual(self.denied(seen), ["gcal", "gmail_personal"])
-        self.assertEqual(seen["env"],
-                         {"GMAIL_CREDENTIALS_PATH": None, "USER_GOOGLE_EMAIL": None, "KEYFIT_PROJECT": "demo"})
+        self.assertEqual(seen["env"], {"GMAIL_CREDENTIALS_PATH": None, "USER_GOOGLE_EMAIL": None,
+                                       "GOOGLE_APPLICATION_CREDENTIALS": None, "GOOGLE_DRIVE_MCP_REFRESH_TOKEN": None,
+                                       "KEYFIT_PROJECT": "demo"})
         self.assertIn("keyfit: ! google-mcp gmail_work   account not confirmed: ~/.gmail-mcp/work.json names no "
                       "account, and its saved token has expired, with no OAuth client found to renew it\n", out.stderr)
         seen = self.started(self.run_tool("-p", "hi", cwd=self.other))  # globex: not signed in yet, a warning too
@@ -845,6 +1042,32 @@ class ShimTests(unittest.TestCase):
                       f"GMAIL_CREDENTIALS_PATH in its config to a new file), sign in there, then: keyfit add google-mcp "
                       f"--server gmail_work\n",
                       out.stderr)
+
+    def test_a_drive_server_never_signs_in_with_the_shells_service_account(self):
+        """The shell exports GOOGLE_APPLICATION_CREDENTIALS (for Terraform) in a project without gcloud or firebase: the
+        session of a project with a Drive server starts without it, and a definition that sets it blocks."""
+        drive = write(self.home / "drive" / "tokens.json", {"version": 2, "accounts": {"a": {
+            "email": ACME, "accessToken": "ya29.x", "expiryDate": expiry(False)}}})  # names ACME; nothing to renew
+        write(self.gmail, tokens(ACME))
+        reg = self.config / "registry.toml"
+        reg.write_text(reg.read_text() + f'\n[accounts.google-mcp.work.servers.gdrive]\ntype = "google-drive-mcp"\n'
+                                          f'login = "{drive}"\n')
+        servers = json.loads((self.home / ".claude.json").read_text())["mcpServers"]
+        servers["gdrive"] = {**DRIVE, "env": {"GOOGLE_DRIVE_MCP_TOKEN_PATH": str(drive)}}
+        write(self.home / ".claude.json", {"mcpServers": servers})
+        shell = {"GOOGLE_APPLICATION_CREDENTIALS": "/sa.json", "GOOGLE_DRIVE_MCP_REFRESH_TOKEN": "1//shell"}
+        seen = self.started(self.run_tool("-p", "hi", **shell))
+        self.assertEqual((seen["env"]["GOOGLE_APPLICATION_CREDENTIALS"], seen["env"]["GOOGLE_DRIVE_MCP_REFRESH_TOKEN"]),
+                         (None, None))
+        seen = self.started(self.run_tool("-p", "hi", cwd=self.other, **shell))  # globex: Gmail only, so it stays
+        self.assertEqual(seen["env"]["GOOGLE_APPLICATION_CREDENTIALS"], "/sa.json")
+        servers["gdrive"]["env"]["GOOGLE_APPLICATION_CREDENTIALS"] = "/sa.json"
+        write(self.home / ".claude.json", {"mcpServers": servers})
+        out = self.run_tool("-p", "hi")
+        self.assertEqual((out.returncode, out.stdout), (1, ""))
+        self.assertIn("Claude's gdrive sets GOOGLE_APPLICATION_CREDENTIALS: Google Drive MCP would sign in with it, not "
+                      "with ~/drive/tokens.json\n    → remove GOOGLE_APPLICATION_CREDENTIALS from gdrive's env in "
+                      "Claude's MCP config\n", out.stderr)
 
     def test_unregistered_folder_runs_unchanged(self):
         seen = self.started(self.run_tool("-p", "hi", cwd=self.outside, GMAIL_CREDENTIALS_PATH="/mine.json"))

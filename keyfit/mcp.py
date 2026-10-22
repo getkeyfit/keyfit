@@ -212,15 +212,17 @@ def google_type(spec: dict) -> str | None:
     return None
 
 
-def definitions(env: dict, cwd: Path) -> list[tuple[str, str, dict]]:
+def definitions(env: dict, cwd: Path, mine: bool = False) -> list[tuple[str, str, dict]]:
     """(agent, name, spec) of every server the five agents load in *cwd*: the user's and the folder's (for Claude also
-    its local scope, for Codex the project config it trusts)."""
+    its local scope, for Codex the project config it trusts). *mine*: only those of your own config files (Claude's
+    local scope too, which lives in ~/.claude.json), none a repository brings."""
     out = [("Claude", n, s) for n, s in claude_servers(env, cwd)]
-    out += [("Claude", n, s) for n, s in _table(_read(cwd / ".mcp.json").get("mcpServers")).items()]
-    out += [("Codex", n, s) for n, s in codex_servers(env, cwd).items()]
-    out += [("OpenCode", n, s) for n, s, _ in opencode_servers(env, cwd)]
-    out += [("Copilot CLI", n, s) for n, s, _ in copilot_servers(env, cwd)]
-    out += [("Gemini CLI", n, s) for n, s, _ in gemini_servers(env, cwd)]
+    if not mine:
+        out += [("Claude", n, s) for n, s in _table(_read(cwd / ".mcp.json").get("mcpServers")).items()]
+    out += [("Codex", n, s) for n, s in codex_servers(env, None if mine else cwd).items()]
+    out += [("OpenCode", n, s) for n, s, verified in opencode_servers(env, cwd) if verified or not mine]
+    out += [("Copilot CLI", n, s) for n, s, verified in copilot_servers(env, cwd) if verified or not mine]
+    out += [("Gemini CLI", n, s) for n, s, verified in gemini_servers(env, cwd) if verified or not mine]
     return [(agent, n, s) for agent, n, s in out if isinstance(s, dict)]
 
 

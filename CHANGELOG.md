@@ -500,6 +500,23 @@ From the third pre-launch review:
   keys: another profile is refused there too (shared profiles still run). `vercel teams invite`,
   `members`, `add`, `request` and `sso` ran unchecked on the team selected in the login folder: only
   `teams switch` and `teams ls` are sign-ins now, and the rest are checked and get the project's team.
+- **Gmail, Drive and Calendar servers no longer run as another Google account while Keyfit says
+  "confirmed by Google".** Google Drive MCP signs in with a service account (`GOOGLE_APPLICATION_CREDENTIALS`,
+  `GOOGLE_DRIVE_MCP_SUBJECT`) or a token of its own (`GOOGLE_DRIVE_MCP_ACCESS_TOKEN`, `_REFRESH_TOKEN`,
+  `_CLIENT_ID`, `_CLIENT_SECRET`) ahead of its login, and moves an old token file (`GOOGLE_TOKEN_PATH`) into
+  a missing one; Google Calendar MCP takes a service account (`GOOGLE_SERVICE_ACCOUNT_KEY`, `_SUBJECT`, and
+  `GOOGLE_APPLICATION_CREDENTIALS` without a client file), Google Workspace MCP one that acts as any user of
+  its domain (`GOOGLE_SERVICE_ACCOUNT_KEY_FILE`, `_JSON`). A shell exporting `GOOGLE_APPLICATION_CREDENTIALS`
+  for Terraform made the Drive server ignore the login Keyfit checked. A project with such a server now
+  starts its sessions without these variables, a definition that sets one fails the check (`remove … from
+  gdrive's env in Claude's MCP config`), and Google Drive MCP not signed in yet blocks when the folder
+  holds `google-tokens.json` or `.gcp-saved-tokens.json`, which the server would move into its login. A
+  default login (and OAuth client) is looked for under the `HOME` and `XDG_CONFIG_HOME` the server's
+  definition sets, as the server does. The OAuth client Keyfit renews a token with now comes from your own
+  configs only (Claude's local scope included), never from a definition the folder brings (`.mcp.json`,
+  `opencode.json`, `.github/mcp.json`, `.gemini/settings.json`, Codex's project config): a repository's
+  client turned "the token belongs to someone@gmail.com" into an `account not confirmed` warning. It is
+  read only from a regular file of at most 64 KB: a FIFO or `/dev/zero` hung the check.
 
 ## [0.1.0] - 2026-10-12
 
