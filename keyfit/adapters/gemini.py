@@ -21,9 +21,11 @@ scrub   — where Gemini CLI starts (the shim and the remote check): the variabl
           GOOGLE_CLOUD_PROJECT, GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_GENAI_USE_VERTEXAI, …). Sessions of other agents
           keep them. GEMINI_DEFAULT_AUTH_TYPE preselects the account's method in Gemini CLI's sign-in dialog. Gemini CLI
           loads one .env file (the nearest, from its folder up to /, else its home's) for each variable not set:
-          the local check fails when that file would bring one of them back.
+          the local check fails when that file would bring one of them back, and warns when the file is the
+          project's own (in one of its folders: its key or Google Cloud project, not another client's).
 forget  — in a project without a Gemini CLI account, what Keyfit set for another project goes.
-local   — no .env file Gemini CLI may load sets a variable Keyfit removed (only the names are read). Google: the
+local   — no .env file Gemini CLI may load outside the project's folders sets a variable Keyfit removed (only the
+          names are read; the project's own .env gets a warning). Google: the
           home's sign-in method is Google's (or not chosen yet), it holds a Google sign-in, and that sign-in's email
           is the project's Google account. Key: the key is there and the home uses the API-key method. Only labels
           are read, never a token.
@@ -276,8 +278,32 @@ def reloaded(conn, env: dict, start: Path) -> list[tuple[Path, list[str]]]:
     return found
 
 
-def reloaded_problem(found: list[tuple[Path, list[str]]], path: Path) -> tuple[str, str]:
-    """(detail, fix) for .env files that bring back what Keyfit removed: the files and the names, never a value."""
+def projects_own(file: Path, env: dict) -> bool:
+    """Whether *file* lies in a folder of the session's project (KEYFIT_PROJECT): under one of its roots, or in a folder
+    that resolves to it (a worktree). Such a .env holds the project's own settings, not another client's."""
+    from ..registry import Registry
+    from ..resolve import GitError, resolve
+
+    name = env.get("KEYFIT_PROJECT")
+    if not name:
+        return False
+    here = canonical(file.parent)
+    try:
+        registry = Registry.load()
+        project = registry.projects().get(name)
+        if project is None:
+            return False
+        if any(here == root or root in here.parents for root in project.canonical_roots()):
+            return True
+        found = resolve(here, registry)  # git, only for a .env outside the roots that sets such a name
+    except (GitError, OSError, ValueError):
+        return False
+    return found.project is not None and found.project.name == name
+
+
+def reloaded_problem(found: list[tuple[Path, list[str]]], path: Path, own: bool = False) -> tuple[str, str]:
+    """(detail, fix) for .env files that bring back what Keyfit removed: the files and the names, never a value. *own*:
+    the project's own files, which get a warning."""
     files = "; ".join(f"{printable(tilde(file))} sets {', '.join(names)}" for file, names in found)
     every = sorted({name for _, listed in found for name in listed})
     where = printable(tilde(found[0][0])) if len(found) == 1 else "those files"
@@ -286,6 +312,8 @@ def reloaded_problem(found: list[tuple[Path, list[str]]], path: Path) -> tuple[s
         settings = tilde(folder(path) / "settings.json")
         fix += f', or add "advanced": {{"excludedEnvVars": {json.dumps(every)}}} to {settings}'
     it = "it" if len(every) == 1 else "them"
+    if own:
+        return f"{files}: Gemini CLI uses {it} instead of the project's Gemini CLI account", fix
     return f"{files}, which Gemini CLI would load although Keyfit removed {it} for the project's account", fix
 
 
@@ -399,8 +427,16 @@ class GeminiAdapter(Adapter):
             return fail(f"Gemini CLI folder {tilde(path)} does not exist",
                         f"keyfit add gemini --name {name} " + ("--key" if is_key(conn) else "--new"))
         found = reloaded(conn, env, Path.cwd())  # first: Gemini CLI's sign-in would load the file too
-        if found:
-            return fail(*reloaded_problem(found, path))
+        own = [item for item in found if projects_own(item[0], env)]
+        if len(own) < len(found):  # outside the project's folders: it can hold another account's key
+            return fail(*reloaded_problem([item for item in found if item not in own], path))
+
+        def ok(detail: str) -> Check:
+            if not own:
+                return Check(self.kind, "ok", label, detail, pending=True)
+            warning, fix = reloaded_problem(own, path, own=True)
+            return Check(self.kind, "warn", label, " · ".join(d for d in (detail, warning) if d), fix, pending=True)
+
         chosen, where = method(path, env, Path.cwd())
         wanted = API_KEY if is_key(conn) else GOOGLE
         if (chosen or wanted) != wanted or (is_key(conn) and chosen is None):
@@ -412,7 +448,7 @@ class GeminiAdapter(Adapter):
         if is_key(conn):
             if not env.get(KEY_VAR):
                 return fail(f"the API key ({secrets.describe(conn['key'])}) is missing", "keyfit add gemini --key")
-            return Check(self.kind, "ok", label, "", pending=True)
+            return ok("")
         account = conn.get("account")
         if not isinstance(account, str) or not EMAIL.fullmatch(account):
             return fail("the project has no Google account", "keyfit add google --email <the project's Google account>")
@@ -428,8 +464,7 @@ class GeminiAdapter(Adapter):
         if not same(login["email"], account):
             return fail(f"Gemini CLI is signed in as {printable(login['email'])}, the project's Google account is "
                         f"{account}", again)
-        return Check(self.kind, "ok", label, "Google sign-in" + ("" if is_default(path, env) else f" in {tilde(path)}"),
-                     pending=True)
+        return ok("Google sign-in" + ("" if is_default(path, env) else f" in {tilde(path)}"))
 
     def remote(self, conn, env: dict) -> Check:
         label = self.label(conn)

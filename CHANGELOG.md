@@ -528,10 +528,11 @@ From the third pre-launch review:
   loads one `.env` file (the nearest `.gemini/.env` or `.env` from its folder up, else the one in its
   own folder) for every variable that isn't set, so a `GEMINI_API_KEY`, `GOOGLE_CLOUD_PROJECT`,
   `GOOGLE_GENAI_USE_VERTEXAI` or `GOOGLE_GEMINI_BASE_URL` there came back after Keyfit removed it. Such
-  a file now fails the check, naming the file and the variables, never the values. Names listed in
-  Gemini CLI's `advanced.excludedEnvVars` setting don't count in a `.env` outside a `.gemini` folder,
-  as Gemini CLI skips them. Give Gemini CLI its Google Cloud project with `keyfit add gemini
-  --cloud-project` instead of a `.env`.
+  a file outside the project's folders (`~/.env`, a folder above, another project's) now fails the
+  check, naming the file and the variables, never the values; the project's own `.env` (in one of its
+  folders or worktrees, where a Gemini app keeps its key) gets a warning. Names listed in Gemini CLI's
+  `advanced.excludedEnvVars` setting don't count in a `.env` outside a `.gemini` folder, as Gemini CLI
+  skips them.
 - **Copilot CLI: no model provider from `providers.json` in a project.** Copilot CLI takes model
   providers from `COPILOT_PROVIDERS_CONFIG`, else from `~/.copilot/providers.json`, before the
   `COPILOT_PROVIDER_…` variables Keyfit removes, so your own provider and key served the project's
