@@ -143,13 +143,13 @@ If something seems off, run `keyfit doctor`. It checks the installation and prin
 
 ## How it works
 
-1. **Resolve.** The shim asks git for the folder's common git directory. That way the main checkout and every worktree of a registered repository resolve to the same project, wherever the worktrees live (Superset's included). Outside a registered repository, the nearest registered parent folder counts. If nothing matches, the real tool runs unchanged.
+1. **Resolve.** The shim asks git for the folder's common git directory. That way the main checkout and every worktree of a registered repository resolve to the same project, wherever the worktrees live (Superset's included). A submodule or a repository nested in a checkout belongs to the checkout around it, in worktrees too. Outside a registered repository, the nearest registered parent folder counts. If nothing matches, the real tool runs unchanged. If git can't answer inside a repository (after a macOS update broke the Command Line Tools, say), the tool doesn't start; `keyfit doctor` shows why.
 2. **Verify.** Keyfit builds the project's environment and checks each account you mapped. Fast local checks run on every launch: does the profile exist, has the sign-in expired, is the key well-formed. Then come the online checks: who does each service say you are? A successful online check is reused for 30 minutes. If any check fails, the tool does not start.
 3. **Inject.** The real tool starts with that environment: the project's credentials are set, and conflicting ones inherited from your shell are removed. MCP servers that belong to other projects are hidden for that session. Nothing is written into your repository or into the tools' config files.
 
 Along the way:
 
-- **Expired sign-ins are one keypress.** In a terminal, when the only problem is an expired or missing sign-in, Keyfit asks `Sign in now? [Y/n]`, runs the sign-in, checks again and starts the tool. Agents and scripts are never asked; they get the message and the fix.
+- **Expired sign-ins are one keypress.** In a terminal, when the only problem is an expired or missing sign-in, Keyfit asks `Sign in now? [Y/n]`, runs the sign-in, checks again and starts the tool. Agents, scripts and commands inside a session Keyfit started are never asked; they get the message and the fix.
 - **Sign-in commands always run**, with the project's environment, so they fix the right account: `aws sso login`, `gh auth …`, `codex login` and the like. A few that would change a login the project doesn't use are stopped, with the right command instead.
 - **Other accounts are refused.** Inside a project, `aws --profile <another profile>`, `vercel --scope <another team>` and similar options that point a tool at another account don't run. [docs/accounts.md][accounts] lists them per tool.
 - **Agent sessions stay on their project.** The `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` commands an agent runs stay on that session's project, even after a `cd` elsewhere.
@@ -162,7 +162,7 @@ Along the way:
 # The project
 keyfit init                        # register this repository; offers the accounts found on this Mac (--yes: ask nothing)
 keyfit status                      # check every account of this project now: always online, refreshes the cache (--offline: local only)
-keyfit doctor                      # check the installation: shims, PATH order, real tools, registry, Keychain
+keyfit doctor                      # check the installation: shims, PATH order, real tools, git, registry, Keychain
 keyfit which -v                    # which project this folder belongs to, why, and its accounts
 keyfit projects                    # all registered projects
 
@@ -234,7 +234,7 @@ Measured on a MacBook Pro with an Apple M4 (16 GB, macOS 26.6, Python 3.13.3), w
   - apps that don't start from your shell, such as IDE extensions and desktop apps
 
   To run any other command with the project's accounts: `keyfit run -- <command>`.
-- **Online checks are cached for 30 minutes.** If a key is revoked within that window, Keyfit notices when the cached result expires, or at once with `keyfit status`. A new sign-in, key, token, login or link for any account is checked again right away. When a service cannot be reached, a success from the last 24 hours is accepted with a warning; a wrong account never is.
+- **Online checks are cached for 30 minutes.** If a key is revoked within that window, Keyfit notices when the cached result expires, or at once with `keyfit status`, which also clears it. A new sign-in, key, token, login or link for any account is checked again right away. When a service cannot be reached, a success from the last 24 hours is accepted with a warning; a wrong account never is.
 - **No background sessions inside a project.** Claude Code runs its background sessions (`claude --bg`, agent view, `←` and `/background`) under one supervisor, and Codex its sessions on one shared server. Each keeps the environment of the start that launched it, for every folder. So Claude sessions in a project start with background sessions off, and `claude --bg`, `agents`, `attach`, `respawn` and `daemon run` are refused there and inside a session; `codex`, `codex resume` and `codex fork` run without the shared server, and `codex agents`, `queue`, `remote-control` and `app-server` are refused, in a project and inside a session. Outside every project they run as before.
 - **One account of each kind per project:** one AWS profile, one GitHub login, one Google account, and so on.
 - **Each account has limits of its own,** such as what is checked down to the person and which versions were verified. They are listed under each account in [docs/accounts.md][accounts].

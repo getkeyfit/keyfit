@@ -27,7 +27,7 @@ from .adapters.google import same
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
-from .resolve import resolve
+from .resolve import GitError, resolve
 
 TOOLS = ("claude", "codex", "opencode", "copilot", "gemini", "aws", "gh", "vercel", "supabase", "wrangler", "convex",
          "gcloud", "firebase")
@@ -1066,7 +1066,10 @@ def superset_folder(profile: str, folder: str, project: Project, registry: Regis
     except OSError:
         return None
     for path in (parent, *entries):
-        there = resolve(path, registry).project
+        try:
+            there = resolve(path, registry).project
+        except GitError:  # git cannot tell where that worktree belongs: bind only the folder you are in
+            return None
         if there is not None and there.name != project.name:
             return None
     return parent
@@ -1083,9 +1086,11 @@ def offer_fixes(failed: list, project: Project, env: dict, registry: Registry, t
     """In a terminal, when every failed check is fixed by a sign-in or by binding a folder of the project to its wrangler
     profile, ask (`Sign in now?`, then `Bind this folder now?`) and run them. What ran ("signed in", "bound …") when
     they all finished; False: one failed; None: nothing was offered or an answer was no. Never asked without a
-    terminal (agents, scripts, CI), so nothing waits for an answer that cannot come, and never for a fix in *tried*
-    (the fixes offered before, which are added to it): a fix that ran and did not help is only printed."""
-    if not failed or env.get("KEYFIT_DRY_RUN") == "1" or env.get("CI") or any(c.fix in tried for c in failed):
+    terminal (agents, scripts, CI) or inside a session Keyfit started (KEYFIT_PROJECT set: agents run commands in a
+    terminal too), so nothing waits for an answer that cannot come, and never for a fix in *tried* (the fixes offered
+    before, which are added to it): a fix that ran and did not help is only printed."""
+    if not failed or env.get("KEYFIT_DRY_RUN") == "1" or env.get("CI") or env.get("KEYFIT_PROJECT") or \
+            any(c.fix in tried for c in failed):
         return None
     if not (sys.stdin.isatty() and sys.stderr.isatty()):
         return None
@@ -1240,13 +1245,18 @@ def main(argv: list[str]) -> int:
             if failed:
                 _say([f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"])
                 return 1
-        if tool in AGENTS:
-            for check in (c for c in checks if c.status == "warn"):
-                _say([f"keyfit: {check.lines()[0].strip()}"])
+        # agents: every warning; every tool: a success trusted from the cache because the provider did not answer
+        for check in (c for c in checks if c.status == "warn" and (tool in AGENTS or c.transient)):
+            _say([f"keyfit: {check.lines()[0].strip()}"])
         seen = [var for check in checks if check.kind == tool for var in check.scrub]
         args = adjust_args(tool, project, args, run_env, Path.cwd(), registry.mcp_owners(), seen)
     except Refused as refusal:
         print(refusal, file=sys.stderr)
+        return 1
+    except GitError as err:  # inside a repository git cannot read, the folder may be a project's: nothing starts
+        print(f"keyfit: {tool} not started: {printable(err)}, so Keyfit cannot tell which project that folder "
+              f"belongs to.\n  Fix git (keyfit doctor shows how), or bypass once: KEYFIT_DISABLE=1 {tool} …",
+              file=sys.stderr)
         return 1
     except RegistryError as err:  # a hand edit: no project can be told apart, so nothing starts checked
         _say([f"keyfit: {tool} not started, {tilde(err.path)} has a mistake", f"  ✘ {err}", f"    → {err.fix}",

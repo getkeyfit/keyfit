@@ -541,8 +541,10 @@ class DoctorTests(Machine):
         lines = out.splitlines()
         self.assertEqual([line.split()[1] for line in lines[:-1]],
                          ["macOS", "python", "shims", "PATH", "claude", "codex", "opencode", "copilot", "gemini", "aws", "gh",
-                          "vercel", "supabase", "wrangler", "convex", "gcloud", "firebase", "registry", "keychain", "project"])
+                          "vercel", "supabase", "wrangler", "convex", "gcloud", "firebase", "git", "registry", "keychain",
+                          "project"])
         self.assertTrue(all(line.startswith("  ✔ ") for line in lines[:-1]), out)
+        self.assertIn("✔ git        /usr/bin/git   git version ", out)
         self.assertIn("first, before every real tool", out)
         self.assertIn(f"✔ gh         {self.bin / 'gh'}\n", out)
         self.assertIn(f"✔ vercel     {self.bin / 'vercel'}\n", out)

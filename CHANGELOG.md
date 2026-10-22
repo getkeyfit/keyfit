@@ -418,6 +418,28 @@ From the third pre-launch review:
   `FIREBASE_GOOGLE_URL` (where the firebase CLI posts the refresh token), the CLI's other
   `FIREBASE_…_URL` endpoints and `FIREBASE_CLIENT_ID`/`_SECRET` are removed, also for Keyfit's own
   renewal with `firebase projects:list`.
+- **A git that can't answer no longer makes a project folder look unregistered.** When git failed
+  (Command Line Tools broken by a macOS update, Xcode's licence not accepted, git missing or slow,
+  `dubious ownership`, a `.git` file naming a folder that is gone), a registered folder counted as
+  one outside every project: tools started with your shell's credentials, without checks and with
+  every MCP server, and `keyfit doctor` said `All good`. Inside a repository (a `.git` there or
+  above), tools now don't start and show git's message; folders without one run as before.
+  `keyfit doctor` has a `git` line. The lookup also ignores the `GIT_DIR`, `GIT_WORK_TREE`,
+  `GIT_COMMON_DIR`, `GIT_INDEX_FILE` and `GIT_CEILING_DIRECTORIES` a git hook exports: a tool a hook
+  ran in a worktree's subfolder resolved to no project.
+- **Submodules and nested repositories in a worktree belong to its project.** In a Superset worktree,
+  git's top folder is the submodule's and no registered folder sits above it. When a repository isn't
+  registered, Keyfit now resolves the checkout around it before trying registered parent folders.
+- **A failed check no longer leaves its cached success behind.** After `keyfit status` showed ✘ (a
+  profile that now signs in to another account, say), launches kept starting the tool on the success
+  cached up to 30 minutes before. Any other answer now removes it, and only successes are cached
+  (with the names of the shell keys OpenCode reported); warnings such as `account not confirmed`
+  were cached for 30 minutes too.
+- **A success trusted while a service can't be reached is shown for every tool.** `aws`, `gh`,
+  `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` started on one up to 24 hours
+  old without the `could not re-check now` warning.
+- **No `Sign in now?` inside a session Keyfit started** (`KEYFIT_PROJECT` set): agents run commands
+  in a terminal of their own, where an `aws` waited for an answer.
 
 ## [0.1.0] - 2026-10-12
 

@@ -2,6 +2,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -34,6 +35,8 @@ class Flaky(Adapter):
 OK = Check("flaky", "ok", "x", "account confirmed")
 DOWN = Check("flaky", "fail", "x", "did not answer (timed out)", "check the network", transient=True)
 WRONG = Check("flaky", "fail", "x", "belongs to another account", "log in again")
+NOT_CONFIRMED = Check("flaky", "warn", "x", "account not confirmed")
+SHELL_KEYS = Check("flaky", "warn", "x", "GROQ_API_KEY from your shell", scrub=("GROQ_API_KEY",))
 
 
 class ResilienceTests(unittest.TestCase):
@@ -41,10 +44,10 @@ class ResilienceTests(unittest.TestCase):
         os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()
         self.project = Project("demo", ["/tmp"], {"flaky": {"id": 1}})
 
-    def run_with(self, adapter):
+    def run_with(self, adapter, use_cache=False):
         ADAPTERS["flaky"] = adapter
         try:
-            return environment.verify(self.project, {}, kinds=("flaky",), use_cache=False)[0]
+            return environment.verify(self.project, {}, kinds=("flaky",), use_cache=use_cache)[0]
         finally:
             del ADAPTERS["flaky"]
 
@@ -58,6 +61,7 @@ class ResilienceTests(unittest.TestCase):
         check = self.run_with(Flaky([DOWN, DOWN]))
         self.assertEqual(check.status, "warn")
         self.assertIn("could not re-check now", check.detail)
+        self.assertTrue(check.transient)  # the shim prints it for every tool, not only the agents
 
     def test_offline_without_a_recent_success_fails(self):
         self.assertTrue(self.run_with(Flaky([DOWN, DOWN])).failed)
@@ -79,6 +83,42 @@ class ResilienceTests(unittest.TestCase):
         k = cache.key("demo", "flaky", {"id": 1}, "")
         cache.put(k, "ok", "account confirmed")
         self.assertIsNone(cache.get(k, now=time.time() + cache.STALE + 1, max_age=cache.STALE))
+
+    def test_offline_launch_trusts_a_success_for_a_day_only(self):
+        for hours, status in ((23, "warn"), (25, "fail")):
+            with self.subTest(hours=hours):
+                os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()
+                with mock.patch("keyfit.cache.time.time", return_value=time.time() - hours * 3600):
+                    self.run_with(Flaky([OK]))  # the success, *hours* ago
+                adapter = Flaky([DOWN, DOWN])
+                self.assertEqual(self.run_with(adapter, use_cache=True).status, status)
+                self.assertEqual(adapter.calls, 2)  # older than 30 minutes: asked again (and retried once)
+
+    def test_failure_forgets_the_cached_success(self):
+        self.run_with(Flaky([OK]))  # a launch, or keyfit status
+        self.assertTrue(self.run_with(Flaky([WRONG])).failed)  # keyfit status: now another account
+        adapter = Flaky([WRONG])
+        self.assertTrue(self.run_with(adapter, use_cache=True).failed)  # the next launch asks again
+        self.assertEqual(adapter.calls, 1)
+
+    def test_offline_after_a_failure_does_not_fall_back_to_the_success_before_it(self):
+        self.run_with(Flaky([OK]))
+        self.run_with(Flaky([WRONG]))
+        self.assertTrue(self.run_with(Flaky([DOWN, DOWN])).failed)
+
+    def test_only_successes_are_cached_and_a_warning_forgets_one(self):
+        self.run_with(Flaky([OK]))
+        self.assertEqual(self.run_with(Flaky([NOT_CONFIRMED])).status, "warn")
+        for _ in range(2):
+            adapter = Flaky([NOT_CONFIRMED])
+            self.assertEqual(self.run_with(adapter, use_cache=True).status, "warn")
+            self.assertEqual(adapter.calls, 1)  # not served from the cache: asked on every launch
+
+    def test_shell_key_names_are_still_cached(self):
+        self.run_with(Flaky([SHELL_KEYS]))  # OpenCode's sessions start without the keys it named
+        adapter = Flaky([])
+        check = self.run_with(adapter, use_cache=True)
+        self.assertEqual((check.status, check.scrub, adapter.calls), ("warn", ("GROQ_API_KEY",), 0))
 
 
 class ClaudeIdentityTests(unittest.TestCase):

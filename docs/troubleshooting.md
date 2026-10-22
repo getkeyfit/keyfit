@@ -60,7 +60,7 @@ If the `PATH` line fails:
 2. If it still fails, run `keyfit setup` again. The PATH files of earlier versions put the shims only right after the wrapper, which left them behind folders a login profile had put in front.
 3. Make sure Keyfit's line is the last line of your startup file.
 
-Superset workspaces are git worktrees of your repository, so they resolve to the same project wherever Superset keeps them. Run `keyfit which` in a workspace terminal to confirm. It shows `git common-dir of <workspace> → <your main checkout>`.
+Superset workspaces are git worktrees of your repository, so they resolve to the same project wherever Superset keeps them, and so do the submodules and repositories nested in them. Run `keyfit which` in a workspace terminal to confirm. It shows `git common-dir of <workspace> → <your main checkout>`.
 
 ## A check fails
 
@@ -73,7 +73,7 @@ keyfit: claude not started, acme-api needs attention
   (bypass once: KEYFIT_DISABLE=1 claude …)
 ```
 
-When you started the tool yourself in a terminal and the fix is only a sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `opencode auth login … --standalone`, `vercel login`, `wrangler auth create NAME`, `wrangler login`, `npx convex login --force`, `gcloud auth login EMAIL`, `gemini --prompt-interactive /quit`, `firebase login`, `firebase login:add`, `firebase login --reauth`), Keyfit asks `Sign in now? [Y/n]`: press Enter, sign in, and the tool starts once the checks pass. When the fix is `wrangler auth activate NAME FOLDER` for a folder of the project, or `firebase login:use EMAIL` for the folder you are in, it asks `Bind this folder now? [Y/n]` the same way (both questions, one after the other, when both are needed). Agents and scripts are never asked. Otherwise, run the command after `→`. Sign-in commands always go through, even while checks fail, and they run with the project's environment. That way they sign in the account the project needs. Then start the tool again; failed checks are never cached.
+When you started the tool yourself in a terminal and the fix is only a sign-in (`aws login`, `aws sso login`, `claude auth login`, `codex login`, `opencode auth login … --standalone`, `vercel login`, `wrangler auth create NAME`, `wrangler login`, `npx convex login --force`, `gcloud auth login EMAIL`, `gemini --prompt-interactive /quit`, `firebase login`, `firebase login:add`, `firebase login --reauth`), Keyfit asks `Sign in now? [Y/n]`: press Enter, sign in, and the tool starts once the checks pass. When the fix is `wrangler auth activate NAME FOLDER` for a folder of the project, or `firebase login:use EMAIL` for the folder you are in, it asks `Bind this folder now? [Y/n]` the same way (both questions, one after the other, when both are needed). Agents, scripts and commands inside a session Keyfit started (`KEYFIT_PROJECT` set) are never asked. Otherwise, run the command after `→`. Sign-in commands always go through, even while checks fail, and they run with the project's environment. That way they sign in the account the project needs. Then start the tool again; failed checks are never cached, and a failure clears the success cached before it.
 
 | Message | What to do |
 |---|---|
@@ -193,7 +193,7 @@ When you started the tool yourself in a terminal and the fix is only a sign-in (
 | `✘ github  octocta  no account [accounts.github.octocta]`, `✘ asw … unknown connection (a typo? …)` | a hand edit of `~/.config/keyfit/registry.toml` names an account that isn't there, or a connection Keyfit doesn't know. Fix the name, or map it again with `keyfit add …`. Only this project is affected |
 | `this folder belongs to acme-api (AWS profile acme-dev); refusing --profile other` | another project's profile was asked for inside this project. If the profile belongs to a machine-wide tool, list it under `[settings] shared_aws_profiles` in `~/.config/keyfit/registry.toml` |
 
-When a service doesn't answer but a check succeeded within the last 24 hours, the tool starts and Keyfit shows a warning, for example `workspace confirmed 3h 5m ago · could not re-check now (…)`. This fallback only covers network failures. A rejected key or a wrong account always fails.
+When a service doesn't answer but a check succeeded within the last 24 hours, the tool starts and Keyfit shows a warning (for every tool, `aws` and `gh` included), for example `workspace confirmed 3h 5m ago · could not re-check now (…)`. This fallback only covers network failures. A rejected key or a wrong account always fails.
 
 ## Results look stale
 
@@ -207,7 +207,7 @@ Successful online checks are reused for 30 minutes (see [the verification cache]
 - a new, removed or switched OpenCode sign-in in the project's database, and a new `…_API_KEY` or `…_TOKEN` variable in your shell (by name)
 - a connection changed with `keyfit add`
 
-Other changes are only noticed after the 30 minutes, for example a key revoked in the meantime. To check right now:
+Other changes are only noticed after the 30 minutes, for example a key revoked in the meantime. To check right now (a check that fails there also clears the cached result, so the next start checks online too):
 
 ```bash
 keyfit status        # always checks online and refreshes the cache
@@ -219,7 +219,7 @@ Deleting `~/.config/keyfit/cache/checks.json` is also safe; the next launch simp
 
 With the checks cached, a shim adds about 0.1 s, and about 0.2 s for `gh`, `claude`, `codex`, `opencode`, `copilot` and `gemini` in a project with a GitHub or Copilot CLI account (see [Speed](../README.md#speed)). If every start takes longer:
 
-- **A check goes online every time.** Only successful checks are cached. A check that fails, or that is accepted only from the last 24 hours because the service did not answer (`could not re-check now`), is tried online again at the next start, with one retry. Run `keyfit status` and fix what it shows.
+- **A check goes online every time.** Only successful checks are cached. A check that fails, ends in a warning (`account not confirmed`, say), or is accepted only from the last 24 hours because the service did not answer (`could not re-check now`), is tried online again at the next start, with one retry. Run `keyfit status` and fix what it shows.
 - **The cache can't be written.** Keyfit keeps it in `~/.config/keyfit/cache/checks.json`. If that folder isn't writable, every start checks online.
 - **gh answers slowly.** In a project with a GitHub or Copilot CLI account, every `gh`, `claude`, `codex`, `opencode`, `copilot` and `gemini` start runs `gh auth token`. Time it with `time gh auth token --hostname github.com --user <login> >/dev/null`; it should take about 0.1 s.
 
@@ -262,6 +262,7 @@ When Keyfit itself fails, it stops the tool instead of starting it unchecked.
 - **`keyfit needs Python 3.11 or newer`.** The `python3` that comes with macOS is 3.9. Install a newer one (`brew install python@3.13`, or `brew install pipx`, which brings one) and install Keyfit with it.
 - **`a project named 'api' already exists in ~/work/acme/api; ~/work/globex/api is another folder`.** `keyfit init` names a project after its folder, and folder names such as `api` or `web` repeat across clients. Give this repository a name of its own: `keyfit init --name globex-api`. If it really belongs to that project, with the same accounts, `keyfit init --name api` adds it as a second folder.
 - **`account 'pro' was codex_home ~/.codex; it changed for acme too`** (after `keyfit add … --name pro`). Projects that share an account name share its login, so giving the name another login changed it for them too. If that wasn't meant, record this project's login under a name of its own (`keyfit add codex --name …`), then map the other project's login again: `keyfit add codex --project acme`.
+- **`keyfit: claude not started: git failed in ~/code/acme (…), so Keyfit cannot tell which project that folder belongs to`.** The folder is inside a git repository (a `.git` exists there or above), and git gave no answer, so it might be a project's. `keyfit doctor` shows git's own message and the fix. After a macOS update, the Command Line Tools often need reinstalling (`xcode-select --install`); with Xcode, its licence may need accepting (`sudo xcodebuild -license accept`). `detected dubious ownership` means the folder belongs to another user. `not a git repository: …/.git/worktrees/…` means a worktree whose repository was moved or deleted: run `git worktree repair <folder>` in the repository, or remove the folder. Outside repositories, tools run unchanged as before.
 - **`keyfit: claude nested 6 levels deep through Keyfit — stopping to avoid a loop`.** Another wrapper on PATH calls the tool by name and leads back into Keyfit. Look at `type -a claude`.
 - **A Keychain prompt appears.** Keys stored through Keyfit are read with `/usr/bin/security`, which those items trust without asking. A `keychain:service/account` reference to an item another app created may make macOS ask for permission. Allow it, or store the key through Keyfit with `keyfit secret set NAME`.
 
