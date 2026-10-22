@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -69,6 +70,44 @@ class ReleasingTests(unittest.TestCase):
                  "git tag", "gh release create", "step 7 above")
         where = [first.index(step) for step in steps]
         self.assertEqual(where, sorted(where))
+
+
+@unittest.skipUnless((ROOT / ".github" / "workflows").is_dir(), "the workflows are not in the sdist")
+class WorkflowTests(unittest.TestCase):
+    def workflow(self, name: str) -> str:
+        return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+
+    def assertBefore(self, text: str, first: str, then: str):
+        self.assertIn(first, text)
+        self.assertIn(then, text)
+        self.assertLess(text.index(first), text.index(then), f"{first!r} must come before {then!r}")
+
+    def test_installed_wheel_tests_never_skip(self):
+        # tests/test_install.py skips itself without setuptools 77+, which setup-python's 3.12+ do not have
+        for name in ("ci.yml", "release.yaml"):
+            with self.subTest(name):
+                text = self.workflow(name)
+                self.assertBefore(text, 'pip install "setuptools>=77"', "sys.exit(test_install.CANNOT_BUILD or None)")
+                self.assertBefore(text, "sys.exit(test_install.CANNOT_BUILD or None)", "unittest discover -s tests")
+
+    def test_release_runs_the_built_wheel_before_publishing(self):
+        text = self.workflow("release.yaml")
+        self.assertBefore(text, "python -m build", "pip install --no-index")
+        step = text[text.index("python -m build"):text.index("actions/upload-artifact")]
+        for command in ('pip install --no-index "$PWD"/dist/*.whl', '"$venv/bin/keyfit" --version',
+                        'HOME="$(mktemp -d)" KEYFIT_CONFIG_DIR="$(mktemp -d)" "$venv/bin/keyfit" setup'):
+            self.assertIn(command, step)
+        self.assertIn("needs: build", text)  # nothing publishes when the wheel does not run
+
+    def test_ci_tests_every_python_the_classifiers_list(self):
+        matrix = re.search(r"python-version: \[([^]]*)\]", self.workflow("ci.yml")).group(1)
+        tested = re.findall(r'"(3\.\d+)"', matrix)
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        listed = [c.rsplit(" :: ", 1)[1] for c in project["classifiers"]
+                  if re.fullmatch(r"Programming Language :: Python :: 3\.\d+", c)]
+        self.assertEqual(tested, listed)
+        self.assertEqual(project["requires-python"], f">={tested[0]}")
+        self.assertIn("3.14", tested)
 
 if __name__ == "__main__":
     unittest.main()

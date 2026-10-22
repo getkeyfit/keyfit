@@ -6,7 +6,8 @@
 3. **Check.** `python3 -m unittest discover -s tests` passes and CI is green on `main`.
 4. **Tag.** Commit, then `git tag -a vX.Y.Z -m "Keyfit X.Y.Z"` and `git push origin main vX.Y.Z`.
 5. **PyPI** happens by itself: pushing the tag runs `.github/workflows/release.yaml`, which tests,
-   checks the tag against `keyfit.__version__`, builds the sdist and wheel, and publishes them with
+   checks the tag against `keyfit.__version__`, builds the sdist and wheel, installs the wheel into a
+   fresh virtualenv to run its `keyfit --version` and `keyfit setup`, and publishes them with
    PyPI trusted publishing (no token on any laptop or in GitHub secrets). One-time setup on
    pypi.org → Account → Publishing → "Add a new pending publisher": project `keyfit`, owner
    `FlamurMaliqi`, repository `keyfit`, workflow `release.yaml` (the exact file name: PyPI matches
