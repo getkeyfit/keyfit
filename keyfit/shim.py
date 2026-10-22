@@ -618,7 +618,8 @@ def supabase_login_check(project: Project, args: list[str]) -> None:
 def wrangler_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
     """Refuse what would leave the project's wrangler profile or Cloudflare account (like `aws --profile`): another
     --profile, a --cwd or --config whose folder is bound to another profile or whose config names another
-    account_id, and a --cwd folder or --env-file whose .env sets wrangler's API host or sign-in. The folder's own
+    account_id, an entry file (`wrangler deploy ../other/src/index.ts`) from whose folder wrangler would read such a
+    config, and a --cwd folder or --env-file whose .env sets wrangler's API host or sign-in. The folder's own
     binding, config and .env files were checked already."""
     conn = project.connections["cloudflare"]
     title = conn.get("account_name") or conn["account_id"]
@@ -639,45 +640,68 @@ def wrangler_args(project: Project, args: list[str], env: dict, cwd: Path) -> li
         elif name == "--config":
             configs.append(value)
     wrangler_endpoints(project, args, cwd)
-    if moved is None and not configs:
+    # wrangler moves to --cwd first (process.chdir: symlinks resolved), then reads --config, else the config found from
+    # an entry file's folder
+    base = os.path.realpath(os.path.join(cwd, moved)) if moved else str(cwd)
+    entries = [] if configs else cloudflare.entries(args, base)
+    if moved is None and not configs and not entries:
         return args
-    base = os.path.join(cwd, moved) if moved else str(cwd)  # wrangler moves to --cwd first, then reads --config
-    for config in configs or [None]:
+    given = [(config, None) for config in configs] or [(None, entry) for entry in entries] or [(None, None)]
+    for config, entry in given:
         path = Path(os.path.abspath(os.path.join(base, config))) if config else None
-        problem = cloudflare.mismatch(conn, path.parent if path else base, env, asked=asked, config=path)
+        problem = cloudflare.mismatch(conn, path.parent if path else base, env, asked=asked, config=path, entry=entry)
         if problem:
-            shown = " ".join(part for part in (moved and f"--cwd {moved}", config and f"--config {config}") if part)
-            raise Refused(f"{refuse} {printable(shown)}: {problem[0]}.\n  → {problem[1]}{bypass}")
+            shown = " ".join(part for part in (moved and f"--cwd {moved}", config and f"--config {config}", entry)
+                             if part)
+            there = path.parent if path else os.path.join(base, os.path.dirname(entry)) if entry else base
+            raise Refused(f"{refuse} {printable(shown)}: {problem[0]}.\n  → {elsewhere(project, there) or problem[1]}"
+                          f"{bypass}")
     return args
 
 
+def elsewhere(project: Project, folder) -> str | None:
+    """The advice for a refusal about *folder* when it is not one of the project's: never to bind it or change its
+    config, which would move another project (or a folder outside every project) to this project's account."""
+    there = resolve(folder, Registry.load()).project
+    if there is not None and there.name == project.name:
+        return None
+    whose = f"{tilde(canonical(folder))} belongs to {there.name}" if there else \
+        f"{tilde(canonical(folder))} is outside every project"
+    return f"run wrangler on {project.name}'s own folders and configs ({printable(whose)})"
+
+
 def wrangler_endpoints(project: Project, args: list[str], cwd) -> None:
-    """Refuse a wrangler that would load its API host or sign-in endpoints from .env files, which beat nothing Keyfit
-    removed: those of the folder it runs in (also after --cwd), or the files named with --env-file."""
+    """Refuse a wrangler that would load its API host, sign-in endpoints or config folder from .env files, which beat
+    nothing Keyfit removed: those of the folder it runs in (also after --cwd, symlinks resolved), with --env NAME
+    also .env.NAME and .env.NAME.local, or the files named with --env-file."""
     given = cloudflare.options(args)
     moved = [value for name, value in given if name == "--cwd" and value]
     named = [value for name, value in given if name == "--env-file" and value]
-    found = cloudflare.endpoints_set(os.path.join(cwd, *moved[-1:]), named)
+    envs = [value for name, value in given if name == "--env" and value]
+    folder = os.path.realpath(os.path.join(cwd, moved[-1])) if moved else str(cwd)
+    found = cloudflare.endpoints_set(folder, named, envs)
     if found:
         detail, fix = cloudflare.endpoints_problem(found)
         raise Refused(f"keyfit: this folder belongs to {project.name}; refusing wrangler: {detail}.\n  → {fix}\n"
                       f"  Bypass once: KEYFIT_DISABLE=1 wrangler …")
 
 
-def wrangler_login_check(project: Project, args: list[str], registry: Registry, env: dict) -> None:
+def wrangler_login_check(project: Project | None, args: list[str], registry: Registry, env: dict) -> None:
     """wrangler's sign-in and binding commands run without checks (they are how a failed check gets fixed), except
     those that would move a registered folder off its project's profile: `login`/`logout` (wrangler's default login
     only) in a project with a named profile, `auth activate`/`deactivate` of a folder whose project uses another
-    profile, `auth create` of another project's profile and `auth delete` of any project's (it unbinds its folders).
-    In a project with a Cloudflare account, none runs where a .env file would pick wrangler's API host or sign-in."""
+    profile or that holds a project's folder (a root or a worktree) it would move off its profile, `auth create` of
+    another project's profile and `auth delete` of any project's (it unbinds its folders). Outside every project
+    (*project* None) only the `auth activate`, `deactivate` and `delete` rules apply. In a project with a Cloudflare
+    account, none runs where a .env file would pick wrangler's API host or sign-in."""
     words = cloudflare.words(args)
-    conn = project.connections.get("cloudflare")
+    conn = project.connections.get("cloudflare") if project else None
     own = conn.get("profile") if isinstance(conn, dict) else None
     bypass = "\n  Bypass once: KEYFIT_DISABLE=1 wrangler …"
     if isinstance(conn, dict):  # a sign-in runs without checks: never with the folder's endpoints
         wrangler_endpoints(project, args, os.getcwd())
     if words[:1] in (["login"], ["logout"]):
-        if own and own != cloudflare.DEFAULT:
+        if project and own and own != cloudflare.DEFAULT:
             raise Refused(f"keyfit: this folder belongs to {project.name}, which uses wrangler profile {own}; "
                           f"`wrangler {words[0]}` would change only wrangler's default login, which {project.name} does "
                           f"not use.\n  Sign in again as {own}: wrangler auth create {own}{bypass}")
@@ -691,7 +715,7 @@ def wrangler_login_check(project: Project, args: list[str], registry: Registry, 
             users.setdefault(theirs["profile"], []).append(other.name)
     action, rest = words[1], words[2:]
     name = rest[0] if rest else None
-    if action == "create" and name and name != own and users.get(name):  # a profile it shares stays its own
+    if project and action == "create" and name and name != own and users.get(name):  # a shared one stays its own
         others = ", ".join(p for p in users[name] if p != project.name)
         raise Refused(f"keyfit: this folder belongs to {project.name}; refusing `wrangler auth create {printable(name)}`: "
                       f"that profile is the sign-in of {others}.{bypass}")
@@ -702,17 +726,52 @@ def wrangler_login_check(project: Project, args: list[str], registry: Registry, 
         return
     target = (rest[1] if len(rest) > 1 else None) if action == "activate" else name
     moved = [value for option, value in cloudflare.options(args) if option == "--cwd" and value]
-    folder = os.path.abspath(os.path.join(os.getcwd(), *moved[-1:], target or "."))
+    base = os.path.realpath(os.path.join(os.getcwd(), moved[-1])) if moved else os.getcwd()  # wrangler's process.cwd()
+    folder = os.path.abspath(os.path.join(base, target or "."))  # path.resolve, as wrangler stores it
     owner = resolve(folder, registry).project
     theirs = owner.connections.get("cloudflare") if owner else None
-    if not isinstance(theirs, dict) or not isinstance(theirs.get("profile"), str):
-        return
-    if action == "activate" and name and name != theirs["profile"]:
-        raise Refused(f"keyfit: refusing `wrangler auth activate {printable(name)}` for {tilde(folder)}: that folder "
-                      f"belongs to {owner.name}, which uses wrangler profile {theirs['profile']}.{bypass}")
-    if action == "deactivate" and cloudflare.bindings(env).get(folder) == theirs["profile"]:
-        raise Refused(f"keyfit: refusing `wrangler auth deactivate` for {tilde(folder)}: {owner.name} uses wrangler "
-                      f"profile {theirs['profile']} there.{bypass}")
+    if isinstance(theirs, dict) and isinstance(theirs.get("profile"), str):
+        if action == "activate" and name and name != theirs["profile"]:
+            raise Refused(f"keyfit: refusing `wrangler auth activate {printable(name)}` for {tilde(folder)}: that "
+                          f"folder belongs to {owner.name}, which uses wrangler profile {theirs['profile']}.{bypass}")
+        if action == "deactivate" and cloudflare.bindings(env).get(folder) == theirs["profile"]:
+            raise Refused(f"keyfit: refusing `wrangler auth deactivate` for {tilde(folder)}: {owner.name} uses "
+                          f"wrangler profile {theirs['profile']} there.{bypass}")
+    if action == "activate" and not name:
+        return  # wrangler stops: no profile named
+    table = cloudflare.bindings(env)  # a folder that holds a project's folders: ~/code, /, ~/.superset/worktrees/<repo>
+    after = {d: p for d, p in table.items() if d != folder}
+    if action == "activate":
+        after[folder] = name
+    for other in registry.projects().values():
+        theirs = other.connections.get("cloudflare")
+        if not isinstance(theirs, dict) or not isinstance(theirs.get("profile"), str):
+            continue
+        for place in project_folders(other):
+            if cloudflare.bound(place, table)[0] == theirs["profile"] != cloudflare.bound(place, after)[0]:
+                shown = f"`wrangler auth {action}{f' {printable(name)}' if action == 'activate' else ''}`"
+                raise Refused(f"keyfit: refusing {shown} for {printable(tilde(folder))}: it holds "
+                              f"{printable(tilde(place))}, where {other.name} uses wrangler profile "
+                              f"{theirs['profile']}.{bypass}")
+
+
+def project_folders(project: Project) -> list[str]:
+    """The project's folders as wrangler sees them when it runs there (symlinks resolved): its roots and the same
+    folder in each linked worktree of their repositories (Superset's under ~/.superset/worktrees too)."""
+    import subprocess
+
+    found = [str(root) for root in project.canonical_roots()]
+    for root in list(found):
+        try:
+            out = subprocess.run(["git", "-C", root, "worktree", "list", "--porcelain"], capture_output=True,
+                                 text=True, timeout=10, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        trees = [str(canonical(line[9:])) for line in out.stdout.splitlines() if line.startswith("worktree ")]
+        if trees and (root == trees[0] or root.startswith(trees[0].rstrip(os.sep) + os.sep)):  # the main one first
+            inside = os.path.relpath(root, trees[0])
+            found += [os.path.normpath(os.path.join(tree, inside)) for tree in trees[1:]]
+    return list(dict.fromkeys(found))
 
 
 def convex_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
@@ -1017,10 +1076,12 @@ def sign_in_command(fix: str) -> tuple[dict, list[str]] | None:
     return None
 
 
-def binding_command(check, project: Project, registry: Registry, env: dict) -> tuple[str, str] | None:
+def binding_command(check, project: Project, registry: Registry, env: dict,
+                    here: str | None = None) -> tuple[str, str] | None:
     """(profile, folder) when the check's fix is exactly `wrangler auth activate NAME FOLDER` for the project's own
     wrangler profile and a folder Keyfit may bind: one of this project's (never another project's, nor a folder outside
-    every project), not the home folder or a folder above it, and one whose binding fixes the folder you are in."""
+    every project), not the home folder or a folder above it, and one whose binding fixes the folder you are in
+    (*here*, else the current one)."""
     import shlex
 
     conn = project.connections.get("cloudflare")
@@ -1033,20 +1094,20 @@ def binding_command(check, project: Project, registry: Registry, env: dict) -> t
     if words[:3] != ["wrangler", "auth", "activate"] or len(words) != 5 or words[3] != conn.get("profile"):
         return None
     profile, folder = words[3], os.path.expanduser(words[4])
-    if profile == cloudflare.DEFAULT or not os.path.isabs(folder) or not bindable(profile, folder, env):
+    if profile == cloudflare.DEFAULT or not os.path.isabs(folder) or not bindable(profile, folder, env, here):
         return None
     there = resolve(folder, registry).project
     return (profile, folder) if there is not None and there.name == project.name else None
 
 
-def bindable(profile: str, folder: str, env: dict) -> bool:
+def bindable(profile: str, folder: str, env: dict, here: str | None = None) -> bool:
     """True when *folder* is a folder, not the home folder or one above it (everything under it would follow), and
-    binding it makes wrangler use *profile* in the folder you are in."""
+    binding it makes wrangler use *profile* in the folder you are in (*here*, else the current one)."""
     home = canonical(env.get("HOME") or Path.home())
     target = canonical(folder)
     if not target.is_dir() or target == home or target in home.parents:
         return False
-    return cloudflare.bound(os.getcwd(), {**cloudflare.bindings(env), folder: profile})[0] == profile
+    return cloudflare.bound(here or os.getcwd(), {**cloudflare.bindings(env), folder: profile})[0] == profile
 
 
 def superset_folder(profile: str, folder: str, project: Project, registry: Registry, env: dict) -> str | None:
@@ -1188,6 +1249,8 @@ def main(argv: list[str]) -> int:
         if project is None:  # not a registered project: exactly as before Keyfit
             if tool == "codex":
                 args = codex_private(args, env)
+            if tool == "wrangler" and is_login_command(tool, args):  # except binding a project's folder elsewhere
+                wrangler_login_check(None, args, registry, env)
             return start(real, tool, opencode_private(args, env) if tool == "opencode" else args, env, env)
         if tool == "gcloud":  # before sign-in commands too: they write into configurations
             gcloud_guard(project, args, registry, env)

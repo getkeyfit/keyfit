@@ -1138,6 +1138,155 @@ class ShimTests(CloudflareCase):
         self.assertNotIn("inherited", self.stderr)
 
 
+    # Configs and binding commands Keyfit did not check (KEY-74) ------------------------------------------------
+
+    def other_worker(self) -> Path:
+        """A Worker outside every project whose config names another account: ../other/src/index.ts from client."""
+        other = self.tmp / "other"
+        (other / "src").mkdir(parents=True, exist_ok=True)
+        (other / "src" / "index.ts").write_text("export default {}\n")
+        (other / "wrangler.toml").write_text(f'account_id = "{GLOBEX_ID}"\n')
+        return other
+
+    def test_an_entry_file_whose_folder_has_another_config_is_refused(self):
+        """`wrangler deploy ../other/src/index.ts` reads ../other/wrangler.toml, whose account_id beats the pinned
+        CLOUDFLARE_ACCOUNT_ID; so do versions upload, dev and preview, and --script."""
+        other = self.other_worker()
+        for args in (["deploy", "../other/src/index.ts"], ["versions", "upload", "../other/src/index.ts"],
+                     ["dev", "../other/src/index.ts"], ["preview", "../other/src/index.ts"],
+                     ["deploy", "--script", "../other/src/index.ts"], ["deploy", "--path=../other/src/index.ts"],
+                     ["deploy", "--name", "x", "../other/src/index.ts"],  # --name's value is taken for one too
+                     ["deploy", "--", "../other/src/index.ts"], ["d1", "list", "--script", "../other/src/index.ts"]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"refusing ../other/src/index.ts: {other / 'wrangler.toml'} sets account_id {GLOBEX_ID}, "
+                          f"project expects Acme ({ACME_ID}).\n  → run wrangler on client's own folders and configs "
+                          f"({other / 'src'} is outside every project)", self.stderr, args)
+        (other / "public").mkdir()
+        (self.repos["client"] / "src").mkdir()
+        for args in (["deploy", "src/index.ts"], ["deploy", "../other/public"],  # a folder: static assets
+                     ["versions", "upload", "../other/public"],
+                     ["deploy", "-c", "wrangler.toml", "../other/src/index.ts"],
+                     ["d1", "list", "../other/src/index.ts"]):  # the config, not the entry file, decides
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual(argv, ["wrangler", *args], self.stderr)
+
+    def test_cwd_through_a_symlink_is_resolved_like_wrangler(self):
+        """wrangler moves to --cwd with process.chdir, so it reads the binding and the config of the folder a symlink
+        points at; the advice never binds another project's folder."""
+        client, mine = self.repos["client"], self.repos["mine"]
+        (client / "link").symlink_to(mine)
+        for args, shown in ((["--cwd", "link", "deploy"], "--cwd link"),
+                            (["--cwd", "../mine", "deploy"], "--cwd ../mine")):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"refusing {shown}: {mine} uses wrangler profile globex (bound at {mine}), project expects "
+                          f"acme.\n  → run wrangler on client's own folders and configs ({mine} belongs to mine)\n",
+                          self.stderr)
+        (mine / ".env").write_text("WRANGLER_TOKEN_URL=https://evil.example/token\n")
+        (client / "up").symlink_to(mine / "src", target_is_directory=True)
+        (mine / "src").mkdir()
+        code, argv, _ = self.run_shim("--cwd", "up/..", "deploy")  # client/up/.. is mine, not client
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn(f"refusing wrangler: {mine / '.env'} sets WRANGLER_TOKEN_URL", self.stderr)
+        (mine / ".env").unlink()
+        code, argv, _ = self.run_shim("--cwd", "up/..", "auth", "activate", "acme")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn(f"refusing `wrangler auth activate acme` for {mine}: that folder belongs to mine", self.stderr)
+
+    def test_binding_commands_outside_every_project_are_checked_too(self):
+        client = self.repos["client"]
+        rel = os.path.relpath(client, self.outside)
+        activate = f"refusing `wrangler auth activate globex` for {client}: that folder belongs to client"
+        for args, shown in ((["auth", "activate", "globex", str(client)], activate),
+                            (["auth", "deactivate", str(client)], f"refusing `wrangler auth deactivate` for {client}: "
+                                                                  f"client uses wrangler profile acme there"),
+                            (["auth", "delete", "acme"],
+                             "refusing `wrangler auth delete acme`: client uses that profile"),
+                            (["--cwd", rel, "auth", "activate", "globex"], activate)):
+            code, argv, _ = self.run_shim(*args, cwd=self.outside)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(shown, self.stderr, args)
+        for args in (["auth", "activate", "acme", str(client)], ["auth", "create", "acme"], ["auth", "list"], ["login"],
+                     ["auth", "activate", "globex"], ["deploy"]):
+            code, argv, env = self.run_shim(*args, cwd=self.outside, CLOUDFLARE_API_TOKEN="yours")
+            self.assertEqual(argv, ["wrangler", *args], self.stderr)
+            self.assertEqual(env["CLOUDFLARE_API_TOKEN"], "yours")  # outside every project: unchanged
+        self.assertEqual(self.wrangler.calls, [])
+
+    def test_a_folder_that_holds_a_projects_folder_is_checked(self):
+        """`..`, ~/code or / hold projects' folders: binding them to another profile, or unbinding them, moves every
+        folder that uses their binding (a folder bound itself keeps its own: the longest binding wins)."""
+        client, tmp = self.repos["client"], self.tmp
+        self.bind({str(tmp): "acme", str(self.repos["mine"]): "globex"})  # client is acme through the folder above
+        for args, shown in ((["auth", "activate", "globex", ".."], "`wrangler auth activate globex`"),
+                            (["auth", "deactivate", ".."], "`wrangler auth deactivate`"),
+                            (["--cwd", "..", "auth", "activate", "globex"], "`wrangler auth activate globex`")):
+            for cwd in (client, self.outside):
+                code, argv, _ = self.run_shim(*args, cwd=cwd)
+                self.assertEqual((code, argv), (1, None), (args, cwd))
+                self.assertIn(f"refusing {shown} for {tmp}: it holds {client}, where client uses wrangler profile "
+                              f"acme.", self.stderr)
+        code, argv, _ = self.run_shim("auth", "activate", "acme", "..")  # the profile it has
+        self.assertEqual(argv, ["wrangler", "auth", "activate", "acme", ".."], self.stderr)
+        self.bind({str(client): "acme", str(self.repos["mine"]): "globex"})
+        code, argv, _ = self.run_shim("auth", "activate", "globex", "..")  # client and mine are bound themselves
+        self.assertEqual(argv, ["wrangler", "auth", "activate", "globex", ".."], self.stderr)
+        reg = Registry.load(self.config / "registry.toml")
+        reg.set_account("cloudflare", "own",
+                        {"profile": "default", "account_id": INITECH_ID, "account_name": "Initech"})
+        reg.set_connection("plain", "cloudflare", "own")  # on wrangler's default login: no binding of its own
+        reg.save()
+        code, argv, _ = self.run_shim("auth", "activate", "globex", "..")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn(f"it holds {self.repos['plain']}, where plain uses wrangler profile default.", self.stderr)
+
+    def test_the_folder_that_holds_superset_worktrees_is_checked(self):
+        """Binding ~/.superset/worktrees/<repo> covers every worktree of the repository (Bind … now? offers it)."""
+        workspace = self.superset_worktree("client", "ws1")
+        holder = workspace.parent
+        self.bind({str(holder): "acme", str(self.repos["client"]): "acme", str(self.repos["mine"]): "globex"})
+        for args in (["auth", "activate", "globex", str(holder)], ["auth", "deactivate", str(holder)]):
+            for cwd in (self.repos["client"], self.outside, workspace):
+                code, argv, _ = self.run_shim(*args, cwd=cwd)
+                self.assertEqual((code, argv), (1, None), (args, cwd))
+                self.assertIn(f"for ~/.superset/worktrees/client: it holds ~/.superset/worktrees/client/ws1, where "
+                              f"client uses wrangler profile acme.", self.stderr)
+        code, argv, _ = self.run_shim("auth", "activate", "acme", str(holder), cwd=self.outside)
+        self.assertEqual(argv, ["wrangler", "auth", "activate", "acme", str(holder)], self.stderr)
+
+    def test_env_and_config_values_are_read_like_wrangler(self):
+        """`--env NAME` loads .env.NAME as path.resolve reads it (`--env /../x` loads x); `--config -0x.toml` names a
+        file, as yargs reads options declared with requiresArg."""
+        client = self.repos["client"]
+        (client / "deploy-settings.txt").write_text("WRANGLER_TOKEN_URL=https://evil.example/token\n")
+        for args in (["deploy", "--env", "/../deploy-settings.txt"], ["deploy", "-e=/../deploy-settings.txt"],
+                     ["-e", "/../deploy-settings.txt", "auth", "create", "acme"]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"refusing wrangler: {client / 'deploy-settings.txt'} sets WRANGLER_TOKEN_URL", self.stderr)
+        (client / "deploy-settings.txt").unlink()
+        (client / "-0x.toml").write_text(f'account_id = "{GLOBEX_ID}"\n')
+        for args in (["deploy", "--config", "-0x.toml"], ["deploy", "-c", "-0x.toml"]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"refusing --config -0x.toml: {client / '-0x.toml'} sets account_id {GLOBEX_ID}", self.stderr)
+        (client / "w.yaml").write_text(f'account_id = "{GLOBEX_ID}"\n')
+        code, argv, _ = self.run_shim("deploy", "--config", "w.yaml")  # wrangler reads no settings from it
+        self.assertEqual(argv, ["wrangler", "deploy", "--config", "w.yaml"], self.stderr)
+
+    def test_a_dotenv_that_moves_wranglers_config_folder_stops_its_sign_ins(self):
+        """With XDG_CONFIG_HOME from the folder's .env, `wrangler auth create` (Sign in now?) would write the new
+        sign-in where Keyfit does not look."""
+        client = self.repos["client"]
+        (client / ".env").write_text("XDG_CONFIG_HOME=./.config\n")
+        for args in (["auth", "create", "acme"], ["deploy"]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"{client / '.env'} sets XDG_CONFIG_HOME, which would decide where wrangler keeps its "
+                          f"profiles", self.stderr)
+        self.assertEqual(self.wrangler.calls, [])
+
 class AddCloudflareTests(CloudflareCase):
     def setUp(self):
         super().setUp()
@@ -1194,6 +1343,36 @@ class AddCloudflareTests(CloudflareCase):
         call = self.wrangler.calls[-1]  # the same runner as the shim's Bind this folder now?
         self.assertEqual(call["argv"], ["auth", "activate", "acme", str(client)])
         self.assertNotEqual(call["cwd"], str(client))
+
+    def test_run_it_now_binds_the_project_not_the_checkout_above_it(self):
+        """A project registered at a subfolder of a repository (~/mono/apps/web), whose checkout holds another
+        project: the fix and `Run it now?` bind the project's own folder, never the checkout's top (KEY-74)."""
+        mono = self.tmp / "mono"
+        web, api = mono / "apps" / "web", mono / "apps" / "api"
+        for folder in (web, api):
+            folder.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=mono, check=True)
+        reg = Registry.load(self.config / "registry.toml")
+        reg.add_project("web", web)
+        reg.add_project("api", api)
+        reg.set_account("cloudflare", "globex", {"profile": "globex", "account_id": GLOBEX_ID, "account_name": "Globex"})
+        reg.set_connection("api", "cloudflare", "globex")
+        reg.save()
+        self.bind({})
+        os.chdir(web)
+        with mock.patch.object(cli, "_ask", return_value="y"), mock.patch.object(sys, "stdin", Terminal("")), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(main(["add", "cloudflare", "--profile", "acme"]), 0)
+        self.assertIn(f"  next: {web} is not bound to wrangler profile acme (wrangler would use its default login)\n"
+                      f"  → wrangler auth activate acme {web}\n  bound {web} to wrangler profile acme\n",
+                      out.getvalue())
+        self.assertEqual(self.bindings(), {str(web): "acme"})
+        self.bind({})
+        os.chdir(self.outside)  # --project from elsewhere: the project's root, which binding fixes
+        with mock.patch.object(cli, "_ask", return_value="y"), mock.patch.object(sys, "stdin", Terminal("")), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(main(["add", "cloudflare", "--profile", "acme", "--project", "web"]), 0)
+        self.assertEqual(self.bindings(), {str(web): "acme"})
 
     def test_unknown_or_signed_out_profile_and_no_profiles(self):
         code, out, err = self.add("--profile", "nope")

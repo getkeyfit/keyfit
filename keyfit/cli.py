@@ -1236,8 +1236,6 @@ def _cloudflare_account(accounts: dict, wanted: str | None, profile: str, folder
 def cmd_add_cloudflare(args) -> int:
     """Record which wrangler profile (a sign-in wrangler keeps) and Cloudflare account a project uses. Keyfit keeps no
     token: the folder's binding picks wrangler's sign-in, Keyfit checks it and pins the account."""
-    import shlex
-
     reg = Registry.load(args.registry)
     project = _project_from_args(reg, args)
     if project is None:
@@ -1300,15 +1298,25 @@ def cmd_add_cloudflare(args) -> int:
     if problem is None:
         return 0
     detail, fix = problem
+    from .shim import binding_command
+
+    # the binding the shim would offer: the git checkout's top when it is the project's, else the project's root
+    bind = None
+    if fix.startswith("wrangler auth activate "):
+        root = resolve(folder, reg).root
+        for target in (fix, f"wrangler auth activate {profile} {cloudflare_adapter.shell_path(root)}" if root else ""):
+            bind = binding_command(Check("cloudflare", "fail", "", detail, target), reg.get(project.name), reg, env,
+                                   folder)
+            if bind:
+                fix = target
+                break
     print(f"  next: {detail}\n  → {fix}")
-    words = shlex.split(fix)
-    if words[:3] == ["wrangler", "auth", "activate"] and len(words) == 5 and sys.stdin.isatty() and _yes("Run it now?"):
-        target = os.path.expanduser(words[4])
-        reason = ADAPTERS["cloudflare"].activate(binary, words[3], target, env)
+    if bind and sys.stdin.isatty() and _yes("Run it now?"):
+        reason = ADAPTERS["cloudflare"].activate(binary, bind[0], bind[1], env)
         if reason:
             print(f"wrangler auth activate did not finish ({reason}); run it yourself: {fix}", file=sys.stderr)
             return 1
-        print(f"  bound {tilde(target)} to wrangler profile {words[3]}")
+        print(f"  bound {tilde(bind[1])} to wrangler profile {bind[0]}")
     return 0
 
 
