@@ -344,10 +344,10 @@ class AdapterTests(CloudflareCase):
         self.assertEqual(self.check(folder=self.tmp).fix, "run wrangler inside the project's folder")
 
     def test_paths_with_spaces_are_quoted_for_the_shell(self):
-        spaced = self.tmp / "GTM Engine" / "blocklist"
+        spaced = self.tmp / "Acme Corp" / "blocklist"
         spaced.mkdir(parents=True)
         check = self.check(folder=spaced)
-        self.assertEqual(check.fix, f"wrangler auth activate acme {self.tmp}/GTM\\ Engine/blocklist")
+        self.assertEqual(check.fix, f"wrangler auth activate acme {self.tmp}/Acme\\ Corp/blocklist")
 
     def test_missing_profile_fails_with_the_sign_in(self):
         (self.store / "config" / "acme.enc").unlink()
