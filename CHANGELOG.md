@@ -324,6 +324,25 @@ From the second pre-launch review:
   `--env-file` files are held to the same. A project that deliberately uses another Cloudflare host
   (staging, a compliance region) isn't supported yet.
 
+From the third pre-launch review:
+
+- **Supabase: an option before the command no longer hides it.** `supabase --agent no projects delete
+  <ref>` and `supabase --agent yes gen types --project-id <ref>` ran on a project of another
+  organization: Keyfit took `--agent`'s value for the command. `--agent` and `--output-format` now
+  count as options with a value, and every word shaped like a project ref is checked wherever it
+  stands (`gen … --project-id` too), so an option Keyfit doesn't know can't hide one either.
+- **Supabase: the TypeScript CLI's other links are checked.** Its `branches` commands act on the
+  parent project in `supabase/.temp/linked-project.json`, and its stack mode links through
+  `supabase/.link.json`; a project of another organization named there now fails the check, like one
+  in `supabase/.temp/project-ref`.
+- **Vercel: a folder to deploy is checked like `--cwd`.** `vercel deploy <path>`, `vercel <path>` and
+  `vercel dev <dir>` use that folder's link and take the team from it, whatever `--scope` says. A
+  folder linked to another team is now refused.
+- **Vercel: `.vercel/repo.json` in its current format.** `vercel link --repo` records a team per
+  project, and Keyfit read only the older top-level `orgId`, so a repository linked to another team
+  that way passed the check. It now takes the project whose directory holds the folder (else every
+  project), like the CLI.
+
 ## [0.1.0] - 2026-10-12
 
 First public version. macOS only; Python 3.11 or newer, no other dependencies.
