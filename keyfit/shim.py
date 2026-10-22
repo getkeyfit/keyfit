@@ -989,9 +989,11 @@ def offer_fixes(failed: list, project: Project, env: dict, registry: Registry, t
     """In a terminal, when every failed check is fixed by a sign-in or by binding a folder of the project to its wrangler
     profile, ask (`Sign in now?`, then `Bind this folder now?`) and run them. What ran ("signed in", "bound …") when
     they all finished; False: one failed; None: nothing was offered or an answer was no. Never asked without a
-    terminal (agents, scripts, CI), so nothing waits for an answer that cannot come, and never for a fix in *tried*
-    (the fixes offered before, which are added to it): a fix that ran and did not help is only printed."""
-    if not failed or env.get("KEYFIT_DRY_RUN") == "1" or env.get("CI") or any(c.fix in tried for c in failed):
+    terminal (agents, scripts, CI) or inside a session Keyfit started (KEYFIT_PROJECT set: agents run commands in a
+    terminal too), so nothing waits for an answer that cannot come, and never for a fix in *tried* (the fixes offered
+    before, which are added to it): a fix that ran and did not help is only printed."""
+    if not failed or env.get("KEYFIT_DRY_RUN") == "1" or env.get("CI") or env.get("KEYFIT_PROJECT") or \
+            any(c.fix in tried for c in failed):
         return None
     if not (sys.stdin.isatty() and sys.stderr.isatty()):
         return None

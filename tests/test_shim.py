@@ -110,14 +110,14 @@ class ShimTests(unittest.TestCase):
         out = subprocess.run([tool, *args], cwd=cwd or self.repo, env=env, capture_output=True, text=True, timeout=60)
         return out
 
-    def run_in_terminal(self, tool, *args, answer: str):
+    def run_in_terminal(self, tool, *args, answer: str, **extra):
         """Run the shim with a terminal on stdin and stderr, as when you type the command; answer the prompt."""
         import pty
         import select
 
         env = {"PATH": f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin",
                "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config), "STS_COUNT": str(self.sts),
-               "SIGNED_IN": str(self.tmp / "signed-in")}
+               "SIGNED_IN": str(self.tmp / "signed-in"), **extra}
         master, slave = pty.openpty()
         proc = subprocess.Popen([tool, *args], cwd=self.repo, env=env, stdin=slave, stdout=subprocess.PIPE,
                                 stderr=slave)
@@ -161,6 +161,22 @@ class ShimTests(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout), (1, ""))
         self.assertNotIn("Sign in now?", out.stderr)
         self.assertTrue(out.stderr.endswith("    → claude auth login\n  (bypass once: KEYFIT_DISABLE=1 claude …)\n"))
+
+    def test_no_question_inside_a_session(self):
+        # agents run commands in a terminal of their own (KEYFIT_PROJECT set): nobody is there to answer
+        with open(self.home / ".aws" / "config", "a") as fh:
+            fh.write("[profile web]\nlogin_session = arn:aws:iam::444444444444:user/me\n")
+        registry = self.config / "registry.toml"
+        registry.write_text(registry.read_text().replace('profile = "iam"', 'profile = "web"'))
+        executable(self.bin / "claude", FAKE_CLAUDE_SIGNED_OUT)
+        for tool, args, fix in (("aws", ("s3", "ls"), "aws login --profile web"),
+                                ("claude", ("-p", "hi"), "claude auth login")):
+            with self.subTest(tool):
+                code, out, terminal = self.run_in_terminal(tool, *args, answer="\n", KEYFIT_PROJECT="demo")
+                self.assertEqual((code, out), (1, ""), terminal)
+                self.assertNotIn("Sign in now?", terminal)
+                self.assertIn(f"    → {fix}\n  (bypass once: KEYFIT_DISABLE=1 {tool} …)\n", terminal)
+        self.assertFalse((self.tmp / "signed-in").exists())
 
     def test_only_plain_sign_ins_are_offered(self):
         for fix, words in [
