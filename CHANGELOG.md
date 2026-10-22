@@ -344,7 +344,9 @@ From the third pre-launch review:
   the start that launched it, for every folder. `codex resume` and `codex fork` now start with
   `--no-daemon`, like `codex`, and `codex agents`, `queue`, `remote-control` and `app-server`, which
   work on that server, are refused in a project. One that already runs: stop it with
-  `codex app-server daemon stop`, outside every project.
+  `codex app-server daemon stop`, outside every project. Inside a session, in a folder outside every
+  project, Codex is held to the same: `codex`, `resume` and `fork` start with `--no-daemon`, and the
+  server's commands are refused (they ran unchanged with the session's accounts).
 - **Two clients' setups are no longer merged silently.** `keyfit init` in a second folder with a
   registered project's name (`~/work/globex/api` after `~/work/acme/api`) added it to that project:
   it ran with acme's accounts, and its own `.envrc` was never imported. `init` now stops and asks for

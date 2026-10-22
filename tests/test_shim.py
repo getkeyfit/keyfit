@@ -405,6 +405,37 @@ class ShimTests(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertEqual(json.loads(self.run_tool("claude", *args).stdout)["argv"], args)
 
+    CODEX_SESSIONS = ([], ["fix it"], ["resume", "--last"], ["fork", "--last"])
+    CODEX_SHARED = (["agents"], ["queue", "--thread", "t", "--message", "m"], ["remote-control"], ["app-server"])
+
+    def fake_codex(self):
+        executable(self.bin / "codex", '#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n')
+
+    def test_codex_inside_a_session_outside_projects_runs_without_daemon(self):
+        self.fake_codex()
+        for args in self.CODEX_SESSIONS:
+            with self.subTest(args=args):
+                out = self.run_tool("codex", *args, cwd=self.outside, KEYFIT_PROJECT="demo")
+                self.assertEqual(json.loads(out.stdout), ["--no-daemon", *args])
+        out = self.run_tool("codex", "exec", "x", cwd=self.outside, KEYFIT_PROJECT="demo")
+        self.assertEqual(json.loads(out.stdout), ["exec", "x"])
+
+    def test_codex_shared_server_commands_are_refused_inside_a_session(self):
+        self.fake_codex()
+        for args in self.CODEX_SHARED:
+            with self.subTest(args=args):
+                out = self.run_tool("codex", *args, cwd=self.outside, KEYFIT_PROJECT="demo")
+                self.assertEqual((out.returncode, out.stdout), (1, ""))  # the real codex never started
+                self.assertIn(f"inside a session of demo, `codex {args[0]}` could start Codex's shared app server",
+                              out.stderr)
+                self.assertIn("KEYFIT_DISABLE=1 codex", out.stderr)
+
+    def test_codex_outside_projects_and_sessions_is_unchanged(self):
+        self.fake_codex()
+        for args in self.CODEX_SESSIONS + self.CODEX_SHARED:
+            with self.subTest(args=args):
+                self.assertEqual(json.loads(self.run_tool("codex", *args, cwd=self.outside).stdout), args)
+
 
 class ArgumentTests(unittest.TestCase):
     def setUp(self):
