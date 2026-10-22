@@ -465,15 +465,14 @@ def words(args: list[str]) -> list[str]:
 
 def entries(args: list[str], folder) -> list[str]:
     """The entry files a command line may give wrangler in *folder*: --script, and --path or every argument after the
-    command words of deploy, versions upload, dev and preview (also after `--`, which yargs passes on as arguments),
-    except a folder deploy and versions upload take as static assets. A value of an option Keyfit reads as a flag
-    counts too: a false alarm, never a miss."""
+    command words of deploy, versions upload, dev and preview, except a folder deploy and versions upload take as
+    static assets. A value of an option Keyfit reads as a flag counts too: a false alarm, never a miss. (Arguments
+    after `--` are neither: yargs fills positionals before it hands them on.)"""
     said = words(args)
     command = next((c for c in ENTRY_COMMANDS if tuple(said[:len(c)]) == c), None)
     found = [value for name, value in options(args) if name == "--script" and value]
     if command is not None:
-        rest = args[args.index("--") + 1:] if "--" in args else []
-        given = [value for name, value in options(args) if name == "--path" and value] + said[len(command):] + rest
+        given = [value for name, value in options(args) if name == "--path" and value] + said[len(command):]
         found += [path for path in given if command not in ASSETS_TOO or not os.path.isdir(os.path.join(folder, path))]
     return list(dict.fromkeys(found))
 

@@ -1156,7 +1156,7 @@ class ShimTests(CloudflareCase):
                      ["dev", "../other/src/index.ts"], ["preview", "../other/src/index.ts"],
                      ["deploy", "--script", "../other/src/index.ts"], ["deploy", "--path=../other/src/index.ts"],
                      ["deploy", "--name", "x", "../other/src/index.ts"],  # --name's value is taken for one too
-                     ["deploy", "--", "../other/src/index.ts"], ["d1", "list", "--script", "../other/src/index.ts"]):
+                     ["d1", "list", "--script", "../other/src/index.ts"]):
             code, argv, _ = self.run_shim(*args)
             self.assertEqual((code, argv), (1, None), args)
             self.assertIn(f"refusing ../other/src/index.ts: {other / 'wrangler.toml'} sets account_id {GLOBEX_ID}, "
@@ -1167,7 +1167,8 @@ class ShimTests(CloudflareCase):
         for args in (["deploy", "src/index.ts"], ["deploy", "../other/public"],  # a folder: static assets
                      ["versions", "upload", "../other/public"],
                      ["deploy", "-c", "wrangler.toml", "../other/src/index.ts"],
-                     ["d1", "list", "../other/src/index.ts"]):  # the config, not the entry file, decides
+                     ["d1", "list", "../other/src/index.ts"],  # the config, not the entry file, decides
+                     ["deploy", "--", "../other/src/index.ts"]):  # after `--`: not the entry file (yargs)
             code, argv, _ = self.run_shim(*args)
             self.assertEqual(argv, ["wrangler", *args], self.stderr)
 
