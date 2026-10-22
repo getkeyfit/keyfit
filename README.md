@@ -98,6 +98,8 @@ cd ~/code/acme-api
 keyfit init           # registers the repository, then offers the accounts it finds on this Mac
 ```
 
+The project is named after the folder (`acme-api`). Folder names such as `api` or `web` repeat across clients, so when a project of that name exists already in another folder, `init` stops and asks for a name of its own: `keyfit init --name globex-api`. To add the folder to that project instead, with the same accounts, name it: `keyfit init --name api`.
+
 `keyfit init` asks about one account at a time, and Enter skips any of them. Skipped accounts are simply not checked; `keyfit status` lists what is still unmapped. Already using direnv? `keyfit init` also imports `use aws PROFILE ACCOUNT_ID` and `export LINEAR_API_KEY=$VARIABLE` lines from the repository's `.envrc`. It reads the file as text and never runs it. Without a terminal, or with `--yes`, `init` asks nothing: it registers the repository and imports from `.envrc` only.
 
 **3. Use your tools as usual.**
@@ -194,7 +196,7 @@ keyfit secret set NAME             # store a key from a hidden prompt; prints ke
 keyfit secret list                 # names of the keys Keyfit stored (never the values)
 ```
 
-`--project NAME` makes any `keyfit add …` change another project. Account names (`--name`) can be shared between projects. The registry lives in `~/.config/keyfit/registry.toml`. It stores where secrets live, never their values; see [security](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/security.md).
+`--project NAME` makes any `keyfit add …` change another project. Account names (`--name`) can be shared between projects that use the same login; given another login, a shared name changes for all of them, and `keyfit add` names the projects it changed. Without `--name`, a second login never takes the first one's name: it gets the next free one, such as `pro-2`. The registry lives in `~/.config/keyfit/registry.toml`. It stores where secrets live, never their values; see [security](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/security.md).
 
 ## Speed
 

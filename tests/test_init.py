@@ -342,6 +342,55 @@ class GuidedInitTests(Machine):
         self.assertEqual(logins(dict(os.environ)), (["octocat", "hubot"], ""))
 
 
+class SameFolderNameTests(Machine):
+    """Folder names such as api repeat across clients: a second `api` never joins the first one's project unasked."""
+
+    def api_of(self, client: str, envrc: str = "") -> Path:
+        repo = self.tmp / client / "api"
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        if envrc:
+            (repo / ".envrc").write_text(envrc)
+        return repo
+
+    def test_a_second_folder_of_the_same_name_needs_a_name_of_its_own(self):
+        acme = self.api_of("acme", "use aws acme-dev 111111111111\n")
+        globex = self.api_of("globex", "use aws globex 222222222222\n")
+        self.assertEqual(self.init(argv=["--yes", "--root", str(acme)])[0], 0)
+        before = (self.config / "registry.toml").read_text()
+        self.assertEqual(self.init(argv=["--yes", "--root", str(globex)]), (1, "", (
+            f"a project named 'api' already exists in {acme}; {globex} is another folder.\n"
+            "  Give this one a name of its own: keyfit init --name <client>-api\n"
+            "  (or, to add it to 'api' with the same accounts: keyfit init --name api)\n")))
+        self.assertEqual((self.config / "registry.toml").read_text(), before)
+
+        code, out, err = self.init(argv=["--yes", "--root", str(globex), "--name", "globex-api"])
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"Registered project 'globex-api' → {globex}\n  imported aws globex → …2222 (from .envrc)\n", out)
+        projects = self.registry()["projects"]
+        self.assertEqual(projects["api"], {"roots": [str(acme)], "aws": {"profile": "acme-dev", "account": "111111111111"}})
+        self.assertEqual(projects["globex-api"], {"roots": [str(globex)],
+                                                  "aws": {"profile": "globex", "account": "222222222222"}})
+        os.chdir(globex)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(main(["which", "-v"]), 0)
+        self.assertRegex(out.getvalue(), r"^globex-api  .*\n  aws +globex → …2222\n$")
+
+    def test_an_explicit_name_adds_the_folder_to_that_project_and_says_so(self):
+        acme, old = self.api_of("acme"), self.api_of("acme-old")
+        self.assertEqual(self.init(argv=["--yes", "--root", str(acme)])[0], 0)
+        code, out, err = self.init(argv=["--yes", "--root", str(old), "--name", "api"])
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"Added a second folder to project 'api' → {old} (it also has {acme}; every folder of api uses "
+                      "the same accounts)\n", out)
+        self.assertEqual(self.registry()["projects"]["api"]["roots"], [str(acme), str(old)])
+        code, out, err = self.init(argv=["--yes", "--root", str(old)])  # registered already: nothing changes
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"Registered project 'api' → {old}\n", out)
+        self.assertEqual(self.registry()["projects"]["api"]["roots"], [str(acme), str(old)])
+
+
 class MessagesTests(Machine):
     """What a first-time user sees when something is missing or mistyped: what is wrong and the next command,
     never a traceback."""

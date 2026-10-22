@@ -1,11 +1,16 @@
+import contextlib
+import io
 import json
 import os
 import stat
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from keyfit.adapters.claude import ClaudeAdapter, login_command, seed
+from keyfit.cli import main
 from keyfit.realbin import find_real
 from keyfit.registry import Registry
 
@@ -144,6 +149,68 @@ class ClaudeTests(unittest.TestCase):
         env = {"HOME": str(self.home), "PATH": f"{wrapper}{os.pathsep}{self.bin}"}
         self.assertEqual(find_real("claude", env, skip_wrappers=True), str(self.bin / "claude"))
         self.assertEqual(find_real("claude", env), str(wrapper / "claude"))
+
+
+class AddClaudeTests(unittest.TestCase):
+    """`keyfit add claude` from two projects, with a fake claude that has a personal login in ~/.claude and another
+    one in a second folder."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.home = self.tmp / "home"
+        (self.home / ".claude").mkdir(parents=True)
+        self.other = self.tmp / "accounts" / "globex"
+        self.other.mkdir(parents=True)
+        self.config = self.tmp / "keyfit"
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "claude").write_text(FAKE_CLAUDE)
+        (bin_dir / "claude").chmod(0o755)
+        logins = {str(self.home / ".claude"): {"authMethod": "claude.ai", "email": "me@home.io", "subscriptionType": "pro"},
+                  str(self.other): {"authMethod": "claude.ai", "email": "me@globex.io", "subscriptionType": "max"}}
+        for patcher in (mock.patch.dict(os.environ, {"HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config),
+                                                     "PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin",
+                                                     "FAKE_CLAUDE": json.dumps(logins)}, clear=True),
+                        mock.patch.object(Path, "home", return_value=self.home)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for name in ("acme", "globex"):
+            (self.tmp / name).mkdir()
+            self.run_main("init", "--yes", "--root", str(self.tmp / name), "--name", name)
+
+    def run_main(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def registry(self):
+        return tomllib.loads((self.config / "registry.toml").read_text())
+
+    def test_two_personal_logins_keep_their_own_accounts(self):
+        self.assertEqual(self.run_main("add", "claude", "--project", "acme"),
+                         (0, "acme: claude account 'personal' → personal (pro) in ~/.claude\n", ""))
+        self.assertEqual(self.run_main("add", "claude", "--project", "globex", "--config-dir", str(self.other)),
+                         (0, f"globex: claude account 'personal-2' → personal (max) in {self.other}\n", ""))
+        reg = self.registry()
+        self.assertEqual(reg["accounts"]["claude"]["personal"],
+                         {"config_dir": "~/.claude", "email": "me@home.io", "pin_email": True})
+        self.assertEqual(reg["accounts"]["claude"]["personal-2"]["config_dir"], str(self.other))
+        self.assertEqual((reg["projects"]["acme"]["claude"], reg["projects"]["globex"]["claude"]),
+                         ("personal", "personal-2"))
+
+    def test_new_with_a_shared_name_names_who_changed(self):
+        self.run_main("add", "claude", "--project", "acme", "--name", "work")
+        code, out, err = self.run_main("add", "claude", "--project", "globex", "--new", "--name", "work")
+        self.assertEqual(code, 0, err)
+        self.assertIn("  account 'work' was config_dir ~/.claude, email me@home.io; it changed for acme too\n", out)
+
+    def test_new_refuses_a_name_that_is_not_a_name(self):
+        for name in ("../x", "../../x", "a\nb"):
+            self.assertEqual(self.run_main("add", "claude", "--project", "acme", "--new", "--name", name),
+                             (1, "", "a name is letters, digits, '.', '_' and '-' (at most 64)\n"))
+        self.assertFalse((self.config / "x").exists() or (self.tmp / "x").exists())
+        self.assertNotIn("claude", self.registry().get("accounts", {}))
 
 
 if __name__ == "__main__":

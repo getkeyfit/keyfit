@@ -512,6 +512,18 @@ class AddTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(out, "acme: copilot account 'hubot' → GitHub hubot\n")
 
+    def test_a_shared_name_given_to_another_login_names_who_changed(self):
+        (self.tmp / "globex").mkdir()
+        self.run_main("init", "--yes", "--root", str(self.tmp / "globex"), "--name", "globex")
+        self.run_main("add", "copilot", "--login", "octocat", "--name", "bot")
+        self.assertEqual(self.run_main("add", "copilot", "--project", "globex", "--login", "octocat", "--name", "bot"),
+                         (0, "globex: copilot account 'bot' → GitHub octocat\n", ""))  # the same login: shared
+        self.assertEqual(self.run_main("add", "copilot", "--project", "globex", "--login", "hubot", "--name", "bot"),
+                         (0, "globex: copilot account 'bot' → GitHub hubot\n"
+                             "  account 'bot' was login octocat; it changed for acme too\n", ""))
+        self.assertEqual(self.run_main("add", "copilot", "--login", "hubot", "--name", "../x"),
+                         (1, "", "a name is letters, digits, '.', '_' and '-' (at most 64)\n"))
+
     def test_no_github_account_and_no_login(self):
         code, out, err = self.run_main("add", "copilot")
         self.assertEqual((code, out), (1, ""))

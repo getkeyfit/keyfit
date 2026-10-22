@@ -146,6 +146,42 @@ class AddGithubMergeTests(unittest.TestCase):
         account = Registry.load(reg).data["accounts"]["github"]["me"]
         self.assertEqual(account["ssh_host"], "github.com")
 
+    def test_a_shared_name_given_to_another_login_names_who_changed_and_keeps_nothing_of_the_old_login(self):
+        import contextlib
+        import io
+        from unittest import mock
+
+        from keyfit.cli import main
+        from keyfit.registry import Registry
+        import keyfit.adapters.github as gh
+        import keyfit.cli as cli
+        tmp = Path(tempfile.mkdtemp()).resolve()
+        for name, email in (("acme", "me@acme.io"), ("globex", "me@globex.io")):
+            (tmp / name).mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=tmp / name, check=True)
+            subprocess.run(["git", "config", "user.email", email], cwd=tmp / name, check=True)
+        reg = tmp / "r.toml"
+
+        def keyfit(*argv):
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = main(["--registry", str(reg), *argv])
+            return code, out.getvalue(), err.getvalue()
+        with mock.patch.dict(os.environ, {"HOME": str(tmp), "GIT_CONFIG_NOSYSTEM": "1"}), \
+                mock.patch.object(gh, "read_token", lambda login, env, timeout=15: (f"tok-{login}", "")), \
+                mock.patch.object(cli.ADAPTERS["github"], "whoami", lambda token: WHO[token]):
+            for name in ("acme", "globex"):
+                keyfit("init", "--yes", "--root", str(tmp / name), "--name", name)
+            keyfit("add", "github", "--project", "acme", "--login", "octocat", "--name", "me")
+            self.assertEqual(keyfit("add", "github", "--project", "globex", "--login", "octocat", "--name", "me"),
+                             (0, "globex: github account 'me' → octocat (email me@acme.io)\n", ""))  # shared
+            self.assertEqual(keyfit("add", "github", "--project", "globex", "--login", "hubot", "--name", "me"),
+                             (0, "globex: github account 'me' → hubot (email me@globex.io)\n"
+                                 "  account 'me' was login octocat; it changed for acme too\n", ""))
+            self.assertEqual(keyfit("add", "github", "--project", "globex", "--login", "hubot", "--name", "a\nb"),
+                             (1, "", "a name is letters, digits, '.', '_' and '-' (at most 64)\n"))
+        self.assertEqual(Registry.load(reg).data["accounts"]["github"]["me"], {"login": "hubot", "email": "me@globex.io"})
+
 
 if __name__ == "__main__":
     unittest.main()

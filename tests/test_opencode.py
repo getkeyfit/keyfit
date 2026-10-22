@@ -662,6 +662,38 @@ class AddTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(self.registry()["accounts"]["opencode"]["globex"]["logins"], ["anthropic"])
 
+    def two_databases(self):
+        """Two OpenCode databases in folders of the same name, and a second project, globex."""
+        (self.tmp / "globex").mkdir()
+        self.run_main("init", "--yes", "--root", str(self.tmp / "globex"), "--name", "globex")
+        return (database(self.tmp / "acme-data" / "work" / "opencode.db", ("anthropic", "Anthropic")),
+                database(self.tmp / "globex-data" / "work" / "opencode.db", ("openai", "OpenAI")))
+
+    def test_another_database_never_takes_over_the_first_projects_account(self):
+        one, two = self.two_databases()
+        self.assertEqual(self.run_main("add", "opencode", "--db", str(one))[1],
+                         f"acme: opencode account 'work' → anthropic in {one}\n")
+        self.assertEqual(self.run_main("add", "opencode", "--project", "globex", "--db", str(two))[1],
+                         f"globex: opencode account 'work-2' → openai in {two}\n")
+        accounts = self.registry()["accounts"]["opencode"]
+        self.assertEqual((accounts["work"]["db"], accounts["work-2"]["db"]), (str(one), str(two)))
+
+    def test_a_shared_name_given_to_another_database_names_who_changed(self):
+        one, two = self.two_databases()
+        self.run_main("add", "opencode", "--name", "shared", "--db", str(one))
+        self.assertEqual(self.run_main("add", "opencode", "--project", "globex", "--name", "shared", "--db", str(one)),
+                         (0, f"globex: opencode account 'shared' → anthropic in {one}\n", ""))  # the same: shared
+        self.assertEqual(self.run_main("add", "opencode", "--project", "globex", "--name", "shared", "--db", str(two)),
+                         (0, f"globex: opencode account 'shared' → openai in {two}\n"
+                             f"  account 'shared' was db {one}; it changed for acme too\n", ""))
+
+    def test_new_refuses_a_name_that_is_not_a_name(self):
+        for name in ("../x", "../../x", "a\nb"):
+            self.assertEqual(self.run_main("add", "opencode", "--new", "--name", name),
+                             (1, "", "a name is letters, digits, '.', '_' and '-' (at most 64)\n"))
+        self.assertFalse((self.config / "x").exists() or (self.tmp / "x").exists())
+        self.assertNotIn("opencode", self.registry()["projects"]["acme"])
+
     def test_init_offers_the_sign_ins_opencode_has(self):
         from keyfit import cli
 

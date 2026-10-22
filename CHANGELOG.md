@@ -342,6 +342,19 @@ From the third pre-launch review:
   `--no-daemon`, like `codex`, and `codex agents`, `queue`, `remote-control` and `app-server`, which
   work on that server, are refused in a project. One that already runs: stop it with
   `codex app-server daemon stop`, outside every project.
+- **Two clients' setups are no longer merged silently.** `keyfit init` in a second folder with a
+  registered project's name (`~/work/globex/api` after `~/work/acme/api`) added it to that project:
+  it ran with acme's accounts, and its own `.envrc` was never imported. `init` now stops and asks for
+  a name of its own (`--name globex-api`); naming the existing project (`--name api`) still adds the
+  folder, and says so. `keyfit add codex`, `claude`, `vercel` and `opencode` without `--name` gave a
+  second login the first one's default name (two ChatGPT pro logins `pro`, two personal Claude logins
+  `personal`, two Vercel logins in one team), which replaced the first project's account with the
+  second's; the second login now gets the next free name (`pro-2`). A `--name` shared on purpose but
+  given another login (also for `github` and `copilot`) changes it for every project using it, as
+  before, and now names them; `github` no longer keeps the old login's email and ssh host then.
+- **`--name` must be a name.** `keyfit add claude`, `opencode` and `vercel --new --name ../../x`
+  created folders outside `~/.config/keyfit`; `--name` of every `keyfit add` is now letters, digits,
+  `.`, `_` and `-`.
 
 ## [0.1.0] - 2026-10-12
 

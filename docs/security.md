@@ -56,7 +56,7 @@ Everything lives under `~/.config/keyfit` (or `$KEYFIT_CONFIG_DIR`), apart from 
 | macOS Keychain, service `keyfit` | Keychain | Keys you pasted into `keyfit add linear` (`linear-WORKSPACE`), `keyfit add supabase` (`supabase-NAME`, also the copy `--cli` makes of the supabase CLI's token), `keyfit add convex` (`convex-NAME`, also the copy `--copy` makes of the convex CLI's token), `keyfit add gemini --key` (`gemini-NAME`) or `keyfit secret set NAME`. They are written through the stdin of `security -i`, never through its arguments |
 | Your shell startup file | | One line that loads `shell.zsh` or `shell.sh`, only with `keyfit setup --rc` |
 
-`~/.config/keyfit` itself gets your usual permissions (usually 755). The registry, the cache and Claude's `.claude.json` are owner-only from the first byte. `keyfit setup --remove --purge` deletes the folder but never Keychain items; it lists their names so you can delete them in Keychain Access.
+`NAME` is letters, digits, `.`, `_` and `-` (`keyfit add` refuses any other `--name`), so these folders always stay inside `~/.config/keyfit`. `~/.config/keyfit` itself gets your usual permissions (usually 755). The registry, the cache and Claude's `.claude.json` are owner-only from the first byte. `keyfit setup --remove --purge` deletes the folder but never Keychain items; it lists their names so you can delete them in Keychain Access.
 
 ## What Keyfit sends, and to whom
 
