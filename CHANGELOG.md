@@ -457,6 +457,38 @@ From the third pre-launch review:
   `settings.json` with a byte-order mark or a leading `//` comment counted as empty; it is read now,
   and a config file an agent loads that still can't be parsed stops the agent with a message instead
   of starting it with servers Keyfit couldn't see.
+- **wrangler's config is found the way wrangler finds it.** Given an entry file (`wrangler deploy
+  ../other/src/index.ts`, also `versions upload`, `dev`, `preview` and `--script`), wrangler reads the
+  config of that file's folder, whose `account_id` beats the account Keyfit pins; such a config of
+  another account is now refused like `--config`. The config a build generated, which
+  `.wrangler/deploy/config.json` sends `wrangler deploy` to (the Vite plugin's
+  `dist/<name>/wrangler.json`), is checked too, so a stale one no longer keeps an old account.
+- **A wrangler config Keyfit cannot read fails the check** instead of being skipped. A byte order mark
+  and bytes that aren't UTF-8 are read as wrangler reads them (a `wrangler.toml` of another account
+  with a byte order mark passed), so is a `//` comment ended by a lone CR, and what Keyfit still cannot
+  parse (TOML 1.1 syntax) is refused with a message that says so.
+- **`--cwd` follows symlinks, as wrangler does,** so a link into another project's folder is refused,
+  and a refusal about another project's folder no longer suggests binding it.
+- **wrangler's binding commands are checked everywhere.** `wrangler auth activate`, `deactivate` and
+  `delete` typed outside every project ran unchecked, and so did binding a folder that holds projects'
+  folders (`..`, `~/code`, `~/.superset/worktrees/<repository>`) to another profile, or unbinding it;
+  they are now refused when they would move a project's folder (a root or a worktree) off its
+  profile. `keyfit add cloudflare`'s `Run it now?` binds the project's own folder when the
+  repository holds more than the project (`~/mono/apps/web` in `~/mono`), under the same rules as
+  `Bind this folder now?`.
+- **wrangler's options are read as wrangler reads them:** `--env NAME` loads `.env.NAME` wherever that
+  path leads (`--env /../settings.txt` loads `settings.txt`), and `--config -0x.toml` and `--config -`
+  name files.
+- **Both wranglers must be new enough for profiles:** the one `npx wrangler` runs (also pnpm's script
+  in `node_modules/.bin`, whose version went unread) and the one `wrangler` runs from PATH. A version
+  Keyfit cannot tell is a warning instead of passing silently.
+- **The online Cloudflare check gets none of the project's other tokens.** At an agent start it ran the
+  repository's own `node_modules/.bin/wrangler` with every account of the project in its environment
+  (a Convex or GitHub token, say); it now runs with your shell's environment and the Cloudflare
+  account only.
+- **A folder's `.env` cannot move wrangler's profiles.** `XDG_CONFIG_HOME` there would have wrangler
+  read and write its profiles and bindings where Keyfit doesn't look (and `Sign in now?` sign in
+  there); it now fails the check like the sign-in endpoints.
 
 ## [0.1.0] - 2026-10-12
 

@@ -14,8 +14,8 @@ CLOUDFLARE_API_KEY with CLOUDFLARE_EMAIL; older names CF_…) beats every profil
 sign-in goes: CLOUDFLARE_API_BASE_URL (the host of every API request, which carries the token) and wrangler's
 sign-in endpoints (WRANGLER_AUTH_DOMAIN, …_AUTH_URL, …_TOKEN_URL, …_REVOKE_URL, …_CLIENT_ID). The account is
 account_id in the wrangler config (wrangler.json, wrangler.jsonc, wrangler.toml, each looked for upwards in that
-order), else CLOUDFLARE_ACCOUNT_ID, else the one picked at sign-in; an account the sign-in cannot reach fails, it never
-falls back.
+order from the folder, or from the folder of an entry file: `wrangler deploy src/index.ts`), else
+CLOUDFLARE_ACCOUNT_ID, else the one picked at sign-in; an account the sign-in cannot reach fails, it never falls back.
 Profiles live in wrangler's config folder (~/.wrangler when it exists, else ~/Library/Preferences/.wrangler):
 config/<profile>.toml, or .enc when wrangler keeps the key in the Keychain, and profiles/directory-bindings.json
 (folder → profile, compared as text). Keyfit reads the bindings and the profile names, never a sign-in, and keeps no
@@ -27,12 +27,15 @@ inject  — remove inherited credentials that would beat the profile (CLOUDFLARE
           picks the sign-in. CLOUDFLARE_API_BASE_URL is set to Cloudflare's own (a variable already set beats the
           folder's .env) and inherited sign-in endpoints are removed.
 forget  — in a project without a Cloudflare account, the CLOUDFLARE_ACCOUNT_ID Keyfit set for another project goes.
-local   — no .env file wrangler may load in the folder sets CLOUDFLARE_API_BASE_URL or a sign-in endpoint (only the
-          names are read); the profile exists; the folder resolves to it (bound there or above, not shadowed by a
-          subfolder's binding); the wrangler config wrangler would read sets no other account_id (top level and
-          env.*); the wrangler `npx wrangler` would run here is new enough for profiles.
+local   — no .env file wrangler may load in the folder sets CLOUDFLARE_API_BASE_URL, a sign-in endpoint or
+          XDG_CONFIG_HOME (only the names are read); the profile exists; the folder resolves to it (bound there or
+          above, not shadowed by a subfolder's binding); the wrangler configs wrangler may read (the one it finds and
+          the one a build's .wrangler/deploy/config.json redirects deploy to) set no other account_id (top level and
+          env.*), and one Keyfit cannot parse fails; the wranglers `npx wrangler` and `wrangler` would run here are new
+          enough for profiles (a warning when a version is unknown).
 remote  — `wrangler whoami --json` in the folder (wrangler renews an expired sign-in first, as every command does)
-          must list the account.
+          must list the account. It runs with the shell's environment and the account only, never the project's
+          other tokens (an agent start holds them all).
 """
 
 from __future__ import annotations
@@ -64,18 +67,29 @@ SCRUB = ("CLOUDFLARE_API_TOKEN", "CF_API_TOKEN", "CLOUDFLARE_API_KEY", "CF_API_K
 HOST = "CLOUDFLARE_API_BASE_URL"
 ENDPOINTS = (HOST, "WRANGLER_AUTH_DOMAIN", "WRANGLER_AUTH_URL", "WRANGLER_TOKEN_URL", "WRANGLER_REVOKE_URL",
              "WRANGLER_CLIENT_ID")
+STORE = "XDG_CONFIG_HOME"  # where wrangler keeps its profiles and bindings when ~/.wrangler does not exist
+DOTENV_NAMES = (*ENDPOINTS, STORE)  # what no .env file wrangler loads may set (Keyfit pins them, or reads the shell's)
 # A variable set in a .env file, as the dotenv package wrangler uses reads one: `NAME=…`, `export NAME=…`, `NAME: …`
 # at the start of a line (anything that looks like one counts, also inside a quoted value: a false alarm, never a miss).
 DOTENV_LINE = re.compile(r"[\s\ufeff]*(?:export\s+)?([A-Za-z0-9_.-]+)\s*[=:]")
 CONFIGS = ("wrangler.json", "wrangler.jsonc", "wrangler.toml")
+DEPLOY = Path(".wrangler") / "deploy" / "config.json"  # a build tool's redirect to the config it generated
 BINDINGS = Path("profiles") / "directory-bindings.json"
+LINE_END = re.compile(r"[\r\n]")  # where a // comment ends in JSON with comments (a lone CR too)
 # Options that take a value (yargs: `--name value`, `--name=value`, `-c value`, `-cVALUE`, `-ec value`): wrangler's
-# global ones and those of the commands Keyfit looks at (login, auth create, whoami), with yargs' camelCase spellings.
-# Every other option is read as a flag, so `wrangler --x-provision login` is still `login`.
+# global ones and those of the commands Keyfit looks at (login, auth create, whoami; deploy's entry file), with yargs'
+# camelCase spellings. Every other option is read as a flag, so `wrangler --x-provision login` is still `login`.
 VALUED = {"c", "config", "cwd", "e", "env", "profile", "scopes", "callback-host", "callbackHost", "callback-port",
-          "callbackPort", "account"}
+          "callbackPort", "account", "script", "path"}
+# Those wrangler declares with requiresArg, which yargs reads like nargs 1 (eatNargs): the next argument is the value
+# unless it looks like an option (/^-[^0-9]/), so `--config -` and `--config -0x.toml` name files.
+NARGS = {"c", "config", "cwd", "e", "env", "profile", "script"}
 OPTIONS = {"c": "--config", "config": "--config", "cwd": "--cwd", "profile": "--profile", "env-file": "--env-file",
-           "envFile": "--env-file"}
+           "envFile": "--env-file", "e": "--env", "env": "--env", "script": "--script", "path": "--path"}
+# Commands whose arguments name the Worker's entry file, from whose folder wrangler looks for its config: deploy and
+# versions upload take a file or a folder of static assets (`path`), dev and preview a file (`script`).
+ENTRY_COMMANDS = (("versions", "upload"), ("deploy",), ("dev",), ("preview",))
+ASSETS_TOO = (("versions", "upload"), ("deploy",))
 ARRAYS = {"env-file", "envFile"}  # options that take every following argument up to the next option
 NEGATIVE = re.compile(r"-([0-9]+(\.[0-9]+)?|\.[0-9]+)")  # a negative number: an argument, not options (fullmatch)
 NUMBER = re.compile(r"-?[0-9]+(\.[0-9]*)?(e-?[0-9]+)?")  # taken by the letter it is attached to (fullmatch)
@@ -146,6 +160,47 @@ def find_config(folder) -> Path | None:
     return None
 
 
+def redirected(folder, user: Path | None) -> tuple[Path, Path] | None:
+    """(config, redirect file) for the config a build tool generated (the Vite plugin's dist/<name>/wrangler.json) that
+    deploy, dev, versions upload and the other deploying commands read instead of *user*: the configPath in
+    .wrangler/deploy/config.json, looked for upwards from *folder*, when that file sits beside *user* or there is
+    none. The redirect file twice when Keyfit cannot read it (its check then fails); None without one, or where
+    wrangler stops on it."""
+    start = Path(os.path.abspath(folder))
+    deploy = next((d / DEPLOY for d in (start, *start.parents) if (d / DEPLOY).is_file()), None)
+    if deploy is None or (user is not None and user.parent / DEPLOY != deploy):
+        return None  # elsewhere than beside the config: wrangler stops ("do not share the same base path")
+    data = _parse(deploy)
+    if data is None:
+        return deploy, deploy
+    target = data.get("configPath") if isinstance(data, dict) else None
+    if not isinstance(target, str) or not target:
+        return None  # wrangler stops: no configPath
+    path = Path(os.path.abspath(os.path.join(deploy.parent, target)))
+    return (path, deploy) if path.exists() else None  # else wrangler stops: it points nowhere
+
+
+def configs(folder, entry: str | None = None) -> list[tuple[Path, Path | None]]:
+    """(config, the redirect that leads to it or None) for each config file wrangler may read in *folder* (its working
+    folder): the one it finds upwards from there or, given an entry file (`wrangler deploy src/index.ts`), from that
+    file's folder, and the one a build tool's .wrangler/deploy/config.json redirects the deploying commands to."""
+    starts = [folder]
+    if entry is not None:
+        parent = os.path.dirname(entry) or "."
+        # wrangler 4.152 starts that search a folder deeper for a relative path (path.resolve(dir, dir): src/src for
+        # src/index.ts); both searches are checked
+        starts = [os.path.join(folder, parent), os.path.join(folder, parent, parent)]
+    found: dict[Path, Path | None] = {}
+    for start in dict.fromkeys(os.path.abspath(s) for s in starts):
+        user = find_config(start)
+        if user is not None:
+            found.setdefault(user, None)
+        redirect = redirected(start, user)
+        if redirect is not None:
+            found.setdefault(*redirect)
+    return list(found.items())
+
+
 def _jsonc(text: str) -> str:
     """JSON with comments and trailing commas (wrangler.json and .jsonc allow both) as plain JSON."""
     out, i, n = [], 0, len(text)
@@ -158,7 +213,8 @@ def _jsonc(text: str) -> str:
             out.append(text[i:j + 1])
             i = j + 1
         elif text.startswith("//", i):
-            i = text.find("\n", i) if "\n" in text[i:] else n
+            end = LINE_END.search(text, i)
+            i = end.start() if end else n
         elif text.startswith("/*", i):
             end = text.find("*/", i + 2)
             i = n if end < 0 else end + 2
@@ -166,7 +222,8 @@ def _jsonc(text: str) -> str:
             j = i + 1
             while j < n and (text[j].isspace() or text.startswith(("//", "/*"), j)):
                 if text.startswith("//", j):
-                    j = text.find("\n", j) if "\n" in text[j:] else n
+                    end = LINE_END.search(text, j)
+                    j = end.start() if end else n
                 elif text.startswith("/*", j):
                     end = text.find("*/", j + 2)
                     j = n if end < 0 else end + 2
@@ -181,16 +238,24 @@ def _jsonc(text: str) -> str:
     return "".join(out)
 
 
-def account_ids(path: Path) -> list[tuple[str, object]] | None:
-    """(where, value) of every account_id in a wrangler config: the top level ("") and each env.NAME. None when the
-    file cannot be read (wrangler then stops by itself)."""
+def _parse(path: Path):
+    """A config file as wrangler reads it: a UTF-8 byte order mark dropped and bytes that are not UTF-8 replaced, then
+    TOML for .toml, else JSON with comments. None when Keyfit cannot read or parse it."""
     import tomllib
 
     try:
-        text = path.read_text()
-        data = tomllib.loads(text) if path.suffix == ".toml" else json.loads(_jsonc(text))
-    except (OSError, UnicodeDecodeError, ValueError):
+        text = path.read_bytes().decode("utf-8-sig", errors="replace")
+        return tomllib.loads(text) if path.suffix == ".toml" else json.loads(_jsonc(text))
+    except (OSError, ValueError, RecursionError):
         return None
+
+
+def account_ids(path: Path) -> list[tuple[str, object]] | None:
+    """(where, value) of every account_id in a wrangler config: the top level ("") and each env.NAME. None when the
+    file cannot be read or parsed (a missing file stops wrangler too; a file Keyfit cannot parse fails the check)."""
+    if path.suffix not in (".toml", ".json", ".jsonc"):
+        return []  # wrangler reads no settings from it
+    data = _parse(path)
     if not isinstance(data, dict):
         return None
     found = [("", data["account_id"])] if "account_id" in data else []
@@ -216,15 +281,27 @@ def wrangler_bin(env: dict, start) -> str | None:
 
 
 def version(binary: str) -> tuple[int, ...] | None:
-    """wrangler's version from the package.json next to its bin/ (npm and Homebrew installs); None when unknown."""
+    """wrangler's version from the package.json next to its bin/ (npm, Homebrew and bun link to it), or next to the
+    bin/wrangler.js a pnpm script runs (`exec node "$basedir/../wrangler/bin/wrangler.js"`); None when unknown."""
+    real = os.path.realpath(binary)
+    places = [real]
     try:
-        data = json.loads((Path(os.path.realpath(binary)).parent.parent / "package.json").read_text())
-    except (OSError, ValueError):
-        return None
-    match = re.match(r"(\d+)\.(\d+)\.(\d+)", str(data.get("version", ""))) if isinstance(data, dict) else None
-    if not match or data.get("name") != "wrangler":
-        return None
-    return tuple(int(part) for part in match.groups())
+        with open(real, "rb") as fh:
+            head = fh.read(4096).decode("utf-8", "replace")
+    except OSError:
+        head = ""
+    if head.startswith("#!"):
+        places += [os.path.realpath(os.path.join(os.path.dirname(real), script))
+                   for script in re.findall(r'"\$basedir/([^"$]*\bwrangler\.js)"', head)]
+    for place in dict.fromkeys(places):
+        try:
+            data = json.loads((Path(place).parent.parent / "package.json").read_text())
+        except (OSError, ValueError):
+            continue
+        match = re.match(r"(\d+)\.(\d+)\.(\d+)", str(data.get("version", ""))) if isinstance(data, dict) else None
+        if match and data.get("name") == "wrangler":
+            return tuple(int(part) for part in match.groups())
+    return None
 
 
 def shell_path(path) -> str:
@@ -260,9 +337,11 @@ def _top(folder: str) -> str:
     return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else folder
 
 
-def mismatch(conn, folder, env: dict, asked: str | None = None, config: Path | None = None) -> tuple[str, str] | None:
+def mismatch(conn, folder, env: dict, asked: str | None = None, config: Path | None = None,
+             entry: str | None = None) -> tuple[str, str] | None:
     """Why wrangler started in *folder* would not use the account's profile or account: (detail, fix), else None.
-    *asked*: a --profile given on the command line; *config*: a --config file (else the one wrangler finds)."""
+    *asked*: a --profile given on the command line; *config*: a --config file (else those wrangler may find, see
+    configs(), from the folder of *entry*, an entry file given on the command line, when there is one)."""
     profile, expected = conn["profile"], conn["account_id"]
     title = conn.get("account_name") or expected
     folder = os.path.abspath(folder)
@@ -283,22 +362,35 @@ def mismatch(conn, folder, env: dict, asked: str | None = None, config: Path | N
             inside = where == top or where.startswith(top.rstrip(os.sep) + os.sep)
             return (f"{tilde(folder)} uses wrangler profile {used} (bound at {tilde(where)}), project expects {profile}",
                     f"wrangler auth activate {profile} {shell_path(where if inside else top)}")
-    path = config or find_config(folder)
-    for where, value in (account_ids(path) or []) if path else []:
-        if value != expected:
-            shown = printable(value) + (f" in [{where}]" if where else "")
-            return (f"{tilde(path)} sets account_id {shown}, project expects {title} ({expected})",
-                    f"set account_id = \"{expected}\" there; if the project moved: keyfit add cloudflare --profile "
-                    f"{profile} --account {printable(value)}")
+    for path, via in [(config, None)] if config else configs(folder, entry):
+        found = account_ids(path)
+        if found is None and path.is_file():  # wrangler may read what Keyfit cannot: a failed check, never a skip
+            shown = printable(tilde(path))
+            syntax = "TOML 1.0 (not yet TOML 1.1)" if path.suffix == ".toml" else "JSON with comments"
+            return (f"Keyfit cannot read {shown}, so it cannot tell which account_id wrangler would use",
+                    f"fix {shown}: Keyfit reads it as {syntax}" + (", or delete it if a build left it behind"
+                                                                 if path == via else ""))
+        for where, value in found or []:
+            if value != expected:
+                shown = printable(value) + (f" in [{where}]" if where else "")
+                if via:  # generated: building again rewrites it from the project's own config
+                    return (f"{tilde(path)} (where {tilde(via)} sends wrangler deploy) sets account_id {shown}, "
+                            f"project expects {title} ({expected})",
+                            f"build again, or delete {tilde(via)} if a build left it behind")
+                return (f"{tilde(path)} sets account_id {shown}, project expects {title} ({expected})",
+                        f"set account_id = \"{expected}\" there; if the project moved: keyfit add cloudflare --profile "
+                        f"{profile} --account {printable(value)}")
     return None
 
 
 def _takes(name: str, nxt: str | None, short: bool = False) -> bool:
     """Whether option *name* takes the next argument as its value, as yargs-parser decides: one that takes a value,
     unless the next argument is an option (for the last letter of a group, `-x` or `--x`; a negative number is not),
-    and any option followed by `true` or `false`."""
+    and any option followed by `true` or `false`. One of NARGS takes it unless it starts with `-` and a non-digit."""
     if nxt is None or nxt in ("true", "false"):
         return nxt is not None
+    if name in NARGS:
+        return not re.match(r"-[^0-9]", nxt) or bool(NEGATIVE.fullmatch(nxt))
     option = re.match(r"(-|--)[^-]", nxt) if short else nxt.startswith("-")
     return name in VALUED and (not option or bool(NEGATIVE.fullmatch(nxt)))
 
@@ -371,6 +463,20 @@ def words(args: list[str]) -> list[str]:
     return [word for name, word in _read(args) if name is None]
 
 
+def entries(args: list[str], folder) -> list[str]:
+    """The entry files a command line may give wrangler in *folder*: --script, and --path or every argument after the
+    command words of deploy, versions upload, dev and preview, except a folder deploy and versions upload take as
+    static assets. A value of an option Keyfit reads as a flag counts too: a false alarm, never a miss. (Arguments
+    after `--` are neither: yargs fills positionals before it hands them on.)"""
+    said = words(args)
+    command = next((c for c in ENTRY_COMMANDS if tuple(said[:len(c)]) == c), None)
+    found = [value for name, value in options(args) if name == "--script" and value]
+    if command is not None:
+        given = [value for name, value in options(args) if name == "--path" and value] + said[len(command):]
+        found += [path for path in given if command not in ASSETS_TOO or not os.path.isdir(os.path.join(folder, path))]
+    return list(dict.fromkeys(found))
+
+
 def _json(text: str):
     """The first JSON object in a command's output (wrangler may print a line or two around it)."""
     decoder = json.JSONDecoder()
@@ -394,23 +500,30 @@ def wrangler_env(env: dict) -> dict:
     return run
 
 
-def dotenv_files(folder, named=()) -> list[Path]:
+def dotenv_files(folder, named=(), envs=()) -> list[Path]:
     """The .env files wrangler may load in *folder*: those named with --env-file (relative to the folder), else
-    `.env`, `.env.local` and, for any --env NAME, `.env.NAME` and `.env.NAME.local` (every `.env.*` there)."""
+    `.env`, `.env.local` and, for any --env NAME, `.env.NAME` and `.env.NAME.local` (every `.env.*` there, and for
+    each NAME in *envs* those two as path.resolve reads them: `--env /../x` loads x)."""
     if named:
         return [Path(os.path.abspath(os.path.join(folder, name))) for name in named]
     try:
         names = sorted(os.listdir(folder))
     except OSError:
-        return []
-    return [Path(folder) / name for name in names if name == ".env" or name.startswith(".env.")]
+        names = []
+    found = [Path(folder) / name for name in names if name == ".env" or name.startswith(".env.")]
+    for env in envs:
+        for name in (f".env.{env}", f".env.{env}.local"):
+            path = Path(os.path.abspath(os.path.join(folder, name)))
+            if path not in found:
+                found.append(path)
+    return found
 
 
-def endpoints_set(folder, named=()) -> list[tuple[Path, list[str]]]:
-    """(file, variable names) for each .env file wrangler may load in *folder* that sets ENDPOINTS. Only names are
+def endpoints_set(folder, named=(), envs=()) -> list[tuple[Path, list[str]]]:
+    """(file, variable names) for each .env file wrangler may load in *folder* that sets DOTENV_NAMES. Only names are
     read: a value is never kept or shown."""
     found = []
-    for path in dotenv_files(folder, named):
+    for path in dotenv_files(folder, named, envs):
         try:
             if not path.is_file():  # not a folder, a pipe or a device: wrangler skips what it cannot read too
                 continue
@@ -418,19 +531,24 @@ def endpoints_set(folder, named=()) -> list[tuple[Path, list[str]]]:
         except OSError:
             continue
         seen = {m.group(1) for m in map(DOTENV_LINE.match, text.splitlines()) if m}
-        names = [name for name in ENDPOINTS if name in seen]
+        names = [name for name in DOTENV_NAMES if name in seen]
         if names:
             found.append((path, names))
     return found
 
 
 def endpoints_problem(found: list[tuple[Path, list[str]]]) -> tuple[str, str]:
-    """(detail, fix) for .env files that set ENDPOINTS: the files and the names, never the values."""
+    """(detail, fix) for .env files that set DOTENV_NAMES: the files and the names, never the values."""
     files = "; ".join(f"{printable(tilde(path))} sets {', '.join(names)}" for path, names in found)
-    names = ", ".join(name for name in ENDPOINTS if any(name in listed for _, listed in found))
+    named = [name for name in DOTENV_NAMES if any(name in listed for _, listed in found)]
     where = printable(tilde(found[0][0])) if len(found) == 1 else "those files"
-    return (f"{files}, which would decide where wrangler sends the profile's sign-in",
-            f"remove {names} from {where}   (Keyfit keeps wrangler on Cloudflare's own API host and sign-in)")
+    sign_in, store = any(name in ENDPOINTS for name in named), STORE in named
+    decides = " and ".join(text for text, on in (("where wrangler sends the profile's sign-in", sign_in),
+                                                 ("where wrangler keeps its profiles", store)) if on)
+    keeps = " and ".join(text for text, on in (("Cloudflare's own API host and sign-in", sign_in),
+                                               ("the profiles it checks", store)) if on)
+    return (f"{files}, which would decide {decides}",
+            f"remove {', '.join(named)} from {where}   (Keyfit keeps wrangler on {keeps})")
 
 
 def _run(argv: list[str], cwd: str, env: dict, timeout: float) -> tuple[int, str, str]:
@@ -515,16 +633,25 @@ class CloudflareAdapter(Adapter):
         problem = mismatch(conn, folder, env)
         if problem:
             return Check(self.kind, "fail", label, *problem)
-        binary = wrangler_bin(env, folder)
-        found = version(binary) if binary else None
-        if found is not None and found < MINIMUM:
-            local = f"{os.sep}node_modules{os.sep}" in binary
-            return Check(self.kind, "fail", label,
-                         f"{tilde(binary)} is wrangler {'.'.join(map(str, found))}, which ignores profiles "
-                         f"(4.106 or newer needed)",
-                         "npm install --save-dev wrangler@latest" if local else "npm install -g wrangler@latest")
+        unknown = None
+        here, typed = wrangler_bin(env, folder), find_real("wrangler", env, skip_wrappers=True)  # npx's, PATH's
+        for binary in dict.fromkeys(b for b in (here, typed) if b):
+            found = version(binary)
+            if found is None:
+                unknown = unknown or binary
+            elif found < MINIMUM:
+                local = f"{os.sep}node_modules{os.sep}" in binary
+                return Check(self.kind, "fail", label,
+                             f"{tilde(binary)} is wrangler {'.'.join(map(str, found))}, which ignores profiles "
+                             f"(4.106 or newer needed)",
+                             "npm install --save-dev wrangler@latest" if local else "npm install -g wrangler@latest")
         _, where = bound(folder, bindings(env))
-        return Check(self.kind, "ok", label, f"bound at {tilde(where)}" if where else "default login", pending=True)
+        detail = f"bound at {tilde(where)}" if where else "default login"
+        if unknown:
+            return Check(self.kind, "warn", label, f"{detail} · could not tell which wrangler {tilde(unknown)} is",
+                         f"{shell_path(unknown)} --version must be 4.106 or newer (older ones ignore profiles)",
+                         pending=True)
+        return Check(self.kind, "ok", label, detail, pending=True)
 
     def remote(self, conn, env: dict) -> Check:
         label = self.label(conn)
@@ -535,7 +662,9 @@ class CloudflareAdapter(Adapter):
         if binary is None:
             return Check(self.kind, "warn", label, "not checked online: no wrangler here (npm install -g wrangler, "
                                                    "or npm install in the project)")
-        accounts, reason, state = self.whoami(binary, folder, env)
+        shell = {k: v for k, v in env.items() if os.environ.get(k) == v or k.startswith("KEYFIT_")}
+        self.inject(conn, shell)  # the shell's environment and the account: none of the project's other tokens
+        accounts, reason, state = self.whoami(binary, folder, shell)
         if accounts is None:
             if state == "transient":
                 return Check(self.kind, "fail", label, reason, "check the network and retry", transient=True)
