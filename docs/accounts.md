@@ -37,7 +37,7 @@ Everything Keyfit does for each kind of account: how to map it, what the tool ge
 
 - **Map it:** `keyfit add codex`, the Codex login in `~/.codex`. Another one: `--codex-home PATH`.
 - **`keyfit init` offers:** whether to use the login currently in `~/.codex`.
-- **The tool gets:** `CODEX_HOME`. `CODEX_API_KEY` is removed, and interactive Codex (`codex`, `codex resume`, `codex fork`) runs without its shared daemon (`--no-daemon`), which keeps the environment of the start that launched it, for every folder. `codex agents`, `queue`, `remote-control` and `app-server` work on that daemon, so they are refused in a project.
+- **The tool gets:** `CODEX_HOME`. `CODEX_API_KEY` is removed, and interactive Codex (`codex`, `codex resume`, `codex fork`) runs without its shared daemon (`--no-daemon`), which keeps the environment of the start that launched it, for every folder. `codex agents`, `queue`, `remote-control` and `app-server` work on that daemon, so they are refused in a project. Inside a session, in a folder outside every project, the same holds: Codex starts without the daemon and those commands are refused, since the session's environment holds its project's accounts.
 - **Checked before it starts:** `auth.json` must hold a ChatGPT login and no API key. With `--pin-account`, it must also be the exact ChatGPT account. This check is local; there is no online check.
 - **Sign-in commands:** `codex login` always runs.
 

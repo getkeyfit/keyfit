@@ -341,7 +341,9 @@ From the third pre-launch review:
   the start that launched it, for every folder. `codex resume` and `codex fork` now start with
   `--no-daemon`, like `codex`, and `codex agents`, `queue`, `remote-control` and `app-server`, which
   work on that server, are refused in a project. One that already runs: stop it with
-  `codex app-server daemon stop`, outside every project.
+  `codex app-server daemon stop`, outside every project. Inside a session, in a folder outside every
+  project, Codex is held to the same: `codex`, `resume` and `fork` start with `--no-daemon`, and the
+  server's commands are refused (they ran unchanged with the session's accounts).
 
 ## [0.1.0] - 2026-10-12
 
