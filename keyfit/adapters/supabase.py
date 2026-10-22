@@ -12,7 +12,8 @@ keeps: pasted, or copied once from the CLI's login (`keyfit add supabase --cli`)
 a native module, and reading it with /usr/bin/security can ask for Keychain access: Keyfit reads it only then.
 The CLI works on the project named by --project-ref, else SUPABASE_PROJECT_ID, else supabase/.temp/project-ref
 (written by `supabase link`) in its work folder: --workdir, SUPABASE_WORKDIR, else the nearest folder upwards with
-supabase/config.toml.
+supabase/config.toml. The TypeScript CLI's `branches` commands act on the parent project in .temp/linked-project.json,
+and its stack mode links through supabase/.link.json instead.
 
 inject  — SUPABASE_ACCESS_TOKEN is the account's token, so every supabase the session starts (`npx supabase` too) and
           Supabase's MCP server use it; SUPABASE_PROFILE=supabase, so neither a --profile-less command nor a profile
@@ -21,7 +22,7 @@ forget  — in a project without a Supabase account, a token Keyfit gave another
 local   — the token is there and shaped like one (sbp_…).
 remote  — GET api.supabase.com/v1/organizations must accept the token and list the account's organization; when the
           folder is linked (or SUPABASE_PROJECT_ID is set), GET /v1/projects/<ref> must name the same organization
-          (a preview branch is not found there: a warning, not checked).
+          for every linked ref (a preview branch is not found there: a warning, not checked).
 """
 
 from __future__ import annotations
@@ -48,11 +49,14 @@ LEGACY = "access-token"  # Keychain account of logins from CLIs before profiles,
 MARK = "KEYFIT_SUPABASE"  # set next to a token Keyfit injected: the account's name
 CONFIG = Path("supabase") / "config.toml"
 LINK = Path("supabase") / ".temp" / "project-ref"
+PARENT = Path("supabase") / ".temp" / "linked-project.json"  # the linked project's parent: what `branches` acts on
+STACK_LINK = Path("supabase") / ".link.json"  # the TypeScript CLI's link in stack mode ([experimental] stack)
 OPTIONS = {"--profile", "--project-ref", "--project-id", "--org-id", "--workdir"}
-# Options that take a value, of the root command and of the commands Keyfit looks at; any other option is read as a
-# flag without one (--debug, --yes, --linked …), so `supabase --debug login` is still `login`.
-VALUED = OPTIONS | {"--output", "-o", "--network-id", "--dns-resolver", "--password", "-p", "--db-url", "--token",
-                    "--name", "--lang", "--schema", "-s", "--region", "--db-password", "--plan", "--size"}
+# Options that take a value, of the root command (Go and TypeScript CLI) and of the commands Keyfit looks at; any other
+# option is read as a flag without one (--debug, --yes, --linked …), so `supabase --debug login` is still `login`.
+VALUED = OPTIONS | {"--output", "-o", "--output-format", "--network-id", "--dns-resolver", "--agent", "--password",
+                    "-p", "--db-url", "--token", "--name", "--lang", "--schema", "-s", "--region", "--db-password",
+                    "--plan", "--size"}
 TOKENS_PAGE = "supabase.com/dashboard/account/tokens"
 
 
@@ -142,17 +146,44 @@ def workdir(start: Path, env: dict) -> Path:
     return start
 
 
-def linked_ref(start, env: dict) -> tuple[str | None, str]:
-    """The project the CLI would use from *start* without --project-ref, and where that comes from:
-    SUPABASE_PROJECT_ID, else supabase/.temp/project-ref in the work folder. (None, "") when not linked."""
-    if env.get("SUPABASE_PROJECT_ID", "").strip():
-        return env["SUPABASE_PROJECT_ID"].strip(), "$SUPABASE_PROJECT_ID"
-    path = workdir(Path(start), env) / LINK
+def _json(path: Path) -> dict:
     try:
-        ref = path.read_text().strip()
+        data = json.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def linked_refs(start, env: dict) -> list[tuple[str, str]]:
+    """Every project the CLI could use from *start* without --project-ref, and where each comes from:
+    SUPABASE_PROJECT_ID, else the work folder's link. That is supabase/.temp/project-ref (`supabase link`) with the
+    parent project in .temp/linked-project.json, which the TypeScript CLI's `branches` commands act on, or in that
+    CLI's stack mode supabase/.link.json (the active branch and its project). Keyfit reads them all, whatever the
+    mode. [] when not linked."""
+    if env.get("SUPABASE_PROJECT_ID", "").strip():
+        return [(env["SUPABASE_PROJECT_ID"].strip(), "$SUPABASE_PROJECT_ID")]
+    folder = workdir(Path(start), env)
+    try:
+        found = [((folder / LINK).read_text(), LINK)]
     except (OSError, UnicodeDecodeError):
-        return None, ""
-    return (ref or None), tilde(path)
+        found = []
+    if found and found[0][0].strip():  # the CLI reads the parent only next to a linked ref
+        found.append((_json(folder / PARENT).get("ref"), PARENT))
+    stack = _json(folder / STACK_LINK)
+    for part in (stack.get("active_branch"), stack.get("project")):
+        found.append((part.get("ref") if isinstance(part, dict) else None, STACK_LINK))
+    refs = []
+    for ref, rel in found:
+        if isinstance(ref, str) and ref.strip() and ref.strip() not in (seen for seen, _ in refs):
+            refs.append((ref.strip(), tilde(folder / rel)))
+    return refs
+
+
+def linked_ref(start, env: dict) -> tuple[str | None, str]:
+    """The first of linked_refs: the project the CLI would use, and where that comes from. (None, "") when not
+    linked."""
+    refs = linked_refs(start, env)
+    return refs[0] if refs else (None, "")
 
 
 def options(args: list[str]) -> list[tuple[str, str | None]]:
@@ -239,8 +270,8 @@ class SupabaseAdapter(Adapter):
     def fingerprint(self, conn, env: dict) -> str:
         """Changes with the token and with the project the folder is linked to, so a cached check never vouches
         for another token or another linked project."""
-        ref, _ = linked_ref(os.getcwd(), env)
-        seen = f"{env.get('SUPABASE_ACCESS_TOKEN', '')}\0{ref or ''}"
+        refs = "\0".join(ref for ref, _ in linked_refs(os.getcwd(), env))
+        seen = f"{env.get('SUPABASE_ACCESS_TOKEN', '')}\0{refs}"
         return hashlib.sha256(seen.encode()).hexdigest()[:16]
 
     def local(self, conn, env: dict) -> Check:
@@ -273,22 +304,29 @@ class SupabaseAdapter(Adapter):
         if expected not in orgs:
             return Check(self.kind, "fail", label, f"this token has no access to organization {title} ({expected})",
                          f"{add_command(conn)}   (a token of a member of {title})")
-        ref, source = linked_ref(os.getcwd(), env)
-        if not ref or not REF.fullmatch(ref):  # not linked, or a ref the CLI itself refuses
+        refs = [(ref, source) for ref, source in linked_refs(os.getcwd(), env) if REF.fullmatch(ref)]
+        if not refs:  # not linked, or a ref the CLI itself refuses
             return Check(self.kind, "ok", label, "token and organization confirmed")
-        project, reason, transient = self.project(token, ref)
         relink = f"supabase link   (a project of {title})"
-        if project is None and reason == "not found":
+        unchecked = []
+        for ref, source in refs:
+            project, reason, transient = self.project(token, ref)
+            if project is None and reason == "not found":
+                unchecked.append((ref, source))
+                continue
+            if project is None:
+                return Check(self.kind, "fail", label, f"{source} links this folder to project {ref}: {reason}",
+                             "check the network and retry" if transient else relink, transient=transient)
+            if project["org"] != expected:
+                return Check(self.kind, "fail", label,
+                             f"{source} links this folder to project {ref} of another organization "
+                             f"({orgs.get(project['org']) or project['org']}), project expects {title}", relink)
+        if unchecked:
+            ref, source = unchecked[0]
             return Check(self.kind, "warn", label, f"token and organization confirmed · {source} names {ref}, which "
                          f"this token does not find as a project (a preview branch?): not checked")
-        if project is None:
-            return Check(self.kind, "fail", label, f"{source} links this folder to project {ref}: {reason}",
-                         "check the network and retry" if transient else relink, transient=transient)
-        if project["org"] != expected:
-            return Check(self.kind, "fail", label,
-                         f"{source} links this folder to project {ref} of another organization "
-                         f"({orgs.get(project['org']) or project['org']}), project expects {title}", relink)
-        return Check(self.kind, "ok", label, f"token, organization and linked project {ref} confirmed")
+        return Check(self.kind, "ok", label,
+                     f"token, organization and linked project {', '.join(ref for ref, _ in refs)} confirmed")
 
     # helpers, shared with `keyfit add supabase` and the shim -------------------------------------------------
 
