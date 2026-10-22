@@ -106,10 +106,23 @@ def cmd_init(args) -> int:
     if existing is not None and existing.name != name:
         print(f"{tilde(root)} is already registered as project '{existing.name}'", file=sys.stderr)
         return 1
+    # a project of that name in other folders: folder names (api, web, infra) repeat across clients, so only an
+    # explicit --name adds this folder to it, with that project's accounts
+    same = reg.get(name) if existing is None else None
+    others = same.roots if same else []
+    if others and not args.name:
+        print(f"a project named '{name}' already exists in {', '.join(others)}; {tilde(root)} is another folder.\n"
+              f"  Give this one a name of its own: keyfit init --name <client>-{name}\n"
+              f"  (or, to add it to '{name}' with the same accounts: keyfit init --name {name})", file=sys.stderr)
+        return 1
     reg.add_project(name, root)
     imported = _import_envrc(reg, name, root)
     reg.save()
-    print(f"Registered project '{name}' → {tilde(root)}")
+    if others:
+        print(f"Added a {'second' if len(others) == 1 else 'further'} folder to project '{name}' → {tilde(root)} "
+              f"(it also has {', '.join(others)}; every folder of {name} uses the same accounts)")
+    else:
+        print(f"Registered project '{name}' → {tilde(root)}")
     for line in imported:
         print(f"  imported {line}")
     if git is None:
