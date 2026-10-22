@@ -324,6 +324,35 @@ From the second pre-launch review:
   `--env-file` files are held to the same. A project that deliberately uses another Cloudflare host
   (staging, a compliance region) isn't supported yet.
 
+From the review of 2026-10-22:
+
+- **gcloud no longer acts as another identity in a project.** `--impersonate-service-account` is
+  refused, and a configuration that sets `auth/impersonate_service_account`, `auth/token_host`,
+  `auth/mtls_token_host`, `auth/disable_ssl_validation` or an `api_endpoint_overrides/…` fails its
+  check, with `gcloud config unset … --configuration NAME` as the fix (it now runs while checks fail).
+  Before, an impersonating configuration was reported as "me@acme.io as deployer@… · account and project
+  confirmed". `gcloud config set auth/…` and `api_endpoint_overrides/…` on a configuration a project
+  uses are refused.
+- **gcloud's and firebase's other spellings are read like the CLIs read them.** A leading release track
+  (`gcloud beta config configurations delete globex`, `gcloud alpha config set account other@x.com`)
+  and arguments after `--` (`gcloud auth login -- other@x.com`, `firebase use -- other-project`,
+  `firebase login:use -- other@x.com`) slipped past the refusals, and so did `gcloud auth login
+  --remote-bootstrap URL other@x.com`. `gcloud auth login` without the project's account and `gcloud
+  auth activate-service-account` as anyone else are refused in a project with a Google Cloud account:
+  they write whichever account signs in into the project's configuration.
+- **firebase is checked on the project its CLI really picks.** firebase.json's deprecated `"firebase"`
+  key, which the CLI takes before `.firebaserc`, was ignored; and without a `firebase.json` (a
+  monorepo's top) the `.firebaserc` there was not checked, though `firestore:delete`, `database:get`
+  or `auth:export` act on its default.
+- **`keyfit add gcloud` never takes another account's configuration.** It took the only configuration
+  whatever its account (the default one, active everywhere else) and printed `gcloud config set
+  account … --configuration default`, which would move every gcloud outside projects to the project's
+  account. It now names `gcloud config configurations create … --no-activate`, as `keyfit init` does.
+- **firebase's sign-in can't be sent elsewhere.** Inherited `FIREBASE_TOKEN_URL` and
+  `FIREBASE_GOOGLE_URL` (where the firebase CLI posts the refresh token), the CLI's other
+  `FIREBASE_…_URL` endpoints and `FIREBASE_CLIENT_ID`/`_SECRET` are removed, also for Keyfit's own
+  renewal with `firebase projects:list`.
+
 ## [0.1.0] - 2026-10-12
 
 First public version. macOS only; Python 3.11 or newer, no other dependencies.
