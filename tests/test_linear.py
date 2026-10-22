@@ -45,6 +45,17 @@ class LinearTests(unittest.TestCase):
         self.assertEqual(linear_vars, ["LINEAR_ACME_API_KEY", "LINEAR_API_KEY"])
         self.assertEqual(env["KEYFIT_LINEAR_WORKSPACE"], "acme")
 
+    def test_inject_removes_every_other_linear_key_variable(self):
+        # docs/accounts.md: "Every other Linear key variable is removed."
+        others = ("LINEAR_GLOBEX_API_KEY", "LINEAR_API_TOKEN", "LINEAR_TOKEN", "LINEAR_ACCESS_TOKEN", "LINEAR_KEY",
+                  "GLOBEX_LINEAR_KEY", "linear_api_key", "Linear_Token")
+        env = self.shell(LINEAR_TEAM="eng", LINEARB_API_TOKEN="linearb", **{name: OTHER for name in others})
+        self.linear.inject(self.conn, env)
+        self.assertEqual([name for name in others if name in env], [])
+        self.assertEqual((env["LINEAR_API_KEY"], env["LINEAR_ACME_API_KEY"]), (GOOD, GOOD))
+        self.assertEqual((env["LINEAR_TEAM"], env["KEYFIT_LINEAR_WORKSPACE"]), ("eng", "acme"))  # not keys: they stay
+        self.assertEqual(env["LINEARB_API_TOKEN"], "linearb")  # LinearB's, another product (as for MCP servers)
+
     def test_missing_key_never_falls_back_to_inherited_one(self):
         env = self.shell()
         del env["LINEAR_ACME_API_KEY"]

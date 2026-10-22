@@ -41,7 +41,8 @@ FAKE_COPILOT = """#!/usr/bin/env python3
 import json, os, sys
 print(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "env": {k: os.environ.get(k) for k in (
     "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "COPILOT_GH_HOST", "COPILOT_PROVIDER_API_KEY",
-    "COPILOT_PROVIDER_BASE_URL", "GITHUB_COPILOT_AGENT_GITHUB_TOKEN", "KEYFIT_COPILOT_LOGIN", "KEYFIT_PROJECT")}}))
+    "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDERS_CONFIG", "GITHUB_COPILOT_AGENT_GITHUB_TOKEN",
+    "KEYFIT_COPILOT_LOGIN", "KEYFIT_PROJECT")}}))
 """
 
 TOKENS = {"octocat": "gho_octocat", "hubot": "gho_hubot"}
@@ -94,6 +95,21 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual((env["GH_TOKEN"], env["GITHUB_TOKEN"], env["COPILOT_MODEL"]), ("gho_kept", "kept", "gpt-5"))
         self.assertTrue(all(call[:2] == ["auth", "token"] for call in self.gh_calls()))
 
+    def test_inject_removes_what_the_docs_say(self):
+        # docs/accounts.md: "Inherited Copilot tokens, `COPILOT_GH_HOST`, `GH_HOST` and the `COPILOT_PROVIDER_…`
+        # variables (a model provider of your own instead of the GitHub account) are removed."
+        documented = ("GITHUB_COPILOT_GITHUB_TOKEN", "GITHUB_COPILOT_AGENT_GITHUB_TOKEN",
+                      "GITHUB_COPILOT_INFERENCE_TOKEN", "GITHUB_COPILOT_API_TOKEN", "COPILOT_GH_HOST", "GH_HOST",
+                      "COPILOT_PROVIDER_BASE_URL",
+                      "COPILOT_PROVIDER_TYPE", "COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_API_KEY_COMMAND",
+                      "COPILOT_PROVIDER_BEARER_TOKEN", "COPILOT_PROVIDER_HEADERS")
+        env = self.env(COPILOT_PROVIDERS_CONFIG="/Users/me/.copilot/providers.json", **{v: "x" for v in documented})
+        self.adapter.inject(self.conn, env)
+        self.assertEqual([var for var in documented if var in env], [])
+        # providers come from a file before those variables (yours by default, in every project): one that never exists
+        self.assertEqual(env["COPILOT_PROVIDERS_CONFIG"], "/var/empty/providers.json")
+        self.assertFalse(os.path.lexists(env["COPILOT_PROVIDERS_CONFIG"]))
+
     def test_confirmed(self):
         _, check = self.verify()
         self.assertEqual((check.status, check.label, check.detail), ("ok", "octocat", "login confirmed"))
@@ -134,10 +150,10 @@ class AdapterTests(unittest.TestCase):
         env = self.env()
         self.adapter.inject(self.conn, env)
         self.adapter.forget(env)
-        self.assertFalse({"COPILOT_GITHUB_TOKEN", "KEYFIT_COPILOT_LOGIN"} & set(env))
-        own = {"COPILOT_GITHUB_TOKEN": "mine"}
+        self.assertFalse({"COPILOT_GITHUB_TOKEN", "KEYFIT_COPILOT_LOGIN", "COPILOT_PROVIDERS_CONFIG"} & set(env))
+        own = {"COPILOT_GITHUB_TOKEN": "mine", "COPILOT_PROVIDERS_CONFIG": "/mine.json"}
         self.adapter.forget(own)
-        self.assertEqual(own, {"COPILOT_GITHUB_TOKEN": "mine"})
+        self.assertEqual(own, {"COPILOT_GITHUB_TOKEN": "mine", "COPILOT_PROVIDERS_CONFIG": "/mine.json"})
 
     def test_a_project_without_a_copilot_account_forgets_anothers(self):
         env = self.env()
@@ -185,9 +201,11 @@ class AdapterTests(unittest.TestCase):
     def test_other_agents_sessions_get_the_projects_copilot_token(self):
         # npx @github/copilot inside a Claude session does not go through the shim: the session has the account
         project = Project("demo", [str(self.tmp)], {"copilot": self.conn})
-        env = environment.build(project, self.env(COPILOT_PROVIDER_API_KEY="sk-x"))
+        env = environment.build(project, self.env(COPILOT_PROVIDER_API_KEY="sk-x",
+                                                  COPILOT_PROVIDERS_CONFIG="/mine.json"))
         self.assertEqual(env["COPILOT_GITHUB_TOKEN"], "gho_octocat")
         self.assertNotIn("COPILOT_PROVIDER_API_KEY", env)
+        self.assertEqual(env["COPILOT_PROVIDERS_CONFIG"], "/var/empty/providers.json")
 
 
 class McpTests(unittest.TestCase):
@@ -418,13 +436,15 @@ class ShimTests(unittest.TestCase):
     def test_session_starts_as_the_projects_github_account_with_its_mcp_servers(self):
         confirm(self.config, "demo", "octocat", "gho_octocat", self.home)
         seen = self.started(self.run_tool("-p", "hi", COPILOT_GITHUB_TOKEN="gho_hubot", GH_HOST="ghe.example",
-                                          COPILOT_PROVIDER_API_KEY="sk-x", GITHUB_TOKEN="gho_kept"))
+                                          COPILOT_PROVIDER_API_KEY="sk-x", GITHUB_TOKEN="gho_kept",
+                                          COPILOT_PROVIDERS_CONFIG="/mine.json"))
         self.assertEqual(seen["argv"], ["--disable-mcp-server=globex_cloud_eu", "-p", "hi"])
         env = seen["env"]
         self.assertEqual((env["COPILOT_GITHUB_TOKEN"], env["KEYFIT_COPILOT_LOGIN"], env["KEYFIT_PROJECT"]),
                          ("gho_octocat", "octocat", "demo"))
         self.assertEqual((env["GH_HOST"], env["COPILOT_PROVIDER_API_KEY"], env["GITHUB_TOKEN"]),
                          (None, None, "gho_kept"))
+        self.assertEqual(env["COPILOT_PROVIDERS_CONFIG"], "/var/empty/providers.json")
 
     def test_a_mismatch_blocks_with_the_fix(self):
         out = self.run_tool("-p", "hi", tokens={})

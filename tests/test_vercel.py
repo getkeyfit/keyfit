@@ -160,8 +160,11 @@ class AdapterTests(VercelCase):
                    NOW_ORG_ID="team_globex", NOW_PROJECT_ID="prj_1", VERCEL_TEAM_ID="team_globex",
                    VERCEL_TELEMETRY_DISABLED="1")
         self.vercel.inject(self.conn(), env)
-        for var in vercel.SCRUB:
-            self.assertNotIn(var, env)
+        # docs/accounts.md: "VERCEL_ORG_ID, VERCEL_PROJECT_ID, VERCEL_TEAM_ID (and their older NOW_ names) and
+        # VERCEL_TOKEN are removed."
+        documented = ("VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "VERCEL_TEAM_ID", "NOW_ORG_ID", "NOW_PROJECT_ID",
+                      "VERCEL_TOKEN")
+        self.assertEqual([var for var in documented if var in env], [])
         self.assertEqual(env["VERCEL_TELEMETRY_DISABLED"], "1")  # everything else stays as it was
         self.assertNotIn(TOKEN, json.dumps(env))  # the CLI takes no token from the environment; Keyfit sets none
 

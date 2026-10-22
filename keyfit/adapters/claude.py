@@ -5,8 +5,9 @@ Account:  [accounts.claude.acme]
 Project:  claude = "acme"
 
 inject  — remove everything that could switch Claude to another identity or
-          billing (API keys, OAuth tokens, gateway URLs, cloud providers,
-          another config dir). The default login (~/.claude) is selected by
+          billing (API keys, OAuth tokens, a refresh token `claude auth login`
+          would sign in with, gateway URLs and headers, cloud providers, another
+          config dir). The default login (~/.claude) is selected by
           leaving CLAUDE_CONFIG_DIR unset: Claude keys the Keychain entry on
           the variable's text, so an explicit ~/.claude would look for a
           different (empty) entry. Any other account gets CLAUDE_CONFIG_DIR.
@@ -27,8 +28,9 @@ from ..registry import canonical, write_private
 from .base import Adapter
 
 SCRUB = (
-    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_PROFILE",
-    "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "ANTHROPIC_PROFILE", "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_MANTLE",
     "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CONFIG_DIR",
 )
 # Files that follow the user into a new account's config dir (never credentials or .claude.json).

@@ -72,6 +72,18 @@ class ClaudeTests(unittest.TestCase):
                     "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK"):
             self.assertNotIn(var, env)
 
+    def test_inject_removes_what_the_docs_say(self):
+        # docs/accounts.md: "API keys, OAuth tokens, gateway URLs and cloud-provider switches are removed."
+        documented = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+                      "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "ANTHROPIC_PROFILE", "ANTHROPIC_BASE_URL",
+                      "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                      "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_MANTLE",
+                      "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CONFIG_DIR")
+        env = self.env(ANTHROPIC_MODEL="claude-opus-5-5", **{var: "inherited" for var in documented})
+        self.claude.inject(self.work, env)
+        self.assertEqual([var for var in documented if var in env], [])
+        self.assertEqual(env["ANTHROPIC_MODEL"], "claude-opus-5-5")  # everything else stays as it was
+
     def test_other_account_sets_config_dir(self):
         env = self.env()
         self.claude.inject(dict(self.work, config_dir=str(self.other)), env)
