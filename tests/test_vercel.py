@@ -437,7 +437,8 @@ class ShimTests(VercelCase):
     def test_sign_in_commands_pass_through_into_the_projects_folder(self):
         # nobody is signed in yet: the checks would fail, sign-in still runs, and lands in the project's folder
         self.own.mkdir(parents=True)
-        for words in (["login"], ["logout"], ["switch", "globex"], ["whoami"], ["teams", "ls"]):
+        for words in (["login"], ["logout"], ["switch", "globex"], ["whoami"], ["teams", "ls"], ["teams", "list"],
+                      ["teams", "switch", "globex"], ["teams", "change", "globex"]):
             with self.subTest(words=words):
                 code, argv, env = self.run_shim(*words, cwd=self.repos["mine"], VERCEL_ORG_ID="team_acme")
                 self.assertIsNone(code, self.stderr)
@@ -447,6 +448,23 @@ class ShimTests(VercelCase):
         self.assertEqual(argv, ["vercel", "login"])
         code, argv, _ = self.run_shim("login", "-Q", "/tmp/x", cwd=self.repos["mine"])  # a folder the user named
         self.assertEqual(argv, ["vercel", "login", "-Q", "/tmp/x"])
+
+    def test_other_team_commands_are_checked_and_scoped_to_the_projects_team(self):
+        # they act on a team: the project's, never the one selected in the login folder
+        self.login(self.default, team="team_globex")
+        for words in (["teams", "invite", "a@example.com"], ["teams", "members"], ["teams", "add"],
+                      ["teams", "request"], ["teams", "sso"], ["teams"]):
+            with self.subTest(words=words):
+                code, argv, _ = self.run_shim(*words)
+                self.assertIsNone(code, self.stderr)
+                self.assertEqual(argv, ["vercel", "--scope", "acme", *words])
+        code, argv, _ = self.run_shim("teams", "invite", "--scope", "globex", "a@example.com")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn("refusing --scope globex", self.stderr)
+        self.login(self.default, HUBOT)  # another login: the check fails, and nothing runs
+        code, argv, _ = self.run_shim("teams", "invite", "a@example.com")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn("keyfit: vercel not started, client needs attention", self.stderr)
 
     def test_project_without_vercel_is_refused_like_aws(self):
         code, argv, _ = self.run_shim("ls", cwd=self.repos["plain"])

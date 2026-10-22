@@ -42,8 +42,8 @@ INSTALL = {"claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": 
            "firebase": "npm install -g firebase-tools   (projects that have it run their own: npx firebase-tools …)",
            "npx": "brew install node"}
 # How to map the one account `aws`, `gh` and `vercel` need inside a project before they start there.
-MAP = {"aws": "keyfit add aws --profile <profile>", "github": "keyfit add github --login <login>",
-       "vercel": "keyfit add vercel"}
+MAP = {"aws": "keyfit add aws --profile <profile>",
+       "github": "keyfit add github --login <a login gh auth status lists>", "vercel": "keyfit add vercel"}
 RELEVANT = {"aws": ("aws",), "gh": ("github",), "vercel": ("vercel",), "supabase": ("supabase",),
             "wrangler": ("cloudflare",), "convex": ("convex",), "gcloud": ("gcloud",), "firebase": ("firebase",),
             "claude": None, "codex": None, "opencode": None, "copilot": None, "gemini": None}
@@ -93,13 +93,15 @@ COPILOT_VALUED = ("-C", "--config-dir", "--additional-mcp-config", "--enable-mcp
 # has no sign-in command, so Keyfit's is a session that signs in (its own dialog) and quits.
 GEMINI_SUBCOMMANDS = {"mcp", "extensions", "extension", "skills", "skill", "hooks", "hook", "gemma"}
 GEMINI_SIGN_INS = (["--prompt-interactive", "/quit"], ["-i", "/quit"], ["--prompt-interactive=/quit"], ["-i=/quit"])
-# Sign-in and setup commands always run — they are how a failed check gets fixed.
+# Sign-in and setup commands always run — they are how a failed check gets fixed. Only those: `gh auth token` and
+# `status`, or `vercel teams invite`, run checked like any other command.
 LOGIN_COMMANDS = {
     "aws": (("sso", "login"), ("sso", "logout"), ("login",), ("logout",), ("configure",)),
     "claude": (("auth",), ("setup-token",)),
     "codex": (("login",), ("logout",)),
-    "gh": (("auth",),),
-    "vercel": (("login",), ("logout",), ("switch",), ("whoami",), ("teams",)),
+    "gh": (("auth", "login"), ("auth", "logout"), ("auth", "refresh"), ("auth", "switch"), ("auth", "setup-git")),
+    "vercel": (("login",), ("logout",), ("switch",), ("whoami",), ("teams", "switch"), ("teams", "change"),
+               ("teams", "ls"), ("teams", "list")),
     "supabase": (("login",), ("logout",)),
     "wrangler": (("login",), ("logout",), ("whoami",), ("auth", "create"), ("auth", "activate"), ("auth", "deactivate"),
                  ("auth", "delete"), ("auth", "list"), ("auth", "keyring")),
@@ -149,6 +151,9 @@ VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query
                  "-c", "--config", "-m", "--model", "-Q", "--global-config", "-S", "--scope", "-T", "--team",
                  "-t", "--token", "-A", "--local-config", "--cwd", "--api", "--workdir", "--project-ref",
                  "--project-id", "--org-id", "--network-id", "--dns-resolver", "-o"}
+# gh's options that decide which account's token `gh auth token` and `status` print, and those taking a value.
+GH_SHORT = {"h": "--hostname", "u": "--user", "t": "--show-token", "a": "--active"}
+GH_VALUED = {"--hostname", "--user", "--json", "--jq", "--template"}
 
 
 class Refused(Exception):
@@ -214,12 +219,10 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
                 owners: dict | None = None, seen=()) -> list[str]:
     """*seen*: the shell variables the checks found that the tool must start without (OpenCode's)."""
     if tool == "aws":
-        profile = project.connections["aws"]["profile"]
-        for asked in requested_profiles(args):
-            if asked != profile:
-                raise Refused(f"keyfit: this folder belongs to {project.name} (AWS profile {profile}); "
-                              f"refusing --profile {asked}.\n  Bypass once: KEYFIT_DISABLE=1 aws …")
+        aws_profiles(project, args)
         return args
+    if tool == "gh":
+        return gh_args(project, args)
     if tool == "vercel":
         return vercel_args(project, args, env, cwd)
     if tool == "supabase":
@@ -265,6 +268,81 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         return copilot_args(project, args, env, cwd, owners)
     if tool == "gemini":
         return gemini_args(project, args, env, cwd, owners)
+    return args
+
+
+def aws_profiles(project: Project, args: list[str]) -> None:
+    """Refuse --profile other than the project's: another profile's credentials, and with the sign-in commands its
+    sign-in or settings (`aws configure export-credentials --profile other` prints its keys). The shared ones
+    ([settings] shared_aws_profiles) ran before. A project without an AWS account signs in to any profile."""
+    conn = project.connections.get("aws")
+    if not isinstance(conn, dict):
+        return
+    profile = conn.get("profile")
+    for asked in requested_profiles(args):
+        if asked != profile:
+            raise Refused(f"keyfit: this folder belongs to {project.name} (AWS profile {profile}); "
+                          f"refusing --profile {asked}.\n  Bypass once: KEYFIT_DISABLE=1 aws …")
+
+
+def gh_options(args: list[str]) -> list[tuple[str, str | None]]:
+    """(long name, value) of gh's options before `--`, read like gh: `--user x`, `--user=x`, `-u x`, `-ux` and
+    letters grouped (`-at`). A switch has the value None, or what follows its "=" (`--show-token=false`)."""
+    found, i = [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            break
+        if arg.startswith("--"):
+            name, eq, value = arg.partition("=")
+            if name in GH_VALUED and not eq:
+                value = args[i + 1] if i + 1 < len(args) else None
+                i += 1
+            found.append((name, value if eq or name in GH_VALUED else None))
+        elif arg.startswith("-") and len(arg) > 1:
+            letters = arg[1:]
+            for j, letter in enumerate(letters):
+                name, rest = GH_SHORT.get(letter, "-" + letter), letters[j + 1:]
+                if name in GH_VALUED:  # the rest of the word is its value, else the next word
+                    if not rest:
+                        rest = args[i + 1] if i + 1 < len(args) else None
+                        i += 1
+                    found.append((name, rest.removeprefix("=") if rest else rest))
+                    break
+                if rest.startswith("="):
+                    found.append((name, rest[1:]))
+                    break
+                found.append((name, None))
+        i += 1
+    return found
+
+
+def gh_switch(given: list[tuple[str, str | None]], name: str) -> bool:
+    values = [value for option, value in given if option == name]  # the last one counts
+    return bool(values) and (values[-1] is None or values[-1].lower() not in ("false", "f", "0"))
+
+
+def gh_args(project: Project, args: list[str]) -> list[str]:
+    """`gh auth token`, `status` and `git-credential` run with the project's GH_TOKEN, which gh answers with first.
+    Refuse what would make them answer with another account's token: --user other than the project's login,
+    `--secure-storage` without it (the token of gh's active account) and `--show-token` without --active (the tokens
+    of every account gh keeps)."""
+    if positionals(args)[:1] != ["auth"]:
+        return args
+    login = project.connections["github"].get("login") or ""
+    refuse = f"keyfit: this folder belongs to {project.name} (GitHub {login}); refusing"
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 gh …"
+    given = gh_options(args)
+    users = [value for name, value in given if name == "--user"]
+    for user in users:
+        if (user or "").lower() != login.lower():  # GitHub logins ignore case
+            raise Refused(f"{refuse} --user {printable(user or '')}.{bypass}")
+    if gh_switch(given, "--secure-storage") and not users:
+        raise Refused(f"{refuse} --secure-storage without --user {login}: gh would read the token of its active "
+                      f"account, which may be another one.{bypass}")
+    if gh_switch(given, "--show-token") and not gh_switch(given, "--active"):
+        raise Refused(f"{refuse} --show-token without --active: gh would print the token of every account it "
+                      f"keeps, not only {login}'s.\n  Only {login}'s: gh auth status --active --show-token{bypass}")
     return args
 
 
@@ -1281,6 +1359,8 @@ def main(argv: list[str]) -> int:
         if is_login_command(tool, args):
             # run sign-in/setup with the project's environment (so `aws sso login` / `claude auth login`
             # target the project's profile / account) but without checks
+            if tool == "aws":  # not another profile's sign-in, settings or keys
+                aws_profiles(project, args)
             if tool == "supabase":
                 supabase_login_check(project, args)
             if tool == "wrangler":
@@ -1299,6 +1379,9 @@ def main(argv: list[str]) -> int:
                 args = gemini_args(project, args, login_env, Path.cwd(), registry.mcp_owners())
             return start(real, tool, args, env, login_env)
         if relevant and not any(kind in project.connections for kind in relevant):
+            if tool == "gh" and positionals(args)[:2] == ["auth", "status"] and \
+                    not gh_switch(gh_options(args), "--show-token"):  # it lists the logins to map: as a sign-in
+                return start(real, tool, args, env, login_environment(tool, project, env))
             if tool in OPTIONAL:  # no account of its kind: it runs as before Keyfit, minus other projects' tokens
                 return start(real, tool, args, env, environment.build(project, env, kinds=relevant),
                              f"project {project.name} has no {relevant[0]} account mapped: {tool} runs without "

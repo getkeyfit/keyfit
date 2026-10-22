@@ -128,8 +128,8 @@ A Gemini API key works too: `keyfit add gemini --key` checks a pasted key with t
 - **`keyfit init` offers:** a profile from `~/.aws/config`. Keyfit records the account that profile belongs to. It also imports `use aws PROFILE ACCOUNT_ID` lines from the repository's `.envrc`.
 - **The tool gets:** `AWS_PROFILE` and `AWS_EXPECTED_ACCOUNT_ID` (and the region, if you set one). Inherited AWS keys, tokens, profile, config-file and region variables are removed.
 - **Checked before it starts:** a named profile (never `default`) exists, and the account hints in its config match. The SSO or `aws login` session has not expired. Then `aws sts get-caller-identity` must return the expected 12-digit account.
-- **Refused in the project:** `aws --profile <another profile>`.
-- **Sign-in commands:** `aws sso login`, `aws login` and `aws configure` always run.
+- **Refused in the project:** `aws --profile <another profile>`, also with the sign-in commands below: `aws configure export-credentials --profile other` would print that profile's keys.
+- **Sign-in commands:** `aws sso login`, `aws login` and `aws configure` always run, for the project's profile.
 
 AWS profiles of machine-wide tools that serve every project, such as a CI worker, are the exception. List them in `~/.config/keyfit/registry.toml` and they run unchanged anywhere:
 
@@ -144,7 +144,8 @@ shared_aws_profiles = ["ci-worker"]
 - **`keyfit init` offers:** one of the accounts `gh` is signed in to.
 - **The tool gets:** `GH_TOKEN`, read from `gh`'s stored login for that account. Other GitHub token variables, `GH_HOST` and `GH_CONFIG_DIR` are removed.
 - **Checked before it starts:** `gh` has a token for the login, and `api.github.com/user` must return that login. A different git author email or SSH host alias in the repository shows as a warning.
-- **Sign-in commands:** `gh auth …` always runs.
+- **Refused in the project:** `--user <another account>` with `gh auth token` or `gh auth status`, `gh auth token --secure-storage` without `--user`, and `gh auth status --show-token` without `--active`. They would print another account's token.
+- **Sign-in commands:** `gh auth login`, `logout`, `refresh`, `switch` and `setup-git` always run, without `GH_TOKEN`, so gh manages its own logins. `gh auth token`, `status` and `git-credential` are checked like any `gh` command and answer with the project's token. In a project without a GitHub account, `gh auth status` still runs unchecked, so you can pick the login to map.
 
 **Limits.** GitHub means github.com. GitHub Enterprise hosts are not supported, for `gh` or for Copilot CLI.
 
@@ -155,7 +156,7 @@ shared_aws_profiles = ["ci-worker"]
 - **The tool gets:** the login's folder as `--global-config` (nothing for the CLI's default folder) and the team as `--scope`. `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `VERCEL_TEAM_ID` (and their older `NOW_` names) and `VERCEL_TOKEN` are removed.
 - **Checked before it starts:** the folder holds a login, and the repository isn't linked (`.vercel/project.json`, or the entry for the folder in `.vercel/repo.json`) to another team. Then `api.vercel.com` must return the expected username and, with a team, let that login reach the team.
 - **Refused in the project:** `vercel --scope <another team>`, `vercel --global-config <another folder>`, `vercel --token …`, and a folder linked to another team named with `--cwd`, `vercel deploy <path>`, `vercel <path>` or `vercel dev <dir>` (the CLI takes the team from that folder's link, whatever `--scope` says).
-- **Sign-in commands:** `vercel login`, `logout`, `switch`, `whoami` and `teams` always run.
+- **Sign-in commands:** `vercel login`, `logout`, `switch`, `whoami`, `teams switch` and `teams ls` always run. The other `teams` commands (`invite`, `members`, …) are checked and get the project's team, like any `vercel` command.
 
 Vercel keeps one login per folder. `keyfit add vercel` records the login in the CLI's default folder (`~/Library/Application Support/com.vercel.cli`) with the team selected there (`--team SLUG` for another). For a second login:
 

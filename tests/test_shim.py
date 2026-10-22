@@ -406,7 +406,8 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("gh", "pr", "list")
         self.assertEqual(out.returncode, 1)
         self.assertEqual(out.stderr, "keyfit: project demo has no github account mapped, so gh was not started.\n"
-                                     "  Map one: keyfit add github --login <login>   (bypass once: KEYFIT_DISABLE=1 gh …)\n")
+                                     "  Map one: keyfit add github --login <a login gh auth status lists>   (bypass once: "
+                                     "KEYFIT_DISABLE=1 gh …)\n")
 
     def test_login_commands_run_even_when_a_check_fails(self):
         out = self.run_tool("aws", "sso", "login", FAKE_ACCOUNT="999999999999")
@@ -414,6 +415,34 @@ class ShimTests(unittest.TestCase):
         seen = json.loads(out.stdout)
         self.assertEqual(seen["argv"], ["sso", "login"])
         self.assertEqual(seen["AWS_PROFILE"], "iam")  # signs in for the project's profile
+
+    def test_sign_in_commands_of_another_profile_are_refused(self):
+        # they would print another profile's keys, write into its settings or sign it in
+        for args in (["configure", "export-credentials", "--profile", "other", "--format", "env"],
+                     ["configure", "get", "aws_secret_access_key", "--profile", "other"],
+                     ["configure", "set", "region", "us-east-1", "--profile=other"],
+                     ["sso", "login", "--profile", "other"], ["--profile", "other", "login"], ["logout", "--prof", "other"]):
+            with self.subTest(args=args):
+                out = self.run_tool("aws", *args, FAKE_ACCOUNT="999999999999")
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertEqual(out.stderr, "keyfit: this folder belongs to demo (AWS profile iam); refusing --profile "
+                                             "other.\n  Bypass once: KEYFIT_DISABLE=1 aws …\n")
+        # the project's own profile and the shared ones still run, although the check fails
+        for args in (["configure", "get", "region", "--profile", "iam"], ["sso", "login", "--profile", "ci-worker"],
+                     ["configure", "export-credentials"]):
+            out = self.run_tool("aws", *args, FAKE_ACCOUNT="999999999999")
+            self.assertEqual((out.returncode, json.loads(out.stdout)["argv"]), (0, args), out.stderr)
+
+    def test_a_project_without_an_aws_account_signs_in_to_any_profile(self):
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=plain, check=True)
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config)}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            main(["init", "--yes", "--root", str(plain), "--name", "plain"])
+        out = self.run_tool("aws", "sso", "login", "--profile", "other", cwd=plain)  # then: keyfit add aws
+        self.assertEqual((out.returncode, json.loads(out.stdout)["argv"]), (0, ["sso", "login", "--profile", "other"]),
+                         out.stderr)
 
     def test_disable_bypasses_once(self):
         out = self.run_tool("aws", "s3", "ls", KEYFIT_DISABLE="1", AWS_PROFILE="other")

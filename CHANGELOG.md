@@ -489,6 +489,17 @@ From the third pre-launch review:
 - **A folder's `.env` cannot move wrangler's profiles.** `XDG_CONFIG_HOME` there would have wrangler
   read and write its profiles and bindings where Keyfit doesn't look (and `Sign in now?` sign in
   there); it now fails the check like the sign-in endpoints.
+- **Sign-in commands are only the sign-ins, so they no longer print another account's token.** Whole
+  command groups ran without checks or refusals. `gh auth token` in a project printed the token of
+  gh's active account, not the project's: only `gh auth login`, `logout`, `refresh`, `switch` and
+  `setup-git` are sign-ins now, `gh auth token`, `status` and `git-credential` are checked and answer
+  with the project's `GH_TOKEN`, and `--user` another account, `--secure-storage` without `--user` and
+  `--show-token` without `--active` are refused. In a project without a GitHub account, `gh auth
+  status` still runs unchecked, to list the logins to map. `aws configure`, `sso login` and `login`
+  took any `--profile`, so `aws configure export-credentials --profile other` printed that profile's
+  keys: another profile is refused there too (shared profiles still run). `vercel teams invite`,
+  `members`, `add`, `request` and `sso` ran unchecked on the team selected in the login folder: only
+  `teams switch` and `teams ls` are sign-ins now, and the rest are checked and get the project's team.
 
 ## [0.1.0] - 2026-10-12
 
