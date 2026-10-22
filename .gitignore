@@ -1,9 +1,12 @@
 # never commit credentials or per-machine agent config
 .env
 .env.*
+.envrc
+.direnv/
 .mcp.json
 .claude/settings.local.json
 .codex/
+.vercel/
 *.pem
 *.key
 

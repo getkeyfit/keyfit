@@ -228,7 +228,7 @@ def version(binary: str) -> tuple[int, ...] | None:
 
 
 def shell_path(path) -> str:
-    """A folder as a shell argument: ~/… for the home folder, with special characters escaped (GTM\\ Engine)."""
+    """A folder as a shell argument: ~/… for the home folder, with special characters escaped (Acme\\ Corp)."""
     return re.sub(r"[^\w@%+=:,./~-]", lambda m: "\\" + m.group(), tilde(path))
 
 

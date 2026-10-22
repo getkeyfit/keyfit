@@ -23,10 +23,12 @@ Keep it that way: a new test module sets `KEYFIT_CONFIG_DIR` to a temporary dire
 top, like the existing ones.
 
 `tests/test_install.py` builds a wheel offline, installs it into a temporary virtualenv and runs
-its `keyfit setup` and shims; it is skipped when this Python has no setuptools 77+ or pip.
+its `keyfit setup` and shims; it is skipped when this Python has no setuptools 77+ or pip
+(`python3 -m pip install "setuptools>=77"` brings them).
 
-CI (`.github/workflows/ci.yml`) runs the same command on macOS with Python 3.11, 3.12 and 3.13,
-then runs `keyfit setup` into temporary folders and syntax-checks every generated `shell.*` file.
+CI (`.github/workflows/ci.yml`) runs the same command on macOS with Python 3.11, 3.12, 3.13 and 3.14,
+after installing setuptools 77+ so `tests/test_install.py` runs too, then runs `keyfit setup` into
+temporary folders and syntax-checks every generated `shell.*` file.
 
 ## Run from a checkout
 

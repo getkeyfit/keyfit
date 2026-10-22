@@ -268,6 +268,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the others: the kind column is now ten characters wide.
 - Guided `keyfit init` on a Mac without Codex said `no clean ChatGPT login in ~/.codex … sign in
   (codex login)`; it now says `codex not found on PATH — skipped`, like the other tools.
+- Python 3.14 is tested and listed in the package's classifiers. CI now also runs the tests that
+  install a built wheel (they were skipped on every Python), and a release installs its wheel into a
+  fresh virtualenv and runs `keyfit --version` and `keyfit setup` before anything is published.
 
 ### Security
 
