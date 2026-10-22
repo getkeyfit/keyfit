@@ -1,5 +1,7 @@
 """End-to-end: shims written by `keyfit setup`, run as real processes in temporary folders."""
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -11,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from keyfit import mcp
+from keyfit import mcp, secrets
 from keyfit.cli import main
 from keyfit.registry import LEGACY_KINDS, Project, Registry
 from keyfit.shim import Refused, adjust_args, sign_in_command, subcommand, CLAUDE_SUBCOMMANDS, CODEX_SUBCOMMANDS
@@ -205,6 +207,70 @@ class ShimTests(unittest.TestCase):
         self.run_tool("aws", "s3", "ls")
         self.run_tool("aws", "s3", "ls")
         self.assertEqual(self.sts.read_text(), "x")  # one STS call for two launches
+
+    def keyfit(self, *args, **extra):
+        """`keyfit …` from this checkout in its own process, with the shims' environment."""
+        env = {"PATH": f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin",
+               "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config), "STS_COUNT": str(self.sts), **extra}
+        code = "import sys; sys.path.insert(0, sys.argv.pop(1)); from keyfit.cli import main; sys.exit(main(sys.argv[1:]))"
+        return subprocess.run([sys.executable, "-I", "-c", code, str(Path(__file__).resolve().parent.parent), *args],
+                              cwd=self.repo, env=env, capture_output=True, text=True, timeout=60)
+
+    def test_a_failed_check_is_not_overruled_by_the_success_cached_before(self):
+        self.assertEqual(self.run_tool("aws", "s3", "ls").returncode, 0)  # checked and cached
+        status = self.keyfit("status", FAKE_ACCOUNT="999999999999")  # the profile now signs in to another account
+        self.assertEqual(status.returncode, 1, status.stdout)
+        self.assertIn("✘ aws", status.stdout)
+        out = self.run_tool("aws", "s3", "ls", FAKE_ACCOUNT="999999999999")
+        self.assertEqual((out.returncode, out.stdout), (1, ""))
+        self.assertIn("signed in to account …9999, project expects …4444", out.stderr)
+
+    def test_offline_fallback_is_said_for_every_tool(self):
+        self.run_tool("aws", "s3", "ls")  # checked and cached
+        cached = self.config / "cache" / "checks.json"
+        entries = json.loads(cached.read_text())
+        for entry in entries.values():
+            entry["at"] -= 3600  # an hour ago: no longer fresh, trusted for a day when AWS cannot be reached
+        cached.write_text(json.dumps(entries))
+        executable(self.bin / "aws", FAKE_AWS.replace('print(os.environ.get("FAKE_ACCOUNT", "444444444444")); sys.exit(0)',
+                                                      'sys.exit("Could not connect to the endpoint URL")'))
+        out = self.run_tool("aws", "s3", "ls")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(json.loads(out.stdout)["AWS_PROFILE"], "iam")
+        self.assertIn("keyfit: ! aws", out.stderr)
+        self.assertIn("account confirmed 1h 0m ago · could not re-check now (Could not connect to the endpoint URL)",
+                      out.stderr)
+
+    def test_failing_git_stops_tools_in_a_repository_but_not_outside(self):
+        # git broken by a macOS update (Xcode's licence not accepted): the repository may be a project's
+        executable(self.bin / "git", "#!/bin/sh\necho 'You have not agreed to the Xcode license agreements.' >&2\n"
+                                     "exit 69\n")
+        for tool, args in (("claude", ("-p", "hi")), ("aws", ("s3", "ls"))):
+            with self.subTest(tool):
+                out = self.run_tool(tool, *args, AWS_PROFILE="other")
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn(f"keyfit: {tool} not started: git failed in {self.repo} (You have not agreed to the "
+                              f"Xcode license agreements.), so Keyfit cannot tell which project that folder belongs "
+                              f"to.\n  Fix git (keyfit doctor shows how), or bypass once: KEYFIT_DISABLE=1 {tool} …\n",
+                              out.stderr)
+        out = self.run_tool("aws", "s3", "ls", cwd=self.outside, AWS_PROFILE="other")  # no .git here or above
+        self.assertEqual(json.loads(out.stdout)["AWS_PROFILE"], "other")
+        self.assertEqual(self.sts.read_text(), "")
+        here = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            with mock.patch.dict(os.environ, {"PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin", "HOME": str(self.home),
+                                              "KEYFIT_CONFIG_DIR": str(self.config)}), \
+                    mock.patch.object(secrets, "keychain_reachable", return_value=""), \
+                    contextlib.redirect_stdout(io.StringIO()) as doctor:
+                self.assertEqual(main(["doctor"]), 1)
+        finally:
+            os.chdir(here)
+        self.assertIn(f"  ✘ git        {self.bin / 'git'}   You have not agreed to the Xcode license agreements. · "
+                      f"tools do not start inside git repositories\n    → sudo xcodebuild -license accept\n",
+                      doctor.getvalue())
+        self.assertIn(f"  ✘ project    this folder   git failed in {self.repo} (You have not agreed", doctor.getvalue())
+        self.assertNotIn("All good", doctor.getvalue())
 
     def test_unregistered_folder_passes_through(self):
         out = self.run_tool("aws", "s3", "ls", cwd=self.outside, AWS_PROFILE="other")
