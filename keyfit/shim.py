@@ -434,7 +434,8 @@ def copilot_login_check(project: Project) -> None:
 
 
 def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
-    """Refuse options that would leave the project's Vercel login or team (like `aws --profile`), then add the
+    """Refuse options that would leave the project's Vercel login or team (like `aws --profile`) and a folder to
+    work in that is linked to another team (--cwd, `deploy <path>`, `vercel <path>`, `dev <dir>`), then add the
     login's folder (--global-config) and the team (--scope) unless the user named them already."""
     conn = project.connections["vercel"]
     folder = canonical(conn["config_dir"])
@@ -457,6 +458,16 @@ def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
             if link is not None:
                 raise Refused(f"keyfit: {tilde(link[0])} links {value} to another Vercel team ({printable(link[1])}), but this "
                               f"folder belongs to {project.name} (Vercel team {team}); refusing --cwd {value}.{bypass}")
+    command, paths = vercel.targets(args)
+    moved = [value for name, value in given if name == "--cwd" and value]
+    base = cwd / moved[-1] if moved and command == "deploy" else cwd  # `dev [dir]` starts from the shell's folder
+    for path in paths:
+        if (base / path).is_dir():  # the CLI deploys only a folder
+            link = vercel.foreign_link(conn, base / path, env)
+            if link is not None:
+                raise Refused(f"keyfit: {tilde(link[0])} links {path} to another Vercel team ({printable(link[1])}), but "
+                              f"this folder belongs to {project.name} (Vercel team {team}); refusing {command} {path}."
+                              f"{bypass}")
     names = {name for name, _ in given}
     extra = [] if "--global-config" in names else vercel.config_args(conn, env)
     if team and not names & {"--scope", "--team"}:

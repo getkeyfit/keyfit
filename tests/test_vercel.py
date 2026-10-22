@@ -255,6 +255,41 @@ class AdapterTests(VercelCase):
         (repo / ".vercel" / "repo.json").write_text(json.dumps({"orgId": "team_globex", "projects": []}))
         self.assertIn("repo.json links", self.check(self.conn()).detail)
 
+    def test_repo_json_links_each_folder_to_its_projects_team(self):
+        # the current format: a team per project (the top-level orgId is deprecated); the CLI takes the entry whose
+        # directory holds the folder, the deepest one
+        self.login(self.default)
+        repo = self.repos["client"]
+        (repo / ".vercel").mkdir()
+        for sub in ("apps/web/src", "apps/site"):
+            (repo / sub).mkdir(parents=True)
+        (repo / ".vercel" / "repo.json").write_text(json.dumps({"remoteName": "origin", "projects": [
+            {"id": "prj_1", "name": "web", "directory": "apps/web", "orgId": "team_globex"},
+            {"id": "prj_2", "name": "site", "directory": "apps/site", "orgId": "team_acme"}]}))
+        for cwd, failed in ((repo / "apps" / "web" / "src", True), (repo / "apps" / "site", False),
+                            (repo, True)):  # no entry for the root: any other team's entry counts
+            os.chdir(cwd)
+            check = self.check(self.conn())
+            self.assertEqual(check.failed, failed, cwd)
+        self.assertIn("repo.json links this repository to another Vercel team (team_globex)", check.detail)
+        for config, status in (({"orgId": "team_globex", "projects": [{"directory": "."}]}, "fail"),
+                               ({"orgId": "team_globex", "projects": [{"directory": ".", "orgId": "team_acme"}]}, "ok")):
+            (repo / ".vercel" / "repo.json").write_text(json.dumps(config))
+            self.assertEqual(self.check(self.conn()).status, status, config)
+
+    def test_targets_are_read_like_the_cli(self):
+        for args, expected in ((["deploy", "../x", "--prod"], ("deploy", ["../x"])),
+                               (["../x"], ("deploy", ["../x"])),
+                               (["--prod", "../x"], ("deploy", ["../x"])),  # an option of deploy: the default command
+                               (["--prod", "dev"], ("deploy", ["dev"])),
+                               (["-dS", "acme", "env", "ls"], ("deploy", ["env"])),  # env is a command, but Keyfit
+                               (["dev", "--listen", "3000", "web"], ("dev", ["3000", "web"])),  # keeps no list
+                               (["--cwd", "apps", "deploy", "--target", "production", "web"],
+                                ("deploy", ["production", "web"])),
+                               (["--", "../x"], ("deploy", ["../x"])),
+                               ([], ("deploy", []))):
+            self.assertEqual(vercel.targets(args), expected, args)
+
     def test_text_from_the_repository_cannot_drive_the_terminal(self):
         # a cloned repository controls .vercel/project.json; its orgId is printed in the failure
         self.login(self.default)
@@ -446,6 +481,41 @@ class ShimTests(VercelCase):
         code, argv, _ = self.run_shim("deploy", cwd=app)
         self.assertEqual(code, 1)
         self.assertIn("links this repository to another Vercel team (team_globex)", self.stderr)
+
+    def test_a_folder_to_deploy_linked_to_another_team_is_refused(self):
+        # the CLI deploys, or runs `vercel dev` in, the path's own link, whatever --scope says
+        self.login(self.default)
+        repo = self.repos["client"]
+        (repo / "apps" / "site").mkdir(parents=True)
+        (repo / ".vercel").mkdir()
+        (repo / ".vercel" / "repo.json").write_text(json.dumps({"remoteName": "origin", "projects": [
+            {"id": "prj_1", "name": "client", "directory": ".", "orgId": "team_acme"},
+            {"id": "prj_2", "name": "web", "directory": "apps/web", "orgId": "team_globex"}]}))
+        web = repo / "apps" / "web"
+        (web / ".vercel").mkdir(parents=True)
+        (web / ".vercel" / "project.json").write_text(json.dumps({"orgId": "team_globex", "projectId": "prj_2"}))
+        other = self.repos["mine"]
+        (other / ".vercel").mkdir()
+        (other / ".vercel" / "project.json").write_text(json.dumps({"orgId": "team_globex", "projectId": "prj_3"}))
+        for args, refused in ((["deploy", "apps/web"], "refusing deploy apps/web"),
+                              (["apps/web"], "refusing deploy apps/web"),
+                              (["--prod", "apps/web"], "refusing deploy apps/web"),
+                              (["deploy", "--prod", str(other)], f"refusing deploy {other}"),
+                              (["--cwd", "apps", "deploy", "web"], "refusing deploy web"),
+                              (["dev", "apps/web"], "refusing dev apps/web")):
+            with self.subTest(args=args):
+                code, argv, _ = self.run_shim(*args)
+                self.assertEqual((code, argv), (1, None))
+                self.assertIn("links ", self.stderr)
+                self.assertIn("to another Vercel team (team_globex), but this folder belongs to client (Vercel team "
+                              f"acme); {refused}.\n  Bypass once: KEYFIT_DISABLE=1 vercel …", self.stderr)
+        (web / ".vercel" / "project.json").unlink()  # the repository's link alone: its entry for apps/web
+        code, argv, _ = self.run_shim("deploy", "apps/web")
+        self.assertEqual(code, 1)
+        self.assertIn("repo.json links apps/web to another Vercel team (team_globex)", self.stderr)
+        for args in (["deploy", "apps/site"], ["deploy"], ["env", "ls"], ["dev"]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual(argv, ["vercel", "--scope", "acme", *args], self.stderr)
 
     def test_session_keeps_vercel_on_its_project(self):
         self.login(self.own, HUBOT)
