@@ -21,11 +21,11 @@ scrub   — where Gemini CLI starts (the shim and the remote check): the variabl
           GOOGLE_CLOUD_PROJECT, GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_GENAI_USE_VERTEXAI, …). Sessions of other agents
           keep them. GEMINI_DEFAULT_AUTH_TYPE preselects the account's method in Gemini CLI's sign-in dialog. Gemini CLI
           loads one .env file (the nearest, from its folder up to /, else its home's) for each variable not set:
-          the local check fails when that file would bring one of them back, and warns when the file is the
-          project's own (in one of its folders: its key or Google Cloud project, not another client's).
+          the local check fails when that file would bring one of them back. In the project's own .env (in one of
+          its folders) a key, Google Cloud project or method its app uses (APP_SETTINGS) only warns.
 forget  — in a project without a Gemini CLI account, what Keyfit set for another project goes.
-local   — no .env file Gemini CLI may load outside the project's folders sets a variable Keyfit removed (only the
-          names are read; the project's own .env gets a warning). Google: the
+local   — no .env file Gemini CLI may load sets a variable Keyfit removed (only the names are read); the project's
+          own .env setting its app's key, project or method gets a warning. Google: the
           home's sign-in method is Google's (or not chosen yet), it holds a Google sign-in, and that sign-in's email
           is the project's Google account. Key: the key is there and the home uses the API-key method. Only labels
           are read, never a token.
@@ -70,6 +70,13 @@ SCRUB = ("GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_ACCES
          "GEMINI_DEFAULT_AUTH_TYPE", "GEMINI_CLI_USE_COMPUTE_ADC", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
          "CODE_ASSIST_ENDPOINT")
 SCRUB_PREFIXES = ("GOOGLE_EXTERNAL_ACCOUNT_",)
+# Of those, what a project's own .env sets for its app (a key or credential, its Google Cloud project and location,
+# google-genai's method switches): there only a warning. Every other name (an endpoint, Gemini CLI's home, the
+# credential store, an external account) fails the check wherever it is set: a repository must never send the sign-in's
+# token to another host or move the sign-in.
+APP_SETTINGS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CREDENTIALS",
+                "GOOGLE_CLOUD_ACCESS_TOKEN", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID", "GOOGLE_CLOUD_LOCATION",
+                "GOOGLE_CLOUD_QUOTA_PROJECT", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_GCA")
 MODELS = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1"
 SHARED = ("GEMINI.md", "commands", "skills", "agents", "policies", "extensions")  # follow you into a new home
 EXPIRY_MARGIN = 60  # seconds: a token about to expire is treated as expired
@@ -426,10 +433,17 @@ class GeminiAdapter(Adapter):
         if not path.is_dir():
             return fail(f"Gemini CLI folder {tilde(path)} does not exist",
                         f"keyfit add gemini --name {name} " + ("--key" if is_key(conn) else "--new"))
-        found = reloaded(conn, env, Path.cwd())  # first: Gemini CLI's sign-in would load the file too
-        own = [item for item in found if projects_own(item[0], env)]
-        if len(own) < len(found):  # outside the project's folders: it can hold another account's key
-            return fail(*reloaded_problem([item for item in found if item not in own], path))
+        own, others = [], []
+        for file, names in reloaded(conn, env, Path.cwd()):  # first: Gemini CLI's sign-in would load the file too
+            app = [name for name in names if name in APP_SETTINGS]
+            if app and not projects_own(file, env):  # outside the project's folders: another account's key, say
+                app = []
+            if app:
+                own.append((file, app))
+            if len(app) < len(names):
+                others.append((file, [name for name in names if name not in app]))
+        if others:
+            return fail(*reloaded_problem(others, path))
 
         def ok(detail: str) -> Check:
             if not own:

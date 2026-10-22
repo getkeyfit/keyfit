@@ -188,13 +188,17 @@ class AdapterTests(unittest.TestCase):
         key = {"name": "key", "home": str(self.own), "key": "env:ACME_KEY"}
         self.assertEqual(self.verify(key, ACME_KEY=KEY).status, "ok")
 
-    def test_the_projects_own_dotenv_warns_and_one_outside_its_folders_fails(self):
+    def register(self):
+        """Register self.repo as project acme (KEYFIT_PROJECT=acme makes it the session's project)."""
         config = self.tmp / "config"
         config.mkdir()
         (config / "registry.toml").write_text(f'[projects.acme]\nroots = ["{self.repo}"]\n')
         patcher = mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(config)})
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_the_projects_own_dotenv_warns_and_one_outside_its_folders_fails(self):
+        self.register()
         sign_in(self.own, ACME, valid=True)
         (self.repo / ".env").write_text("GOOGLE_CLOUD_PROJECT=acme-app\nGEMINI_API_KEY=AIzaNeverShown\n")
         check = self.verify(KEYFIT_PROJECT="acme")  # the project's own settings: its key, its Google Cloud project
@@ -212,6 +216,28 @@ class AdapterTests(unittest.TestCase):
         check = self.verify(KEYFIT_PROJECT="acme")
         self.assertTrue(check.failed)
         self.assertIn(f"{self.tmp / '.env'} sets GEMINI_API_KEY, which Gemini CLI would load", check.detail)
+
+    def test_an_endpoint_or_the_home_fails_also_in_the_projects_own_dotenv(self):
+        # a repository must never send the sign-in's token to another host or move the sign-in
+        self.register()
+        sign_in(self.own, ACME, valid=True)
+        for name in ("CODE_ASSIST_ENDPOINT", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL",
+                     "GOOGLE_CLOUD_UNIVERSE_DOMAIN", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
+                     "GOOGLE_EXTERNAL_ACCOUNT_X"):
+            (self.repo / ".env").write_text(f"{name}=x\n")
+            check = self.verify(KEYFIT_PROJECT="acme")
+            self.assertTrue(check.failed, name)
+            self.assertIn(f"sets {name}, which Gemini CLI would load", check.detail)
+        # with the app's key next to it: the endpoint fails, and only the endpoint is named
+        (self.repo / ".env").write_text("GEMINI_API_KEY=x\nCODE_ASSIST_ENDPOINT=https://proxy.example\n")
+        check = self.verify(KEYFIT_PROJECT="acme")
+        self.assertEqual(check.detail, f"{self.repo / '.env'} sets CODE_ASSIST_ENDPOINT, which Gemini CLI would load "
+                                       f"although Keyfit removed it for the project's account")
+        # your own ~/.gemini: GEMINI_CLI_HOME there would move the sign-in
+        sign_in(self.home, ACME, valid=True)
+        (self.repo / ".env").write_text("GEMINI_CLI_HOME=/elsewhere\n")
+        self.assertIn("sets GEMINI_CLI_HOME, which", self.verify({"name": "personal", "account": ACME},
+                                                                 KEYFIT_PROJECT="acme").detail)
 
     def test_only_the_dotenv_gemini_cli_loads_counts(self):
         sign_in(self.own, ACME, valid=True)
