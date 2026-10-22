@@ -713,14 +713,23 @@ def convex_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
             continue
         if name == "--admin-key":
             raise Refused(f"{refuse} --admin-key: it would skip {project.name}'s Convex login and its check.{bypass}")
+        if "|" in value and name in ("--team", "--deployment", "--deployment-name"):  # a deploy key: never printed
+            raise Refused(f"{refuse} {name}: its value holds a deploy key (…|…).{bypass}")
         if name == "--team" and value != team:
             raise Refused(f"{refuse} --team {printable(value)}.{bypass}")
         if name == "--deployment" and value.count(":") == 2 and value.split(":")[0] != team:
             raise Refused(f"{refuse} --deployment {printable(value)}: another team.{bypass}")
         if name == "--deployment-name" or (name == "--deployment" and convex.DEPLOYMENT_NAME.fullmatch(value)):
-            asked.append((f"{name} {value}", value))  # any other --deployment is a ref inside the folder's project
+            # any other --deployment is a ref inside the folder's project; only a deployment name is printed or sent
+            asked.append((f"{name} {value}" if convex.DEPLOYMENT_NAME.fullmatch(value) else name, value))
         if name == "--env-file":
-            aim = convex.target(cwd, env, files=convex.read_env_file(cwd / value))
+            values = convex.read_env_file(cwd / value)
+            if values is None:
+                raise Refused(f"{refuse} --env-file {printable(value)}: Keyfit cannot read it, so it cannot check the "
+                              f"deployment it names.{bypass}")
+            aim = convex.target(cwd, env, files=values)
+            if aim and aim["kind"] == "invalid":
+                raise Refused(f"{refuse} --env-file {printable(value)}: {aim['source']} {aim['why']}.{bypass}")
             if aim and aim["kind"] == "preview" and aim["team"] != team:
                 raise Refused(f"{refuse} --env-file {printable(value)}: a preview deploy key of another team "
                               f"({printable(aim['team'])}).{bypass}")

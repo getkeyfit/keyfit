@@ -13,15 +13,19 @@ from that plain file whenever Keyfit builds a session.
 The deployment the CLI works on: CONVEX_DEPLOY_KEY (or CONVEX_DEPLOYMENT_TOKEN), else CONVEX_SELF_HOSTED_URL with
 CONVEX_SELF_HOSTED_ADMIN_KEY, else CONVEX_DEPLOYMENT (`dev:happy-animal-123`, written by `npx convex dev`). Each is
 read from the environment, else .env.local, else .env in the folder the CLI runs in (dotenv: a variable that is
-already set wins, so an inherited one outranks the folder's own files).
+already set wins, so an inherited one outranks the folder's own files). The files are parsed like dotenv does; one
+Keyfit cannot read leaves the deployment unknown, and the check fails.
 
 inject  — CONVEX_OVERRIDE_ACCESS_TOKEN is the account's token, so every convex the session starts (`npx convex` too)
           acts as that account, also after a `convex login` elsewhere; CONVEX_PROVISION_HOST is removed, so the token
-          only goes to api.convex.dev; inherited CONVEX_DEPLOY_KEY, CONVEX_DEPLOYMENT_TOKEN and CONVEX_DEPLOYMENT that
-          disagree with the folder's .env.local/.env are removed: they belong to another project.
+          only goes to api.convex.dev; inherited CONVEX_DEPLOY_KEY, CONVEX_DEPLOYMENT_TOKEN, CONVEX_DEPLOYMENT and the
+          CONVEX_SELF_HOSTED_ pair that disagree with the folder's .env.local/.env are removed: they belong to another
+          project.
 forget  — in a project without a Convex account, a token Keyfit gave another project's session is removed.
           Not where a project deploy key is in effect: the CLI then refuses any login but that key.
-local   — the token is there and is not a deploy key; a preview deploy key names the account's team.
+local   — the token is there and is not a deploy key; a preview deploy key names the account's team; the files that
+          decide can be read, and a cloud deployment is named by its name (only a name is ever sent or printed: a
+          CONVEX_DEPLOYMENT holding a deploy key fails here).
 remote  — GET api.convex.dev/api/teams must accept the token and list the team (what `npx convex login status`
           shows); the folder's cloud deployment must belong to that team
           (GET /api/deployment/<name>/team_and_project). Local and self-hosted deployments need no account.
@@ -51,6 +55,15 @@ SELF_HOSTED = ("CONVEX_SELF_HOSTED_URL", "CONVEX_SELF_HOSTED_ADMIN_KEY")
 ENV_FILES = (".env.local", ".env")  # read from the folder the CLI runs in, in this order, none overriding
 DEPLOY_KEY = re.compile(r"(?:dev|prod|preview|project):[^|\s]*\|")  # what a deploy key starts with
 DEPLOYMENT_NAME = re.compile(r"[a-z]+-[a-z]+-[0-9]+")  # the CLI's own pattern (use fullmatch)
+# dotenv's LINE (lib/main.js of dotenv 16.4.7, the convex CLI's), with JavaScript's \s (a BOM is one), \w, ., ^ and $
+# (multiline) spelled out. Kept as text: re compiles it on first use, not at every shim start.
+_S = "[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]"
+_BOL, _EOL = "(?:\\A|(?<=[\n\r\u2028\u2029]))", "(?=[\n\r\u2028\u2029]|\\Z)"
+LINE = (rf"{_BOL}{_S}*(?:export{_S}+)?([A-Za-z0-9_.-]+)(?:{_S}*={_S}*?|:{_S}+?)"
+        rf"""({_S}*'(?:\\'|[^'])*'|{_S}*"(?:\\"|[^"])*"|{_S}*`(?:\\`|[^`])*`|[^#\r\n]+)?"""
+        rf"{_S}*(?:#[^\n\r\u2028\u2029]*)?{_EOL}")
+TRIM = rf"\A{_S}+|{_S}+\Z"  # String.prototype.trim
+QUOTED = rf"""{_BOL}(['"`])([\s\S]*)\1{_EOL}"""  # dotenv's /^(['"`])([\s\S]*)\1$/mg
 SIGN_IN = "npx convex login --force"  # Convex projects run their CLI through npx; --force: even with a deploy key
 # Options that pick a login, a team or a deployment. With the other options that take a value (commander reads
 # `--name value` and `--name=value`) they are skipped when reading the command words; any other option is a flag.
@@ -114,37 +127,46 @@ def shape_problem(token: str) -> str:
     return ""
 
 
-def read_env_file(path: Path) -> dict:
-    """KEY=VALUE lines like dotenv reads them: `export` allowed, a quoted value as it is, else up to a `#`."""
+def read_env_file(path: Path) -> dict | None:
+    """The variables of a dotenv file as the convex CLI reads them (dotenv's parse): LINE matched over the whole text,
+    so `KEY: value` counts and a quoted value may span lines; invalid UTF-8 reads as U+FFFD, as in Node. {} when there
+    is no such file, None when it is there but cannot be read."""
     try:
-        text = path.read_text()
-    except (OSError, UnicodeDecodeError):
+        text = path.read_bytes().decode("utf-8", "replace")
+    except (FileNotFoundError, NotADirectoryError, IsADirectoryError):  # a .env folder (a virtualenv) holds nothing
         return {}
+    except OSError:
+        return None
     out = {}
-    for line in text.splitlines():
-        m = re.match(r"\s*(?:export\s+)?([\w.-]+)\s*=\s*(.*)$", line)
-        if not m:
-            continue
-        name, value = m.groups()
-        quoted = re.match(r"""(['"`])(.*?)\1""", value)
-        out[name] = quoted.group(2) if quoted else value.split("#", 1)[0].strip()
+    for m in re.finditer(LINE, re.sub(r"\r\n?", "\n", text)):
+        value = re.sub(TRIM, "", m.group(2) or "")
+        quote = value[:1]
+        value = re.sub(QUOTED, r"\2", value)
+        if quote == '"':
+            value = value.replace("\\n", "\n").replace("\\r", "\r")
+        out[m.group(1)] = value
     return out
 
 
-def folder_values(start) -> dict:
-    """What the folder's .env.local and .env say, .env.local first (the values the CLI falls back to)."""
+def folder_values(start) -> tuple[dict, str]:
+    """What the folder's .env.local and .env say, .env.local first (the values the CLI falls back to), and the first
+    of them that is there but cannot be read ("" when none): what it says is unknown, so nothing after it counts."""
     found = {}
     for name in ENV_FILES:
-        for key, value in read_env_file(Path(start) / name).items():
+        values = read_env_file(Path(start) / name)
+        if values is None:
+            return found, name
+        for key, value in values.items():
             found.setdefault(key, (value, name))
-    return found
+    return found, ""
 
 
 def scrub(env: dict, start) -> None:
-    """Remove inherited deployment variables the folder's own files disagree with: an exported CONVEX_DEPLOYMENT
-    outranks .env.local, so another project's would send this folder's commands to that project's deployment."""
-    files = folder_values(start)
-    for var in DEPLOY_VARS:
+    """Remove inherited deployment variables the folder's own files disagree with (or may: one Keyfit cannot read):
+    an exported CONVEX_DEPLOYMENT outranks .env.local, so another project's would send this folder's commands to that
+    project's deployment, and an inherited self-hosted pair outranks the folder's CONVEX_DEPLOYMENT."""
+    files = folder_values(start)[0]
+    for var in (*DEPLOY_VARS, *SELF_HOSTED):
         if var in env and env[var] != files.get(var, (None,))[0]:
             del env[var]
 
@@ -163,34 +185,54 @@ def deploy_key_target(key: str, source: str) -> dict:
     return {"kind": "deployment", "name": parts[-1], "type": parts[0] if len(parts) > 1 else "prod", "source": source}
 
 
+class Unreadable(Exception):
+    """The CLI may read the value from a file Keyfit cannot read (its name)."""
+
+
+def named(aim: dict) -> dict:
+    """*aim*, or kind "invalid" for a cloud deployment whose name is not one: only a name is sent to Convex or
+    printed."""
+    if aim["kind"] == "deployment" and not DEPLOYMENT_NAME.fullmatch(aim["name"]):
+        return {"kind": "invalid", "why": "does not name a Convex deployment", "source": aim["source"]}
+    return aim
+
+
 def target(start, env: dict, files: dict | None = None) -> dict | None:
     """The deployment the CLI would act on from *start* without options, and where it comes from (None: none set,
-    the CLI would ask). *files*: the values of an --env-file, used instead of the environment and the folder."""
+    the CLI would ask). *files*: the values of an --env-file, used instead of the environment and the folder.
+    kind "unreadable": a file that decides it cannot be read; "invalid": not a deployment Keyfit can check (why)."""
     if files is None:
-        found = folder_values(start)
+        found, unreadable = folder_values(start)
 
         def get(var):
             if var in env:  # set, even to "": dotenv does not override it
                 return env[var] or None, f"${var}"
+            if var not in found and unreadable:
+                raise Unreadable(unreadable)
             value, name = found.get(var, (None, ""))
             return value or None, f"{var} in {name}"
     else:
         def get(var):
             return files.get(var) or None, f"{var} in the --env-file"
-    for var in KEY_VARS:
-        key, source = get(var)
-        if key and key != "<ignore_deploy_key>":
-            return deploy_key_target(key, source)
-    url, source = get(SELF_HOSTED[0])
-    if url and get(SELF_HOSTED[1])[0]:
-        return {"kind": "self_hosted", "url": url, "source": source}
-    deployment, source = get("CONVEX_DEPLOYMENT")
+    try:
+        for var in KEY_VARS:
+            key, source = get(var)
+            if key and key != "<ignore_deploy_key>":
+                return named(deploy_key_target(key, source))
+        url, source = get(SELF_HOSTED[0])
+        if url and get(SELF_HOSTED[1])[0]:
+            return {"kind": "self_hosted", "url": url, "source": source}
+        deployment, source = get("CONVEX_DEPLOYMENT")
+    except Unreadable as err:
+        return {"kind": "unreadable", "source": str(err)}
     if not deployment:
         return None
+    if "|" in deployment:  # a deploy key in the wrong variable: never sent or printed
+        return {"kind": "invalid", "why": "holds a deploy key (…|…), not a deployment name", "source": source}
     kind, name = deployment.split(":")[0], deployment.split(":")[-1]
     if kind == "local" or name.startswith("anonymous-"):
         return {"kind": "local", "name": name, "source": source}
-    return {"kind": "deployment", "name": name, "type": kind if ":" in deployment else "", "source": source}
+    return named({"kind": "deployment", "name": name, "type": kind if ":" in deployment else "", "source": source})
 
 
 def options(args: list[str]) -> list[tuple[str, str | None]]:
@@ -302,6 +344,12 @@ class ConvexAdapter(Adapter):
         if aim and aim["kind"] == "preview" and aim["team"] != conn["team"]:
             return Check(self.kind, "fail", label, f"{aim['source']} is a preview deploy key of another team "
                          f"({aim['team']}), project expects {label}", f"a preview deploy key of {label}")
+        if aim and aim["kind"] == "unreadable":
+            return Check(self.kind, "fail", label, f"{aim['source']} cannot be read, so the deployment the convex CLI "
+                         "would use is unknown", f"make it readable: chmod u+r {aim['source']}")
+        if aim and aim["kind"] == "invalid":
+            return Check(self.kind, "fail", label, f"{aim['source']} {aim['why']}",
+                         f"npx convex dev --configure existing --team {conn['team']}")
         return Check(self.kind, "ok", label, "", pending=True)
 
     def remote(self, conn, env: dict) -> Check:
@@ -365,7 +413,10 @@ class ConvexAdapter(Adapter):
         return teams, "", False
 
     def deployment(self, token: str, name: str) -> tuple[dict | None, str, bool]:
-        """{name, team, project} of a cloud deployment the token can reach, or (None, why, transient)."""
+        """{name, team, project} of a cloud deployment the token can reach, or (None, why, transient). Only a deployment
+        name is sent: anything else may hold a deploy key."""
+        if not DEPLOYMENT_NAME.fullmatch(name):
+            return None, "not a Convex deployment name (like happy-animal-123)", False
         try:
             status, body = self.fetch(f"/api/deployment/{urllib.parse.quote(name, safe='')}/team_and_project", token,
                                       self.timeout)
