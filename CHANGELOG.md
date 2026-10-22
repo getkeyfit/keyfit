@@ -324,6 +324,25 @@ From the second pre-launch review:
   `--env-file` files are held to the same. A project that deliberately uses another Cloudflare host
   (staging, a compliance region) isn't supported yet.
 
+From the third pre-launch review:
+
+- **Claude's background sessions no longer run with another project's accounts.** Claude Code runs
+  them (`claude --bg`, agent view, `←` and `/background`, `claude respawn`) under one supervisor per
+  config folder, which keeps the environment of the start that launched it and gives it to every
+  background session, in any folder. A supervisor started in a project kept that project's accounts
+  for all of them, and Keyfit's check of the folder never applied. Claude sessions in a project now
+  start with background sessions and agent view off (`"disableAgentView": true` in `--settings`,
+  `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`), and `claude --bg`, `agents`, `attach`, `respawn` and
+  `daemon run` are refused in a project and inside a session. `claude daemon status`, `logs` and
+  `stop` run as typed (Keyfit's `--settings` in front of `daemon` kept them from running). A
+  supervisor that already runs keeps what it got: stop it once in a terminal outside every project,
+  with `claude daemon stop --any`.
+- **Codex's shared server no longer gets a project's accounts either.** It keeps the environment of
+  the start that launched it, for every folder. `codex resume` and `codex fork` now start with
+  `--no-daemon`, like `codex`, and `codex agents`, `queue`, `remote-control` and `app-server`, which
+  work on that server, are refused in a project. One that already runs: stop it with
+  `codex app-server daemon stop`, outside every project.
+
 ## [0.1.0] - 2026-10-12
 
 First public version. macOS only; Python 3.11 or newer, no other dependencies.

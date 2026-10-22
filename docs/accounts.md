@@ -29,6 +29,7 @@ Everything Keyfit does for each kind of account: how to map it, what the tool ge
 - **The tool gets:** the account's config folder: `CLAUDE_CONFIG_DIR`, left unset for the default `~/.claude`. API keys, OAuth tokens, gateway URLs and cloud-provider switches are removed.
 - **Checked before it starts:** `claude auth status` must report a claude.ai subscription login (not an API key), in the expected config folder and organization. With `--pin-email`, it must also be the exact login.
 - **Sign-in commands:** `claude auth …` always runs.
+- **Background sessions:** off in a project. Claude runs them (`claude --bg`, agent view, `←` and `/background`) under one supervisor per config folder, which keeps the environment of the start that launched it and gives it to every background session, in any folder. So sessions in a project start with `"disableAgentView": true` in `--settings` and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`, and `claude --bg`, `agents`, `attach`, `respawn` and `daemon run` are refused in a project and inside a session. `claude daemon status`, `logs` and `stop` run as typed. Start background sessions in a terminal outside every project, or bypass once with `KEYFIT_DISABLE=1 claude …`, which runs them with your own environment, without the project's accounts.
 
 **Limits.** Claude is checked by organization, not down to the person unless you pin it with `--pin-email`. That way, login pools that rotate between accounts keep working. Claude's own Gmail, Google Drive and Google Calendar connectors are outside Keyfit's reach: see [Gmail, Drive and Calendar](#gmail-drive-and-calendar).
 
@@ -36,7 +37,7 @@ Everything Keyfit does for each kind of account: how to map it, what the tool ge
 
 - **Map it:** `keyfit add codex`, the Codex login in `~/.codex`. Another one: `--codex-home PATH`.
 - **`keyfit init` offers:** whether to use the login currently in `~/.codex`.
-- **The tool gets:** `CODEX_HOME`. `CODEX_API_KEY` is removed, and interactive Codex runs without its shared daemon.
+- **The tool gets:** `CODEX_HOME`. `CODEX_API_KEY` is removed, and interactive Codex (`codex`, `codex resume`, `codex fork`) runs without its shared daemon (`--no-daemon`), which keeps the environment of the start that launched it, for every folder. `codex agents`, `queue`, `remote-control` and `app-server` work on that daemon, so they are refused in a project.
 - **Checked before it starts:** `auth.json` must hold a ChatGPT login and no API key. With `--pin-account`, it must also be the exact ChatGPT account. This check is local; there is no online check.
 - **Sign-in commands:** `codex login` always runs.
 

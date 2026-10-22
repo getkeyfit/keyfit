@@ -36,7 +36,8 @@ if args[:3] == ["auth", "status", "--json"]:
     folder = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude")
     print(json.dumps({"loggedIn": True, "authMethod": "claude.ai", "email": "me@work.io", "orgId": "org-work",
                       "orgName": "Work", "subscriptionType": "team", "configDirectory": folder})); sys.exit(0)
-print(json.dumps({"argv": args, "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY")}))
+print(json.dumps({"argv": args, "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY"),
+                  "CLAUDE_CODE_DISABLE_AGENT_VIEW": os.environ.get("CLAUDE_CODE_DISABLE_AGENT_VIEW")}))
 """
 
 
@@ -365,6 +366,45 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("claude", "mcp", "list")
         self.assertEqual(json.loads(out.stdout)["argv"], ["mcp", "list"])
 
+    def test_claude_session_starts_with_background_sessions_off(self):
+        seen = json.loads(self.run_tool("claude", "-p", "hello").stdout)
+        self.assertIs(json.loads(seen["argv"][1])["disableAgentView"], True)
+        self.assertEqual(seen["CLAUDE_CODE_DISABLE_AGENT_VIEW"], "1")
+
+    BACKGROUND = (["--bg", "x"], ["--background", "x"], ["agents"], ["respawn", "7c5dcf5d"], ["attach", "7c5dcf5d"],
+                  ["daemon", "run"])
+
+    def test_claude_background_commands_are_refused_in_a_project(self):
+        for args in self.BACKGROUND:
+            with self.subTest(args=args):
+                out = self.run_tool("claude", *args)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))  # the real claude never started
+                self.assertIn("keyfit: claude not started: `claude ", out.stderr)
+                self.assertIn("background supervisor", out.stderr)
+                self.assertIn("demo's accounts", out.stderr)
+                self.assertIn("KEYFIT_DISABLE=1 claude", out.stderr)
+
+    def test_claude_background_commands_are_refused_inside_a_session(self):
+        for args in self.BACKGROUND:
+            with self.subTest(args=args):
+                out = self.run_tool("claude", *args, cwd=self.outside, KEYFIT_PROJECT="demo")
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn("inside a session of demo", out.stderr)
+
+    def test_claude_background_commands_run_unchanged_outside_projects(self):
+        for args in self.BACKGROUND:
+            with self.subTest(args=args):
+                seen = json.loads(self.run_tool("claude", *args, cwd=self.outside).stdout)
+                self.assertEqual(seen["argv"], args)
+                self.assertIsNone(seen["CLAUDE_CODE_DISABLE_AGENT_VIEW"])
+        seen = json.loads(self.run_tool("claude", "--bg", "x", KEYFIT_DISABLE="1").stdout)  # the bypass
+        self.assertEqual(seen["argv"], ["--bg", "x"])
+
+    def test_claude_daemon_status_and_stop_run_as_typed(self):
+        for args in (["daemon", "status"], ["daemon", "logs"], ["daemon", "stop", "--any"]):
+            with self.subTest(args=args):
+                self.assertEqual(json.loads(self.run_tool("claude", *args).stdout)["argv"], args)
+
 
 class ArgumentTests(unittest.TestCase):
     def setUp(self):
@@ -392,6 +432,24 @@ class ArgumentTests(unittest.TestCase):
 
     def test_codex_management_untouched(self):
         self.assertEqual(adjust_args("codex", self.project, ["login", "status"], self.env, self.tmp), ["login", "status"])
+
+    def test_codex_resume_and_fork_run_without_daemon(self):
+        for sub in ("resume", "fork"):
+            args = adjust_args("codex", self.project, [sub, "--last"], self.env, self.tmp)
+            self.assertEqual(args, ["-c", "mcp_servers.linear_b.enabled=false", "--no-daemon", sub, "--last"])
+
+    def test_codex_shared_server_commands_are_refused(self):
+        for args in (["agents"], ["queue", "--thread", "t", "--message", "m"], ["remote-control"], ["app-server"]):
+            with self.subTest(args=args):
+                with self.assertRaises(Refused) as refused:
+                    adjust_args("codex", self.project, args, self.env, self.tmp)
+                self.assertIn(f"`codex {args[0]}` works on Codex's shared app server", str(refused.exception))
+                self.assertIn("KEYFIT_DISABLE=1 codex", str(refused.exception))
+
+    def test_claude_daemon_commands_untouched(self):
+        env = dict(self.env)
+        self.assertEqual(adjust_args("claude", self.project, ["daemon", "status"], env, self.tmp), ["daemon", "status"])
+        self.assertNotIn("CLAUDE_CODE_DISABLE_AGENT_VIEW", env)
 
     def test_unverified_mcp_json_linear_is_disabled(self):
         (self.tmp / ".mcp.json").write_text(json.dumps({"mcpServers": {"linear": {"url": "https://mcp.linear.app/mcp"}}}))

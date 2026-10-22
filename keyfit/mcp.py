@@ -190,7 +190,7 @@ def claude_settings(project: Project, env: dict, cwd: Path, owners: dict | None 
     except (OSError, ValueError):
         local = {}
     disabled = [name for name, spec in local.items() if hidden(name, spec, project, owners, verified=False)]
-    settings = {}
+    settings = {"disableAgentView": True}  # background sessions would run with their supervisor's first environment
     if not _user_statusline(env):
         settings["statusLine"] = {"type": "command", "command": statusline_command()}
     if denied:

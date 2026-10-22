@@ -233,6 +233,7 @@ Measured on a MacBook Pro with an Apple M4 (16 GB, macOS 26.6, Python 3.13.3), w
 
   To run any other command with the project's accounts: `keyfit run -- <command>`.
 - **Online checks are cached for 30 minutes.** If a key is revoked within that window, Keyfit notices when the cached result expires, or at once with `keyfit status`. A new sign-in, key, token, login or link for any account is checked again right away. When a service cannot be reached, a success from the last 24 hours is accepted with a warning; a wrong account never is.
+- **No background sessions inside a project.** Claude Code runs its background sessions (`claude --bg`, agent view, `←` and `/background`) under one supervisor, and Codex its sessions on one shared server. Each keeps the environment of the start that launched it, for every folder. So Claude sessions in a project start with background sessions off, and `claude --bg`, `agents`, `attach`, `respawn` and `daemon run` are refused there and inside a session; `codex`, `codex resume` and `codex fork` run without the shared server, and `codex agents`, `queue`, `remote-control` and `app-server` are refused in a project. Outside every project they run as before.
 - **One account of each kind per project:** one AWS profile, one GitHub login, one Google account, and so on.
 - **Each account has limits of its own,** such as what is checked down to the person and which versions were verified. They are listed under each account in [docs/accounts.md][accounts].
 
