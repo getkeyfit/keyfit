@@ -5,10 +5,11 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from keyfit import environment
 from keyfit.registry import LEGACY_KINDS, Registry
-from keyfit.resolve import resolve
+from keyfit.resolve import GitError, resolve
 from keyfit.cli import main
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
@@ -163,6 +164,96 @@ class ResolveTests(unittest.TestCase):
         admin = self.repo / ".git" / "worktrees" / "feature"
         (admin / "gitdir").write_text(os.path.relpath(self.worktree / ".git", admin) + "\n")
         self.assertEqual(resolve(self.worktree, self.registry).project.name, "demo")
+
+    def broken_git(self, script: str) -> dict:
+        """PATH with a git that fails as *script* says, like one broken by a macOS update."""
+        folder = self.tmp / "broken-git"
+        folder.mkdir(exist_ok=True)
+        (folder / "git").write_text(f"#!/bin/sh\n{script}\n")
+        (folder / "git").chmod(0o755)
+        return {"PATH": f"{folder}:/bin"}
+
+    def test_failing_git_inside_a_repository_refuses_instead_of_answering_not_registered(self):
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        sub = self.worktree / "src"
+        sub.mkdir()
+        for script, reason in (
+                ("echo 'You have not agreed to the Xcode license agreements.' >&2; exit 69",
+                 "You have not agreed to the Xcode license agreements."),
+                ("echo 'xcrun: error: invalid active developer path' >&2; exit 1",
+                 "xcrun: error: invalid active developer path"),
+                ("echo \"fatal: detected dubious ownership in repository at '$2'\" >&2; exit 128",
+                 "fatal: detected dubious ownership in repository at '{}'"),
+                ("exit 1", "exit 1")):
+            with self.subTest(reason), mock.patch.dict(os.environ, self.broken_git(script)):
+                for folder in (self.repo, self.worktree, sub):
+                    with self.assertRaises(GitError) as caught:
+                        resolve(folder, self.registry)
+                    self.assertEqual((caught.exception.path, caught.exception.reason), (folder, reason.format(folder)))
+                r = resolve(plain, self.registry)  # no .git at or above: no repository, whatever git says
+                self.assertIsNone(r.project)
+                self.assertEqual(r.how, "not inside a registered project")
+        with mock.patch.dict(os.environ, {"PATH": str(self.tmp / "nowhere")}):  # no git at all
+            with self.assertRaisesRegex(GitError, "git is not installed"):
+                resolve(sub, self.registry)
+            self.assertIsNone(resolve(plain, self.registry).project)
+
+    def test_a_git_file_naming_a_folder_that_is_gone_refuses(self):
+        stale = self.tmp / "stale-worktree"
+        stale.mkdir()
+        (stale / ".git").write_text(f"gitdir: {self.tmp / 'gone' / '.git' / 'worktrees' / 'x'}\n")
+        with self.assertRaisesRegex(GitError, "not a git repository"):
+            resolve(stale, self.registry)
+
+    def test_inside_git_dir_and_bare_repositories_still_answer(self):
+        # git finds the repository there and only says there is no work tree: not a git failure
+        bare = self.tmp / "bare.git"
+        git("init", "-q", "--bare", str(bare), cwd=self.tmp)
+        self.assertIsNone(resolve(bare, self.registry).project)
+        self.assertEqual(resolve(self.repo / ".git", self.registry).project.name, "demo")  # ancestor rule, as before
+
+    def test_git_hook_variables_do_not_redirect_the_lookup(self):
+        # a git hook exports these; a tool it runs from a subfolder of a worktree inherits them
+        sub = self.worktree / "src"
+        sub.mkdir()
+        for name, value in (("GIT_DIR", str(self.repo / ".git" / "worktrees" / "feature")),
+                            ("GIT_WORK_TREE", str(sub)), ("GIT_COMMON_DIR", str(self.tmp / "elsewhere")),
+                            ("GIT_INDEX_FILE", str(self.tmp / "index")), ("GIT_CEILING_DIRECTORIES", str(self.worktree))):
+            with self.subTest(name), mock.patch.dict(os.environ, {name: value}):
+                r = resolve(sub, self.registry)
+                self.assertEqual((r.project and r.project.name, r.root), ("demo", self.repo), r.how)
+
+    def test_submodule_and_nested_repository_in_a_worktree_resolve_to_its_project(self):
+        lib = self.tmp / "lib"
+        lib.mkdir()
+        git("init", "-q", "-b", "main", cwd=lib)
+        (lib / "README").write_text("x")
+        git("add", ".", cwd=lib)
+        git("commit", "-q", "-m", "init", cwd=lib)
+        git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(lib), "lib", cwd=self.repo)
+        git("commit", "-q", "-m", "lib", cwd=self.repo)
+        worktree = self.tmp / "superset" / "demo-with-lib"
+        git("worktree", "add", "-q", str(worktree), "-b", "with-lib", cwd=self.repo)
+        git("-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", cwd=worktree)
+        nested = worktree / "vendor" / "tool"
+        nested.mkdir(parents=True)
+        git("init", "-q", cwd=nested)
+        for folder in (self.repo / "lib", worktree / "lib", nested):
+            r = resolve(folder, self.registry)
+            self.assertEqual((r.project and r.project.name, r.root), ("demo", self.repo), f"{folder}: {r.how}")
+            self.assertIn("nested git repository", r.how)
+
+    def test_unregistered_folders_ask_git_once(self):
+        other = self.tmp / "other"
+        other.mkdir()
+        git("init", "-q", cwd=other)
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        for folder in (other, plain):
+            with mock.patch("keyfit.resolve.subprocess.run", wraps=subprocess.run) as run:
+                self.assertIsNone(resolve(folder, self.registry).project)
+            self.assertEqual(run.call_count, 1, folder)
 
     def test_cli_init_and_which(self):
         reg_path = self.tmp / "cli-registry.toml"

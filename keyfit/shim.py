@@ -27,7 +27,7 @@ from .adapters.google import same
 from .checks import printable
 from .realbin import find_real
 from .registry import Project, Registry, RegistryError, canonical, tilde
-from .resolve import resolve
+from .resolve import GitError, resolve
 
 TOOLS = ("claude", "codex", "opencode", "copilot", "gemini", "aws", "gh", "vercel", "supabase", "wrangler", "convex",
          "gcloud", "firebase")
@@ -969,7 +969,10 @@ def superset_folder(profile: str, folder: str, project: Project, registry: Regis
     except OSError:
         return None
     for path in (parent, *entries):
-        there = resolve(path, registry).project
+        try:
+            there = resolve(path, registry).project
+        except GitError:  # git cannot tell where that worktree belongs: bind only the folder you are in
+            return None
         if there is not None and there.name != project.name:
             return None
     return parent
@@ -1146,6 +1149,11 @@ def main(argv: list[str]) -> int:
         args = adjust_args(tool, project, args, run_env, Path.cwd(), registry.mcp_owners(), seen)
     except Refused as refusal:
         print(refusal, file=sys.stderr)
+        return 1
+    except GitError as err:  # inside a repository git cannot read, the folder may be a project's: nothing starts
+        print(f"keyfit: {tool} not started: {printable(err)}, so Keyfit cannot tell which project that folder "
+              f"belongs to.\n  Fix git (keyfit doctor shows how), or bypass once: KEYFIT_DISABLE=1 {tool} …",
+              file=sys.stderr)
         return 1
     except RegistryError as err:  # a hand edit: no project can be told apart, so nothing starts checked
         _say([f"keyfit: {tool} not started, {tilde(err.path)} has a mistake", f"  ✘ {err}", f"    → {err.fix}",

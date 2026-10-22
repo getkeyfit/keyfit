@@ -27,7 +27,7 @@ from .adapters.aws import ACCOUNT_RE, parse_envrc, read_profile
 from .checks import Check, mask_account, printable
 from .registry import GOOGLE_TOOLS
 from .registry import Project, Registry, RegistryError, canonical, config_dir, default_path, tilde  # noqa: F401
-from .resolve import git_main_checkout, resolve
+from .resolve import GitError, git_main_checkout, resolve
 from .shim import INSTALL, MAP, RELEVANT
 
 TOOL_OF = {kinds[0]: tool for tool, kinds in RELEVANT.items() if kinds}  # github → gh
@@ -2219,6 +2219,21 @@ def cmd_doctor(args) -> int:
                                 "codex, opencode, copilot and gemini sessions"))
         else:
             checks.append(Check(tool, "warn", "not found on PATH", "needed only if you use it", INSTALL[tool]))
+    import shutil
+    import subprocess
+
+    git = shutil.which("git", path=env.get("PATH"))
+    try:  # which project a repository belongs to comes from git: without it, tools do not start inside repositories
+        out = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=10, check=False)
+        reason = "" if out.returncode == 0 else (out.stderr.strip().splitlines() or [f"exit {out.returncode}"])[0]
+    except FileNotFoundError:
+        out, reason = None, "not found on PATH"
+    except (OSError, subprocess.SubprocessError) as err:
+        out, reason = None, getattr(err, "strerror", None) or "no answer within 10 seconds"
+    checks.append(Check("git", "ok", _short(git or "git"), out.stdout.strip()) if not reason else
+                  Check("git", "fail", _short(git or "git"), f"{reason} · tools do not start inside git repositories",
+                        "sudo xcodebuild -license accept" if out is not None and out.returncode == 69
+                        else "xcode-select --install"))
     path = Path(args.registry) if args.registry else default_path()
     try:
         reg = Registry.load(path)
@@ -2232,8 +2247,13 @@ def cmd_doctor(args) -> int:
     checks.append(Check("keychain", "fail", "macOS Keychain", reason,
                         "/usr/bin/security list-keychains   (then repair the login keychain in Keychain Access)")
                   if reason else Check("keychain", "ok", "macOS Keychain", "reachable"))
-    if reg is not None:
-        r = resolve(".", reg)
+    try:
+        r = resolve(".", reg) if reg is not None else None
+    except GitError as err:
+        r = None
+        checks.append(Check("project", "fail", "this folder", f"{err}: which project it belongs to is unknown, so "
+                            "tools do not start here", "git status shows git's whole message; fix what it says"))
+    if r is not None:
         if r.registered:
             checks.append(Check("project", "ok", r.project.name, r.how))
             conn = r.project.connections.get("cloudflare")
@@ -2559,4 +2579,8 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except RegistryError as err:  # a hand edit: say where and how to fix it, not a traceback
         print(f"keyfit: cannot use {tilde(err.path)}: {err}\n  → {err.fix}", file=sys.stderr)
+        return 1
+    except GitError as err:  # inside a repository git cannot read, the folder may be a project's: nothing is assumed
+        print(f"keyfit: {printable(err)}, so Keyfit cannot tell which project that folder belongs to.\n"
+              f"  → fix git (keyfit doctor shows how)", file=sys.stderr)
         return 1
