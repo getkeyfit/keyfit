@@ -732,8 +732,8 @@ def cmd_add_mcp(args) -> int:
         return 1
     owned = reg.add_mcp_servers(project.name, args.servers)
     reg.save()
-    found = {**{n: "claude" for n in mcp.claude_user_servers(dict(os.environ))},
-             **{n: "codex" for n in mcp.codex_servers(dict(os.environ))},
+    found = {**{n: "claude" for n, _ in mcp.claude_servers(dict(os.environ), Path.cwd())},
+             **{n: "codex" for n in mcp.codex_servers(dict(os.environ), Path.cwd())},
              **{n: "opencode" for n, _, _ in mcp.opencode_servers(dict(os.environ), Path.cwd())},
              **{n: "gemini" for n, _, _ in mcp.gemini_servers(dict(os.environ), Path.cwd())}}
     print(f"{project.name}: owns MCP servers {', '.join(owned)} — hidden in every other project")

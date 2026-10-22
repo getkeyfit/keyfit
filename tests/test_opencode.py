@@ -369,6 +369,28 @@ class McpTests(unittest.TestCase):
         with self.assertRaises(mcp.Unreadable):
             self.hide(env={**self.env, "OPENCODE_CONFIG_CONTENT": "[1, 2]"})
 
+    def test_linear_servers_by_their_command_and_environment(self):
+        (self.config / "opencode.json").write_text(json.dumps({"mcp": {
+            "linear_local": {"type": "local", "command": ["npx", "linear-mcp-server"],
+                             "environment": {"LINEAR_API_KEY": "lin_api_" + "B" * 40}},
+            "linear_remote": {"type": "local", "command": ["npx", "mcp-remote", "https://mcp.linear.app/mcp", "--header",
+                                                           "Authorization: Bearer {env:LINEAR_B_API_KEY}"]}}}))
+        names, env = self.hide()
+        self.assertEqual(names, ["globex_cloud_eu", "linear_b", "linear_local", "linear_remote"])
+        self.assertNotIn("lin_api_", env["OPENCODE_CONFIG_CONTENT"])
+
+    def test_files_with_a_byte_order_mark_and_ones_that_cannot_be_parsed(self):
+        folder = self.repo / "opencode.json"
+        folder.write_text("\ufeff// the team's\n" + json.dumps({"mcp": {"globex_cloud_us": {"type": "local", "command": ["x"]}}}),
+                          encoding="utf-8")
+        self.assertEqual(self.hide()[0], ["globex_cloud_eu", "globex_cloud_us", "linear_b"])
+        folder.write_text('{"mcp": {')
+        with self.assertRaises(Refused) as refused:
+            adjust_args("opencode", self.registry.get("acme"), [], dict(self.env), self.repo, self.registry.mcp_owners())
+        self.assertEqual(str(refused.exception),
+                         f"keyfit: opencode not started: Keyfit can't parse {folder}, so it can't hide the MCP servers "
+                         f"there that acme must not see.\n  Fix the file (bypass once: KEYFIT_DISABLE=1 opencode …)")
+
 
 class ShimTests(unittest.TestCase):
     """The opencode shim written by `keyfit setup`, run as a real process in temporary folders."""

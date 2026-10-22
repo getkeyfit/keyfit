@@ -101,7 +101,7 @@ def _jsonc(path: Path):
     from .cloudflare import _jsonc as strip
 
     try:
-        return json.loads(strip(path.read_text()))
+        return json.loads(strip(path.read_text(encoding="utf-8-sig")))
     except (OSError, UnicodeDecodeError, ValueError):
         return None
 

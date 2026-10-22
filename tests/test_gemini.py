@@ -344,9 +344,22 @@ class McpTests(unittest.TestCase):
         (self.home / ".gemini" / "settings.json").write_text(json.dumps({"mcpServers": {"paper": {"url": "http://p"}}}))
         self.assertEqual(self.hidden(), ([], []))
 
-    def test_unreadable_files_hide_nothing_from_them(self):
+    def test_files_that_cannot_be_parsed_stop_the_start(self):
         (self.home / ".gemini" / "settings.json").write_text("{not json")
-        self.assertEqual(self.hidden(), ([], []))
+        with self.assertRaises(mcp.Unreadable):
+            self.hidden()
+
+    def test_files_with_a_byte_order_mark_and_a_comment_before_them(self):
+        (self.home / ".gemini" / "settings.json").write_text(
+            "\ufeff// yours\n" + json.dumps({"mcpServers": {"globex_cloud_eu": {"command": "x"}, "paper": {"url": "http://p"}}}),
+            encoding="utf-8")
+        self.assertEqual(self.hidden(), (["globex_cloud_eu"], ["paper"]))
+
+    def test_linear_servers_reading_a_variable_without_braces(self):
+        (self.home / ".gemini" / "settings.json").write_text(json.dumps({"mcpServers": {
+            "linear_globex": {"httpUrl": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer $LINEAR_GLOBEX_API_KEY"}},
+            "linear": LINEAR}}))
+        self.assertEqual(self.hidden(), (["linear_globex"], ["linear"]))
 
     def test_the_allowlist_on_the_command_line(self):
         self.assertEqual(mcp.gemini_allowed(["--allowed-mcp-server-names", "a,b", "--allowed-mcp-server-names=c",
@@ -366,6 +379,16 @@ class ShimArgsTests(McpTests):
     def test_gemini_clis_own_commands_run_as_typed(self):
         for args in (["mcp", "list"], ["extensions", "install", "x"], ["skills", "list"], ["hooks", "migrate"]):
             self.assertEqual(self.adjust(*args)[0], args)
+
+    def test_a_file_gemini_loads_that_cannot_be_parsed_stops_the_start(self):
+        (self.cwd / ".gemini").mkdir()
+        (self.cwd / ".gemini" / "settings.json").write_text('{"mcpServers": ')
+        with self.assertRaises(Refused) as refused:
+            self.adjust()
+        self.assertEqual(str(refused.exception),
+                         f"keyfit: gemini not started: Keyfit can't parse {self.cwd / '.gemini' / 'settings.json'}, so it "
+                         f"can't hide the MCP servers there that acme must not see.\n"
+                         f"  Fix the file (bypass once: KEYFIT_DISABLE=1 gemini …)")
 
     def test_when_nothing_may_stay_the_allowlist_names_no_server(self):
         (self.home / ".gemini" / "settings.json").write_text(json.dumps({"mcpServers": {"globex_cloud_eu": {}}}))

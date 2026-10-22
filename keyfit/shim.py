@@ -234,7 +234,10 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         if subcommand(args, CLAUDE_SUBCOMMANDS):
             return args
         env["CLAUDE_CODE_DISABLE_AGENT_VIEW"] = "1"  # no background sessions, also from ← and /background
-        settings = mcp.claude_settings(project, env, cwd, owners)
+        try:
+            settings = mcp.claude_settings(project, env, cwd, owners)
+        except mcp.Unreadable as error:
+            raise unreadable(tool, project, error) from None
         return (["--settings", json.dumps(settings)] if settings else []) + args
     if tool == "codex":
         sub = subcommand(args, CODEX_SUBCOMMANDS)
@@ -246,7 +249,9 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         if sub not in CODEX_SESSIONS:
             return args
         try:
-            extra = mcp.codex_overrides(project, env, owners)
+            extra = mcp.codex_overrides(project, env, owners, cwd, args)
+        except mcp.Unreadable as error:
+            raise unreadable(tool, project, error) from None
         except mcp.Unhideable as server:
             raise Refused(f"keyfit: codex not started, {project.name} must not see MCP server {printable(str(server))}, "
                           f"and Codex cannot hide a name with a dot, \"=\" or a space at either end.\n"
@@ -359,10 +364,19 @@ def opencode_private(args: list[str], env: dict) -> list[str]:
                   f"(bypass once: KEYFIT_DISABLE=1 opencode …)")
 
 
+def unreadable(tool: str, project: Project, error: mcp.Unreadable) -> Refused:
+    """A config file the agent loads that Keyfit can't parse: the agent would start with servers Keyfit didn't see."""
+    return Refused(f"keyfit: {tool} not started: Keyfit can't parse {printable(tilde(error.path))}, so it can't hide "
+                   f"the MCP servers there that {project.name} must not see.\n"
+                   f"  Fix the file (bypass once: KEYFIT_DISABLE=1 {tool} …)")
+
+
 def opencode_mcp(project: Project, env: dict, cwd: Path, owners: dict | None) -> None:
     try:
         mcp.opencode_environment(project, env, cwd, owners)
-    except mcp.Unreadable:
+    except mcp.Unreadable as error:
+        if error.path:
+            raise unreadable("opencode", project, error) from None
         raise Refused(f"keyfit: opencode not started: OPENCODE_CONFIG_CONTENT in your environment is not a JSON "
                       f"object, so Keyfit cannot switch off the MCP servers {project.name} must not see.\n"
                       f"  Fix or unset it (bypass once: KEYFIT_DISABLE=1 opencode …)") from None
@@ -450,9 +464,12 @@ def copilot_args(project: Project, args: list[str], env: dict, cwd: Path, owners
     given = copilot_options(args)
     folder = copilot_folder(args, cwd)
     config = [value for name, value in given if name == "--config-dir" and value]
-    names = mcp.copilot_hidden(project, env, (cwd / folder).resolve() if folder else cwd, owners,
-                               config_dir=str(cwd / Path(config[-1]).expanduser()) if config else None,
-                               additional=[value for name, value in given if name == "--additional-mcp-config" and value])
+    try:
+        names = mcp.copilot_hidden(project, env, (cwd / folder).resolve() if folder else cwd, owners,
+                                   config_dir=str(cwd / Path(config[-1]).expanduser()) if config else None,
+                                   additional=[value for name, value in given if name == "--additional-mcp-config" and value])
+    except mcp.Unreadable as error:
+        raise unreadable("copilot", project, error) from None
     for name, value in given:
         if name == "--enable-mcp-server" and value in names:
             raise Refused(f"keyfit: this folder belongs to {project.name}; refusing --enable-mcp-server "
@@ -471,7 +488,10 @@ def gemini_args(project: Project, args: list[str], env: dict, cwd: Path, owners:
         gemini.scrub(conn, env)
     if subcommand(args, GEMINI_SUBCOMMANDS):
         return args
-    hide, kept = mcp.gemini_hidden(project, env, cwd, owners)
+    try:
+        hide, kept = mcp.gemini_hidden(project, env, cwd, owners)
+    except mcp.Unreadable as error:
+        raise unreadable("gemini", project, error) from None
     if not hide:
         return args
     given = mcp.gemini_allowed(args)
