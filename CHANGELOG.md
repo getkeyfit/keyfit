@@ -517,6 +517,36 @@ From the third pre-launch review:
   `opencode.json`, `.github/mcp.json`, `.gemini/settings.json`, Codex's project config): a repository's
   client turned "the token belongs to someone@gmail.com" into an `account not confirmed` warning. It is
   read only from a regular file of at most 64 KB: a FIFO or `/dev/zero` hung the check.
+- **Bedrock's API key no longer beats the project's AWS profile.** `AWS_BEARER_TOKEN_BEDROCK` (any
+  `AWS_BEARER_TOKEN_…`) comes first in the AWS CLI's token chain, so `aws bedrock-runtime …` and the
+  agents in a project with an AWS account acted in the key's account. It is now removed with the other
+  inherited AWS credentials. Keyfit's own `aws sts get-caller-identity` now ignores endpoint overrides
+  (`AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_STS`, a profile's `endpoint_url`): "account confirmed" came
+  from that host, which also got the signed request.
+- **Gemini CLI: `CODE_ASSIST_ENDPOINT` is removed, and a `.env` can't bring back what Keyfit removed.**
+  `CODE_ASSIST_ENDPOINT` decides where Gemini CLI sends the sign-in's access token. Gemini CLI also
+  loads one `.env` file (the nearest `.gemini/.env` or `.env` from its folder up, else the one in its
+  own folder) for every variable that isn't set, so a `GEMINI_API_KEY`, `GOOGLE_CLOUD_PROJECT`,
+  `GOOGLE_GENAI_USE_VERTEXAI` or `GOOGLE_GEMINI_BASE_URL` there came back after Keyfit removed it. Such
+  a file now fails the check, naming the file and the variables, never the values. Names listed in
+  Gemini CLI's `advanced.excludedEnvVars` setting don't count in a `.env` outside a `.gemini` folder,
+  as Gemini CLI skips them. Give Gemini CLI its Google Cloud project with `keyfit add gemini
+  --cloud-project` instead of a `.env`.
+- **Copilot CLI: no model provider from `providers.json` in a project.** Copilot CLI takes model
+  providers from `COPILOT_PROVIDERS_CONFIG`, else from `~/.copilot/providers.json`, before the
+  `COPILOT_PROVIDER_…` variables Keyfit removes, so your own provider and key served the project's
+  sessions. `COPILOT_PROVIDERS_CONFIG` is now set to a file that never exists
+  (`/var/empty/providers.json`), as when you have no `providers.json`; a project without a Copilot
+  account gets yours back.
+- **Claude Code: the other provider switches are removed too.** `CLAUDE_CODE_USE_ANTHROPIC_AWS`,
+  `CLAUDE_CODE_USE_MANTLE`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` (`claude auth login` would sign the
+  project's folder in as that token's account) and `ANTHROPIC_CUSTOM_HEADERS` stayed, and a cached
+  check let a session start on another provider.
+- **Linear: every other Linear key variable is removed, as documented.** Only names containing
+  `LINEAR` and ending in `API_KEY` went, so `LINEAR_TOKEN`, `LINEAR_API_TOKEN`, `LINEAR_ACCESS_TOKEN`,
+  `LINEAR_KEY`, `GLOBEX_LINEAR_KEY` and a lowercase `linear_api_key` reached the project's sessions.
+  Any name with `LINEAR` and `KEY` or `TOKEN`, in any case, now goes; the project's own variable is set
+  again.
 
 ## [0.1.0] - 2026-10-12
 
