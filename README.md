@@ -150,7 +150,7 @@ If something seems off, run `keyfit doctor`. It checks the installation and prin
 Along the way:
 
 - **Expired sign-ins are one keypress.** In a terminal, when the only problem is an expired or missing sign-in, Keyfit asks `Sign in now? [Y/n]`, runs the sign-in, checks again and starts the tool. Agents, scripts and commands inside a session Keyfit started are never asked; they get the message and the fix.
-- **Sign-in commands always run**, with the project's environment, so they fix the right account: `aws sso login`, `gh auth …`, `codex login` and the like. A few that would change a login the project doesn't use are stopped, with the right command instead.
+- **Sign-in commands always run**, with the project's environment, so they fix the right account: `aws sso login`, `gh auth login`, `codex login` and the like. A few that would change a login the project doesn't use are stopped, with the right command instead.
 - **Other accounts are refused.** Inside a project, `aws --profile <another profile>`, `vercel --scope <another team>` and similar options that point a tool at another account don't run. [docs/accounts.md][accounts] lists them per tool.
 - **Agent sessions stay on their project.** The `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` commands an agent runs stay on that session's project, even after a `cd` elsewhere.
 - **Claude Code's status line** shows the project and its accounts, unless you configured a status line of your own.
