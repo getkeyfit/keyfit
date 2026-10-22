@@ -495,11 +495,11 @@ From the third pre-launch review:
   `setup-git` are sign-ins now, `gh auth token`, `status` and `git-credential` are checked and answer
   with the project's `GH_TOKEN`, and `--user` another account, `--secure-storage` without `--user` and
   `--show-token` without `--active` are refused. In a project without a GitHub account, `gh auth
-  status` still runs unchecked, to list the logins to map. `aws configure`, `sso login` and `login` took any
-  `--profile`, so `aws configure export-credentials --profile other` printed that profile's keys:
-  another profile is refused there too (shared profiles still run). `vercel teams invite`, `members`,
-  `add`, `request` and `sso` ran unchecked on the team selected in the login folder: only `teams
-  switch` and `teams ls` are sign-ins now, and the rest are checked and get the project's team.
+  status` still runs unchecked, to list the logins to map. `aws configure`, `sso login` and `login`
+  took any `--profile`, so `aws configure export-credentials --profile other` printed that profile's
+  keys: another profile is refused there too (shared profiles still run). `vercel teams invite`,
+  `members`, `add`, `request` and `sso` ran unchecked on the team selected in the login folder: only
+  `teams switch` and `teams ls` are sign-ins now, and the rest are checked and get the project's team.
 
 ## [0.1.0] - 2026-10-12
 
