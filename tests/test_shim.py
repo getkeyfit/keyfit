@@ -16,7 +16,8 @@ from unittest import mock
 from keyfit import mcp, secrets
 from keyfit.cli import main
 from keyfit.registry import LEGACY_KINDS, Project, Registry
-from keyfit.shim import Refused, adjust_args, sign_in_command, subcommand, CLAUDE_SUBCOMMANDS, CODEX_SUBCOMMANDS
+from keyfit.shim import (Refused, adjust_args, is_login_command, sign_in_command, subcommand, CLAUDE_SUBCOMMANDS,
+                         CODEX_SUBCOMMANDS, COPILOT_SUBCOMMANDS, GEMINI_SUBCOMMANDS, OPENCODE_SUBCOMMANDS)
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -477,6 +478,17 @@ class ShimTests(unittest.TestCase):
         out = self.run_tool("claude", "mcp", "list")
         self.assertEqual(json.loads(out.stdout)["argv"], ["mcp", "list"])
 
+    def test_claude_words_after_options_start_sessions(self):
+        # -c is --continue (no value): `fix` starts the prompt, so this is no sign-in; --add-dir takes several folders
+        for args in (["-c", "fix", "auth"], ["--add-dir", "../lib", "agents"], ["-p", "why", "mcp", "list", "fails"]):
+            with self.subTest(args=args):
+                out = self.run_tool("claude", *args, KEYFIT_DRY_RUN="1")
+                self.assertEqual((out.returncode, out.stdout), (0, ""), out.stderr)
+                self.assertIn("keyfit: project demo, checks ok\n", out.stderr)  # checked, not run as Claude's own command
+                self.assertIn(" --settings ", out.stderr)
+                seen = json.loads(self.run_tool("claude", *args).stdout)
+                self.assertEqual((seen["argv"][0], seen["argv"][2:]), ("--settings", args))
+
     def test_claude_session_starts_with_background_sessions_off(self):
         seen = json.loads(self.run_tool("claude", "-p", "hello").stdout)
         self.assertIs(json.loads(seen["argv"][1])["disableAgentView"], True)
@@ -547,6 +559,19 @@ class ShimTests(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertEqual(json.loads(self.run_tool("codex", *args, cwd=self.outside).stdout), args)
 
+    def test_codex_in_a_folder_of_another_project_is_refused(self):
+        self.fake_codex()
+        for args, cwd in ((["-C", str(self.outside)], self.repo), ([f"--cd={self.outside}", "exec", "x"], self.repo),
+                          ([f"-C{self.repo}"], self.outside), (["exec", "-C", str(self.repo), "x"], self.outside)):
+            with self.subTest(args=args):
+                out = self.run_tool("codex", *args, cwd=cwd)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn("keyfit: codex not started: ", out.stderr)
+                self.assertIn("Start it there: cd ", out.stderr)
+        (self.repo / "web").mkdir()
+        self.assertEqual(json.loads(self.run_tool("codex", "-C", "web", "exec", "x").stdout)[-4:],
+                         ["-C", "web", "exec", "x"])  # a folder of the same project
+
 
 class ArgumentTests(unittest.TestCase):
     def setUp(self):
@@ -560,9 +585,41 @@ class ArgumentTests(unittest.TestCase):
         self.env = {"HOME": str(self.tmp)}
 
     def test_subcommand_detection(self):
-        self.assertEqual(subcommand(["-m", "o3", "exec", "x"], CODEX_SUBCOMMANDS), "exec")
-        self.assertIsNone(subcommand(["-p", "update"], CLAUDE_SUBCOMMANDS))
-        self.assertIsNone(subcommand(["fix the update script"], CLAUDE_SUBCOMMANDS))
+        self.assertEqual(subcommand("codex", ["-m", "o3", "exec", "x"], CODEX_SUBCOMMANDS), "exec")
+        self.assertIsNone(subcommand("claude", ["-p", "update"], CLAUDE_SUBCOMMANDS))
+        self.assertIsNone(subcommand("claude", ["fix the update script"], CLAUDE_SUBCOMMANDS))
+
+    def test_only_the_first_command_word_is_a_subcommand(self):
+        sessions = (("gemini", ["summarize", "the", "mcp", "setup"], GEMINI_SUBCOMMANDS),
+                    ("gemini", ["why", "do", "my", "hooks", "fail"], GEMINI_SUBCOMMANDS),
+                    ("gemini", ["--include-directories", "../lib", "mcp"], GEMINI_SUBCOMMANDS),
+                    ("claude", ["--add-dir", "../lib", "agents"], CLAUDE_SUBCOMMANDS),
+                    ("claude", ["-c", "fix", "auth"], CLAUDE_SUBCOMMANDS),
+                    ("claude", ["--verbose", "mcp"], CLAUDE_SUBCOMMANDS),  # an option Keyfit doesn't know: unclear
+                    ("codex", ["explain", "the", "agents"], CODEX_SUBCOMMANDS),
+                    ("codex", ["-i", "a.png", "b.png", "exec"], CODEX_SUBCOMMANDS),
+                    ("copilot", ["explain", "the", "mcp", "setup"], COPILOT_SUBCOMMANDS),
+                    ("opencode", ["-c", ".", "auth"], OPENCODE_SUBCOMMANDS),
+                    ("opencode", ["fix", "the", "mcp", "setup"], OPENCODE_SUBCOMMANDS))
+        for tool, args, known in sessions:
+            self.assertIsNone(subcommand(tool, args, known), (tool, args))
+        commands = (("gemini", ["-m", "gemini-x", "mcp", "list"], GEMINI_SUBCOMMANDS, "mcp"),
+                    ("claude", ["--model", "opus", "agents"], CLAUDE_SUBCOMMANDS, "agents"),
+                    ("codex", ["-C", "web", "-c", "a=b", "agents"], CODEX_SUBCOMMANDS, "agents"),
+                    ("copilot", ["-C", "web", "mcp", "list"], COPILOT_SUBCOMMANDS, "mcp"),
+                    ("opencode", ["-m", "anthropic/claude-sonnet-4-5", "mcp", "list"], OPENCODE_SUBCOMMANDS, "mcp"))
+        for tool, args, known, sub in commands:
+            self.assertEqual(subcommand(tool, args, known), sub, (tool, args))
+
+    def test_each_agent_reads_its_own_options(self):
+        # `-c` takes no value in Claude and OpenCode: these are sessions, never sign-ins without checks
+        for tool, args in (("claude", ["-c", "fix", "auth"]), ("opencode", ["-c", ".", "auth"]),
+                           ("codex", ["-C", "login"]), ("claude", ["--add-dir", "auth"])):
+            self.assertFalse(is_login_command(tool, args), (tool, args))
+        for tool, args in (("claude", ["--model", "opus", "auth", "login"]), ("codex", ["-c", "a=b", "login"]),
+                           ("opencode", ["-m", "x", "auth", "login"]), ("copilot", ["-C", "web", "login"]),
+                           ("aws", ["--profile", "x", "sso", "login"])):
+            self.assertTrue(is_login_command(tool, args), (tool, args))
 
     def test_codex_tui_disables_other_linear_and_runs_without_daemon(self):
         args = adjust_args("codex", self.project, ["fix it"], self.env, self.tmp)

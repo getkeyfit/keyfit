@@ -208,6 +208,12 @@ class McpConfigTests(unittest.TestCase):
         self.trust(self.repo)
         self.assertEqual(self.hidden(cwd=worktree), ["globex_cloud_eu"])
 
+    def test_a_later_word_is_never_codexs_own_command(self):
+        self.write(self.home / ".codex" / "config.toml", '[mcp_servers.globex_cloud_eu]\ncommand = "globex-mcp"\n')
+        for given in (["explain", "the", "agents"], ["-i", "a.png", "b.png", "app-server"]):
+            out = adjust_args("codex", self.acme, given, dict(self.env), self.repo, {"globex": ["globex_cloud_*"]})
+            self.assertEqual(out, ["-c", "mcp_servers.globex_cloud_eu.enabled=false", "--no-daemon", *given])
+
     def test_config_files_with_a_byte_order_mark_and_ones_that_cannot_be_parsed(self):
         config = self.home / ".codex" / "config.toml"
         config.write_text('\ufeff[mcp_servers.globex_cloud_eu]\ncommand = "globex-mcp"\n', encoding="utf-8")

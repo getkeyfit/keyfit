@@ -376,8 +376,15 @@ class ShimArgsTests(McpTests):
         for args in ([], ["-p", "hi"], ["explain this"], ["-m", "gemini-x"]):
             self.assertEqual(self.adjust(*args)[0], ["--allowed-mcp-server-names=paper,linear", *args])
 
+    def test_a_later_word_is_never_gemini_clis_own_command(self):
+        # only the first word can be one: these are queries
+        for args in (["summarize", "the", "mcp", "setup"], ["why", "do", "my", "hooks", "fail"],
+                     ["explain", "the", "mcp", "setup"], ["--include-directories", "../lib", "mcp"], ["-p", "mcp"]):
+            self.assertEqual(self.adjust(*args)[0], ["--allowed-mcp-server-names=paper,linear", *args])
+
     def test_gemini_clis_own_commands_run_as_typed(self):
-        for args in (["mcp", "list"], ["extensions", "install", "x"], ["skills", "list"], ["hooks", "migrate"]):
+        for args in (["mcp", "list"], ["extensions", "install", "x"], ["skills", "list"], ["hooks", "migrate"],
+                     ["-m", "gemini-x", "mcp", "list"]):
             self.assertEqual(self.adjust(*args)[0], args)
 
     def test_a_file_gemini_loads_that_cannot_be_parsed_stops_the_start(self):

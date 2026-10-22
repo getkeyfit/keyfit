@@ -305,8 +305,14 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(self.args("--acp"), [*flags, "--acp"])
 
     def test_management_commands_run_as_typed(self):
-        for given in (["mcp", "list"], ["config", "--list"], ["update"], ["help", "config"], ["plugin", "list"]):
+        for given in (["mcp", "list"], ["config", "--list"], ["update"], ["help", "config"], ["plugin", "list"],
+                      ["-C", "web", "mcp", "list"]):
             self.assertEqual(self.args(*given), given)
+
+    def test_a_later_word_is_never_copilots_own_command(self):
+        flags = ["--disable-mcp-server=-odd name", "--disable-mcp-server=globex_cloud_eu"]
+        for given in (["explain", "the", "mcp", "setup"], ["-p", "update", "the", "config"], ["--new-option", "mcp"]):
+            self.assertEqual(self.args(*given), [*flags, *given], given)
 
     def test_servers_of_the_folder_copilot_works_in(self):
         web = self.repo / "web"
