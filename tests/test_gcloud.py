@@ -145,10 +145,12 @@ class GcloudCase(unittest.TestCase):
         self.addCleanup(os.chdir, old)
         os.chdir(self.repos["client"])
 
-    def configure(self, name, account=None, project=None, **auth):
+    def configure(self, name, account=None, project=None, overrides=None, **auth):
         lines = ["[core]"] + [f"{k} = {v}" for k, v in (("account", account), ("project", project)) if v]
         if auth:
             lines += ["", "[auth]"] + [f"{k} = {v}" for k, v in auth.items()]
+        if overrides:
+            lines += ["", "[api_endpoint_overrides]"] + [f"{k} = {v}" for k, v in overrides.items()]
         (self.store / "configurations" / f"config_{name}").write_text("\n".join(lines) + "\n")
 
     def sign_in(self, *accounts):
@@ -291,10 +293,28 @@ class AdapterTests(GcloudCase):
                                                      f"not use {ACME}'s sign-in",
                                                      "gcloud config unset auth/access_token_file --configuration acme"))
 
-    def test_impersonation_is_checked_as_the_service_account(self):
+    def test_impersonation_another_token_host_or_endpoint_fails(self):
         self.configure("acme", ACME, "acme-prod", impersonate_service_account=DEPLOYER)
+        check = self.check()  # gcloud would hand out DEPLOYER's token, which DEPLOYER's tokeninfo would confirm
+        self.assertEqual((check.status, check.detail, check.fix),
+                         ("fail", f"configuration acme sets auth/impersonate_service_account, so gcloud would act as "
+                                  f"{DEPLOYER}, not as {ACME}",
+                          "gcloud config unset auth/impersonate_service_account --configuration acme"))
+        for key, value, detail in (
+                ("token_host", "https://tokens.example/", f"would renew {ACME}'s sign-in at https://tokens.example/"),
+                ("mtls_token_host", "https://tokens.example/", f"would renew {ACME}'s sign-in at https://tokens.example/"),
+                ("disable_ssl_validation", "True", "would not check that it talks to Google")):
+            self.configure("acme", ACME, "acme-prod", **{key: value})
+            check = self.check()
+            self.assertEqual((check.detail, check.fix), (f"configuration acme sets auth/{key}, so gcloud {detail}",
+                                                         f"gcloud config unset auth/{key} --configuration acme"))
+        self.configure("acme", ACME, "acme-prod", overrides={"storage": "https://evil.example/"})
         check = self.check()
-        self.assertEqual((check.status, check.detail), ("ok", f"{ACME} as {DEPLOYER} · account and project confirmed"))
+        self.assertEqual((check.detail, check.fix),
+                         (f"configuration acme sets api_endpoint_overrides/storage, so gcloud would send {ACME}'s "
+                          f"requests to https://evil.example/",
+                          "gcloud config unset api_endpoint_overrides/storage --configuration acme"))
+        self.assertEqual(self.gcloud.calls, [])  # decided before gcloud prints a token
 
     def test_project_without_a_google_account(self):
         check = self.check(self.conn(account=None))
@@ -380,11 +400,20 @@ class AdapterTests(GcloudCase):
         args = ["--project", "p", "compute", "--account=a@b.io", "instances", "list", "--configuration", "c", "--",
                 "--project", "x"]
         self.assertEqual(gcloud.options(args), [("--project", "p"), ("--account", "a@b.io"), ("--configuration", "c")])
-        self.assertEqual(gcloud.words(args), ["compute", "instances", "list"])
+        self.assertEqual(gcloud.words(args), ["compute", "instances", "list", "--project", "x"])  # after --: arguments
         self.assertEqual(gcloud.words(["auth", "login", "--no-launch-browser", ACME]), ["auth", "login", ACME])
         self.assertEqual(gcloud.words(["--some-option", "auth", "login"]), [])  # unclear: never a sign-in command
         self.assertEqual(gcloud.words(["config", "set", "core/project", "p", "--configuration", "acme"]),
                          ["config", "set", "core/project", "p"])
+        for track in ("alpha", "beta", "preview"):  # release tracks precede any command group
+            self.assertEqual(gcloud.words([track, "auth", "login", GLOBEX]), ["auth", "login", GLOBEX])
+        self.assertEqual(gcloud.words(["--quiet", "beta", "config", "configurations", "delete", "globex"]),
+                         ["config", "configurations", "delete", "globex"])
+        self.assertEqual(gcloud.words(["auth", "login", "--", GLOBEX]), ["auth", "login", GLOBEX])  # an argument
+        self.assertEqual(gcloud.words(["auth", "login", "--remote-bootstrap", "https://x", GLOBEX]),
+                         ["auth", "login", GLOBEX])
+        self.assertEqual(gcloud.options(["--impersonate-service-account", DEPLOYER, "storage", "ls"]),
+                         [("--impersonate-service-account", DEPLOYER)])
 
     def test_access_token_of_a_real_process(self):
         script = self.tmp / "gcloud-script"
@@ -502,6 +531,11 @@ class ShimTests(GcloudCase):
                             (["--account", GLOBEX, "projects", "list"], f"refusing --account {GLOBEX}"),
                             (["--configuration=globex", "info"], "refusing --configuration globex"),
                             (["--access-token-file", "/tmp/t", "storage", "ls"], "refusing --access-token-file"),
+                            (["--impersonate-service-account", DEPLOYER, "storage", "ls"],
+                             "refusing --impersonate-service-account: gcloud would act as that service account instead "
+                             "of client's Google account."),
+                            (["storage", "ls", f"--impersonate-service-account={DEPLOYER}"],
+                             "refusing --impersonate-service-account"),
                             (["--flags-file", "flags.yaml", "storage", "ls"], "refusing --flags-file")):
             code, argv, _ = self.run_shim(*args)
             self.assertEqual((code, argv), (1, None), args)
@@ -529,8 +563,28 @@ class ShimTests(GcloudCase):
         self.assertEqual((code, argv), (1, None))
         self.assertIn(f"keyfit: this folder belongs to client, whose Google account is {ACME}; refusing `gcloud auth "
                       f"login {GLOBEX}`: gcloud would make configuration acme use that account.", self.stderr)
-        code, argv, _ = self.run_shim("auth", "login", "--no-launch-browser")  # the browser decides: checked afterwards
-        self.assertEqual(argv, ["gcloud", "auth", "login", "--no-launch-browser"])
+        for args, shown in ((["beta", "auth", "login", GLOBEX], f"login {GLOBEX}"),
+                            (["auth", "login", "--", GLOBEX], f"login {GLOBEX}"),
+                            (["auth", "login", "--remote-bootstrap", "https://localhost:8085/x", GLOBEX], f"login {GLOBEX}"),
+                            (["auth", "activate-service-account", DEPLOYER, "--key-file=k.json"],
+                             f"activate-service-account {DEPLOYER}")):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"refusing `gcloud auth {shown}`: gcloud would make configuration acme use that account.",
+                          self.stderr)
+        for args in (["auth", "login", "--no-launch-browser"], ["auth", "login", "--cred-file", "key.json"],
+                     ["auth", "activate-service-account", "--key-file", "k.json"]):  # whoever the browser or file says
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual((code, argv), (1, None), args)
+        self.assertIn(f"keyfit: this folder belongs to client, whose Google account is {ACME}; refusing `gcloud auth "
+                      f"activate-service-account` without {ACME}: gcloud would make configuration acme use whichever "
+                      f"account signs in.\n  Sign in as the project's account: gcloud auth login {ACME}", self.stderr)
+        for args in (["auth", "login", "--no-launch-browser", ACME], ["beta", "auth", "login", ACME],
+                     ["auth", "login", "--", ACME]):
+            code, argv, _ = self.run_shim(*args)
+            self.assertEqual(argv, ["gcloud", *args], self.stderr)
+        code, argv, _ = self.run_shim("auth", "login", cwd=self.repos["plain"])  # a project without Google Cloud
+        self.assertEqual(argv, ["gcloud", "auth", "login"])
 
     def test_changing_a_projects_configuration_is_refused(self):
         for args, cwd, shown in (
@@ -544,7 +598,14 @@ class ShimTests(GcloudCase):
                 (["config", "configurations", "delete", "default", "globex"], "client",
                  "refusing `gcloud config configurations delete globex`: mine uses that configuration"),
                 (["config", "configurations", "rename", "acme", "--new-name", "x"], "plain",
-                 "refusing `gcloud config configurations rename acme`: client uses that configuration")):
+                 "refusing `gcloud config configurations rename acme`: client uses that configuration"),
+                (["beta", "config", "configurations", "delete", "globex"], "client",
+                 "refusing `gcloud config configurations delete globex`: mine uses that configuration"),
+                (["alpha", "config", "set", "account", PERSONAL], "client",
+                 f"refusing `gcloud config set account {PERSONAL}` for configuration acme: client uses it with account "
+                 f"{ACME}"),
+                (["config", "set", "account", "--", PERSONAL], "client",
+                 f"refusing `gcloud config set account {PERSONAL}` for configuration acme")):
             code, argv, _ = self.run_shim(*args, cwd=self.repos[cwd])
             self.assertEqual((code, argv), (1, None), args)
             self.assertIn(shown, self.stderr)
@@ -555,6 +616,36 @@ class ShimTests(GcloudCase):
         code, argv, _ = self.run_shim("config", "set", "project", "x-project", "--configuration", "default",
                                       cwd=self.repos["plain"])
         self.assertEqual(argv, ["gcloud", "config", "set", "project", "x-project", "--configuration", "default"])
+
+    def test_settings_for_another_identity_or_server_are_refused_and_unsetting_them_runs(self):
+        for args, cwd, shown in (
+                (["config", "set", "auth/impersonate_service_account", DEPLOYER], "client",
+                 "auth/impersonate_service_account` for configuration acme: client uses it"),
+                (["beta", "config", "set", "auth/token_host", "https://tokens.example/"], "client",
+                 "auth/token_host` for configuration acme: client uses it"),
+                (["config", "set", "auth/disable_ssl_validation", "true", "--configuration", "globex"], "plain",
+                 "auth/disable_ssl_validation` for configuration globex: mine uses it"),
+                (["config", "set", "api_endpoint_overrides/storage", "https://evil.example/"], "client",
+                 "api_endpoint_overrides/storage` for configuration acme: client uses it")):
+            code, argv, _ = self.run_shim(*args, cwd=self.repos[cwd])
+            self.assertEqual((code, argv), (1, None), args)
+            self.assertIn(f"keyfit: refusing `gcloud config set {shown}, and that setting changes whom gcloud acts as "
+                          f"or where it sends the account's requests.", self.stderr)
+        code, argv, _ = self.run_shim("config", "set", "auth/impersonate_service_account", DEPLOYER, "--configuration",
+                                      "default", cwd=self.repos["plain"])  # a configuration no project uses
+        self.assertEqual(argv[1:], ["config", "set", "auth/impersonate_service_account", DEPLOYER, "--configuration",
+                                    "default"], self.stderr)
+        self.configure("acme", ACME, "acme-prod", impersonate_service_account=DEPLOYER)  # set with KEYFIT_DISABLE=1
+        code, argv, _ = self.run_shim("storage", "ls")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn(f"configuration acme sets auth/impersonate_service_account, so gcloud would act as {DEPLOYER}, not "
+                      f"as {ACME}\n    → gcloud config unset auth/impersonate_service_account --configuration acme",
+                      self.stderr)
+        code, argv, env = self.run_shim("config", "unset", "auth/impersonate_service_account", "--configuration", "acme")
+        self.assertEqual(argv[1:], ["config", "unset", "auth/impersonate_service_account", "--configuration", "acme"],
+                         self.stderr)  # the fix runs while the check fails
+        self.assertEqual(env["CLOUDSDK_ACTIVE_CONFIG_NAME"], "acme")
+        self.assertEqual(self.gcloud.calls, [])
 
     def test_session_keeps_gcloud_on_its_project(self):
         code, argv, env = self.run_shim("storage", "ls", cwd=self.repos["plain"], KEYFIT_PROJECT="client")
@@ -685,6 +776,27 @@ class AddTests(GcloudCase):
         self.assertEqual(code, 0, err)
         self.assertIn(f"  2. acme  ({ACME} → acme-prod)\n", out)
         self.assertEqual(self.registry()["accounts"]["gcloud"]["acme"]["configuration"], "acme")
+
+    def test_another_accounts_configuration_is_never_taken(self):
+        for name in ("acme", "globex"):
+            (self.store / "configurations" / f"config_{name}").unlink()  # left: default, the personal account's
+        self.keyfit("add", "google", "--email", ACME)
+        for answers in (None, ["1"]):  # neither the only configuration nor one to pick at the terminal
+            code, out, err = self.keyfit("add", "gcloud", answers=answers)
+            self.assertEqual(code, 1)
+            self.assertEqual(err, f"no gcloud configuration uses {ACME} (gcloud has default), and Keyfit takes no other "
+                                  f"account's: gcloud uses it elsewhere\n  → gcloud config configurations create client "
+                                  f"--no-activate, then: keyfit add gcloud --configuration client --project-id ID\n")
+            self.assertNotIn("--configuration default", out)  # never `gcloud config set account … --configuration default`
+        self.assertNotIn("gcloud", self.registry()["projects"]["client"])
+        self.configure("globex", GLOBEX, "globex-app")
+        self.configure("acme", ACME, "acme-prod")
+        self.configure("acme-2", ACME, "acme-prod")
+        code, out, err = self.keyfit("add", "gcloud", answers=["2"])  # only the project's account's are offered
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"gcloud configurations on this Mac signed in as {ACME}:\n  1. acme  ({ACME} → acme-prod)\n"
+                      f"  2. acme-2  ({ACME} → acme-prod)\n", out)
+        self.assertEqual(self.registry()["accounts"]["gcloud"]["acme-2"]["configuration"], "acme-2")
 
     def test_another_project_id_is_recorded_with_the_next_step(self):
         self.keyfit("add", "google", "--email", ACME)

@@ -106,10 +106,11 @@ LOGIN_COMMANDS = {
     "convex": (("login",), ("logout",)),  # not `login status`: it only reads the login
     "opencode": (("auth",),),
     "copilot": (("login",),),
-    # the fixes of a gcloud check (a configuration to create, its account or project to set) and what shows gcloud's
-    # sign-ins and configurations
-    "gcloud": (("auth", "login"), ("auth", "list"), ("config", "set"), ("config", "configurations", "create"),
-               ("config", "configurations", "list"), ("config", "configurations", "describe")),
+    # the fixes of a gcloud check (a configuration to create, its account or project to set, a setting to unset) and
+    # what shows gcloud's sign-ins and configurations
+    "gcloud": (("auth", "login"), ("auth", "list"), ("config", "set"), ("config", "unset"),
+               ("config", "configurations", "create"), ("config", "configurations", "list"),
+               ("config", "configurations", "describe")),
     # the fixes of a firebase check (a sign-in, binding the folder to it, the project to use) and what shows them
     "firebase": (("login",), ("login:add",), ("login:use",), ("login:list",), ("logout",), ("use",)),
 }
@@ -783,7 +784,7 @@ def convex_login_check(project: Project, args: list[str]) -> None:
 def gcloud_options(project: Project, conn: dict, args: list[str]) -> None:
     """Refuse what would leave the project's gcloud configuration, Google account or Google Cloud project (like
     `aws --profile`): another --configuration, --account or --project, --access-token-file (a token instead of the
-    account) and --flags-file (options Keyfit cannot see)."""
+    account), --impersonate-service-account (another identity) and --flags-file (options Keyfit cannot see)."""
     refuse = (f"keyfit: this folder belongs to {project.name} (gcloud configuration {conn.get('configuration')}, Google "
               f"account {conn.get('account') or 'not set'}, project {conn.get('project')}); refusing")
     bypass = "\n  Bypass once: KEYFIT_DISABLE=1 gcloud …"
@@ -791,6 +792,9 @@ def gcloud_options(project: Project, conn: dict, args: list[str]) -> None:
         if name == "--access-token-file":
             raise Refused(f"{refuse} --access-token-file: gcloud would use that token instead of {project.name}'s "
                           f"Google account and its check.{bypass}")
+        if name == "--impersonate-service-account":
+            raise Refused(f"{refuse} --impersonate-service-account: gcloud would act as that service account instead of "
+                          f"{project.name}'s Google account.{bypass}")
         if name == "--flags-file":
             raise Refused(f"{refuse} --flags-file: Keyfit cannot see the --account or --project it may hold.{bypass}")
         if value is None:
@@ -803,33 +807,43 @@ def gcloud_options(project: Project, conn: dict, args: list[str]) -> None:
 
 def gcloud_guard(project: Project, args: list[str], registry: Registry, env: dict) -> None:
     """Inside a registered project: refuse the options that leave the project's gcloud account (gcloud_options),
-    `gcloud auth login` as another person (it would write that account into the project's configuration), and what
-    would change a configuration a registered project uses away from that project's account or project:
-    `config set|unset account|project` and `config configurations delete|rename`."""
+    `gcloud auth login` and `auth activate-service-account` as another person or without naming the project's account
+    (they would write that account into the project's configuration), and what would change a configuration a
+    registered project uses away from that project's account or project: `config set|unset account|project`,
+    `config set auth/…|api_endpoint_overrides/…` (another identity or server; unsetting them is the fix) and
+    `config configurations delete|rename`."""
     conn = project.connections.get("gcloud")
     own = conn if isinstance(conn, dict) else None
     bypass = "\n  Bypass once: KEYFIT_DISABLE=1 gcloud …"
     if own:
         gcloud_options(project, own, args)
     words = gcloud.words(args)
-    if own and own.get("account") and words[:2] == ["auth", "login"] and len(words) > 2 \
-            and not same(words[2], own["account"]):
-        raise Refused(f"keyfit: this folder belongs to {project.name}, whose Google account is {own['account']}; "
-                      f"refusing `gcloud auth login {printable(words[2])}`: gcloud would make configuration "
-                      f"{own.get('configuration')} use that account.{bypass}")
+    if own and own.get("account") and words[:2] in (["auth", "login"], ["auth", "activate-service-account"]):
+        refuse = f"keyfit: this folder belongs to {project.name}, whose Google account is {own['account']}; refusing"
+        if len(words) > 2 and not same(words[2], own["account"]):
+            raise Refused(f"{refuse} `gcloud {words[0]} {words[1]} {printable(words[2])}`: gcloud would make "
+                          f"configuration {own.get('configuration')} use that account.{bypass}")
+        if len(words) == 2:
+            raise Refused(f"{refuse} `gcloud {words[0]} {words[1]}` without {own['account']}: gcloud would make "
+                          f"configuration {own.get('configuration')} use whichever account signs in.\n  Sign in as "
+                          f"the project's account: {gcloud.sign_in(own['account'])}{bypass}")
     users: dict[str, list[tuple[str, dict]]] = {}  # configuration → (project, its gcloud account) of those using it
     for other in registry.projects().values():
         theirs = other.connections.get("gcloud")
         if isinstance(theirs, dict) and isinstance(theirs.get("configuration"), str):
             users.setdefault(theirs["configuration"], []).append((other.name, theirs))
-    if words[:2] in (["config", "set"], ["config", "unset"]) and len(words) > 2 \
-            and words[2].removeprefix("core/") in ("account", "project"):
+    if words[:2] in (["config", "set"], ["config", "unset"]) and len(words) > 2:
         setting = words[2].removeprefix("core/")
         named = [value for name, value in gcloud.options(args) if name == "--configuration" and value]
         target = named[-1] if named else own.get("configuration") if own else gcloud.active(env)
         value = words[3] if words[1] == "set" and len(words) > 3 else None
+        if words[1] == "set" and setting.startswith(("auth/", "api_endpoint_overrides/")) and users.get(target):
+            raise Refused(f"keyfit: refusing `gcloud config set {printable(setting)}` for configuration {target}: "
+                          f"{', '.join(name for name, _ in users[target])} uses it, and that setting changes whom gcloud "
+                          f"acts as or where it sends the account's requests.{bypass}")
         for name, theirs in users.get(target, []):
-            wanted = theirs.get(setting)  # the project's Google account, or its Google Cloud project
+            # the project's Google account, or its Google Cloud project
+            wanted = theirs.get(setting) if setting in ("account", "project") else None
             if wanted and not (value and (same(value, wanted) if setting == "account" else value == wanted)):
                 shown = " ".join(printable(w) for w in words[:4])
                 raise Refused(f"keyfit: refusing `gcloud {shown}` for configuration {target}: {name} uses it with "

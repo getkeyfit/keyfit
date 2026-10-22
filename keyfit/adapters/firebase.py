@@ -11,17 +11,21 @@ under $XDG_CONFIG_HOME, else ~/.config: `user` and `tokens` of the default login
 folder is the CLI's project folder: the nearest folder upwards with a firebase.json (or the folder of the one --config
 names), matched exactly; without a binding there, and outside any project folder, the default login applies. --account
 beats the binding, and FIREBASE_TOKEN (or --token) beats every sign-in. The Firebase project is --project, else the one
-`firebase use` picked for the folder (`activeProjects`, the nearest folder upwards), else in .firebaserc the only
-alias or `default`; an alias name is looked up in .firebaserc. Keyfit reads this file and .firebaserc and keeps no
-Google token: the firebase CLI switches, Keyfit checks and enforces.
+`firebase use` picked for the folder (`activeProjects`, the nearest folder upwards), else firebase.json's deprecated
+"firebase" key, else in .firebaserc the only alias or `default`; an alias name is looked up in .firebaserc (the project
+folder's, else the current folder's). Keyfit reads this file, firebase.json and .firebaserc and keeps no Google token:
+the firebase CLI switches, Keyfit checks and enforces.
 
 inject  — remove FIREBASE_TOKEN and GOOGLE_APPLICATION_CREDENTIALS (a token or key file that would act instead of the
-          sign-in: Keyfit cannot tell whose). Nothing is set: the folder's binding picks the sign-in for every firebase
-          the session starts (`npx firebase-tools` too).
+          sign-in: Keyfit cannot tell whose), FIREBASE_…_URL (FIREBASE_TOKEN_URL and FIREBASE_GOOGLE_URL get the
+          refresh token, the others the requests) and FIREBASE_CLIENT_ID/_SECRET (another OAuth client). Nothing is
+          set: the folder's binding picks the sign-in for every firebase the session starts (`npx firebase-tools`
+          too).
 local   — the firebase CLI is signed in as the project's Google account; in the CLI's project folder that account is
           the one it uses (bound there, or the default login) and the Firebase project it picks is the expected one.
-          Outside a project folder (no firebase.json here or above) only a warning when the default login is another
-          account: Keyfit's own `firebase` then adds --account.
+          Outside a project folder (no firebase.json here or above) the project a .firebaserc here picks must be the
+          expected one too (commands that need no firebase.json use it), and another default login is only a warning:
+          Keyfit's own `firebase` then adds --account.
 remote  — Google's tokeninfo must name the account for the access token the CLI keeps for it, and the Firebase
           Management API must show the project to it. An access token about to expire is renewed by the real CLI
           first (`firebase projects:list`, as every firebase command does), then read again. The token is held in
@@ -49,7 +53,7 @@ from .google import EMAIL, same
 
 PROJECTS = "https://firebase.googleapis.com/v1beta1/projects/"
 STORE = Path("configstore") / "firebase-tools.json"
-SCRUB = ("FIREBASE_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS")
+SCRUB = ("FIREBASE_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "FIREBASE_CLIENT_ID", "FIREBASE_CLIENT_SECRET")
 FRESH = 5 * 60  # seconds an access token must still be valid for a check; else the CLI renews it first
 # Global options that take a value (commander: `--name value`, `--name=value`, `-P value`, `-Pvalue`), and those of the
 # commands Keyfit looks at (login, use).
@@ -62,6 +66,12 @@ FLAGS = {"-j", "--json", "--non-interactive", "-i", "--interactive", "--debug", 
 
 def _home(env: dict) -> Path:
     return Path(env.get("HOME") or Path.home())
+
+
+def scrubbed(var: str) -> bool:
+    """Variables the CLI would take instead of the sign-in, or that send the sign-in or its requests elsewhere than to
+    Google: SCRUB and every FIREBASE_…_URL (the CLI's endpoints)."""
+    return var in SCRUB or (var.startswith("FIREBASE_") and var.endswith("_URL"))
 
 
 def store_path(env: dict) -> Path:
@@ -141,9 +151,11 @@ def aliases(folder: str) -> dict[str, str]:
     return {k: v for k, v in projects.items() if isinstance(v, str)} if isinstance(projects, dict) else {}
 
 
-def selected(store: dict, root: str | None, folder) -> tuple[str | None, str]:
+def selected(store: dict, root: str | None, folder, config: str | None = None) -> tuple[str | None, str]:
     """(project ID, where from) the CLI works on without --project: the one `firebase use` picked for the folder or a
-    folder above, else .firebaserc's only alias or its default; an alias is looked up in .firebaserc."""
+    folder above, else the deprecated "firebase" key of the project folder's firebase.json (or the --config file),
+    else .firebaserc's only alias or its default; an alias is looked up in .firebaserc. Without a project folder the
+    CLI reads the .firebaserc of *folder*."""
     base = root or os.path.abspath(folder)
     names = aliases(base)
     table = store.get("activeProjects") if isinstance(store.get("activeProjects"), dict) else {}
@@ -156,6 +168,14 @@ def selected(store: dict, root: str | None, folder) -> tuple[str | None, str]:
         if parent == here:
             break
         here = parent
+    name = os.path.basename(config) if config else "firebase.json"
+    try:  # the CLI reads it from the project folder, under the --config file's name
+        data = json.loads(_jsonc((Path(root) / name).read_text())) if root else None
+    except (OSError, UnicodeDecodeError, ValueError):
+        data = None
+    legacy = data.get("firebase") if isinstance(data, dict) else None
+    if isinstance(legacy, str) and legacy:
+        return names.get(legacy, legacy), f'the "firebase" key in {name}'
     if len(names) == 1:
         return next(iter(names.values())), "the only project in .firebaserc"
     return names.get("default"), "the default in .firebaserc"
@@ -205,13 +225,14 @@ def options(args: list[str]) -> list[tuple[str, str | None]]:
 
 
 def words(args: list[str]) -> list[str]:
-    """The command and its arguments, without options and the values of VALUED options. An option Keyfit does not
-    know may take the next word as its value, so the words stop there: an unclear command line is never taken for a
-    sign-in command, which would skip every check."""
+    """The command and its arguments, without options and the values of VALUED options; everything after `--` is an
+    argument. An option Keyfit does not know may take the next word as its value, so the words stop there: an unclear
+    command line is never taken for a sign-in command, which would skip every check."""
     out, i = [], 0
     while i < len(args):
         arg = args[i]
         if arg == "--":
+            out += args[i + 1:]
             break
         if arg.startswith("-") and len(arg) > 1:
             short, takes = _short(arg) if not arg.startswith("--") else ([], False)
@@ -268,8 +289,8 @@ class FirebaseAdapter(Adapter):
         return str(conn.get("project") or "?")
 
     def inject(self, conn, env: dict) -> None:
-        for var in SCRUB:
-            env.pop(var, None)
+        for var in [v for v in env if scrubbed(v)]:
+            env.pop(var)
 
     def fingerprint(self, conn, env: dict) -> str:
         """Changes with a new sign-in of the account (Google's ID token of it: subject and time), so a cached check
@@ -306,6 +327,14 @@ class FirebaseAdapter(Adapter):
         root = project_root(folder, config)
         used, binding = bound(store, root)
         here = f" --config {shlex.quote(config)}" if config else ""
+        if root is None:  # commands that need no firebase.json (firestore:delete, auth:export) still pick a project
+            project, how = selected(store, None, folder)
+            if project is not None and project != expected:
+                rc = Path(os.path.abspath(folder)) / ".firebaserc"
+                return fail(f"no firebase.json here, and the firebase CLI works on {printable(project)} here ({how}), "
+                            f"the project expects {expected}",
+                            "run firebase in the project's Firebase folder (where firebase.json is)"
+                            if how.startswith("picked") else f"make {expected} the default in {tilde(rc)}")
         if not same(used, email):
             if root is None:
                 return Check(self.kind, "warn", label, f"no firebase.json here, so the firebase CLI uses its default "
@@ -315,7 +344,7 @@ class FirebaseAdapter(Adapter):
                         f"firebase login:use {email}{here}")
         if root is None:
             return Check(self.kind, "ok", label, f"{email} (default login, no firebase.json here)", pending=True)
-        project, how = selected(store, root, folder)
+        project, how = selected(store, root, folder, config)
         if project is None:
             return fail(f"no Firebase project selected in {tilde(root)} (.firebaserc has no default)",
                         f"firebase use {expected}{here}")
@@ -392,7 +421,7 @@ class FirebaseAdapter(Adapter):
         binary = firebase_bin(env, os.getcwd())
         if binary is None:
             return None, "not checked online: no firebase CLI here to renew its sign-in", "missing"
-        run_env = {k: v for k, v in env.items() if k not in SCRUB}
+        run_env = {k: v for k, v in env.items() if not scrubbed(k)}
         run_env.update(NO_UPDATE_NOTIFIER="1", NO_COLOR="1")
         with tempfile.TemporaryDirectory() as away:  # no firebase.json: --account picks the sign-in; a log stays there
             try:

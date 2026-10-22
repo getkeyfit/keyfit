@@ -1760,19 +1760,24 @@ def _configuration_line(name: str, settings: dict) -> str:
 
 def _gcloud_configuration(project: str, names: list[str], email: str | None, env: dict) -> tuple[str | None, str]:
     """The gcloud configuration a project uses, when not given: the only one signed in as the project's Google
-    account, else the only one, else one picked at the terminal."""
+    account (any one, when the project has no Google account yet), else one of them picked at the terminal. Never
+    another account's: setting the project's account there would move every gcloud that uses it (the configuration
+    active everywhere else, say)."""
     rows = {n: gcloud_adapter.read(env, n) or {} for n in names}
-    fits = [n for n in names if email and google_adapter.same(rows[n].get("account"), email)]
+    fits = [n for n in names if email is None or google_adapter.same(rows[n].get("account"), email)]
+    if not fits:
+        name = _account_name(project, "gcloud")
+        return None, (f"no gcloud configuration uses {email} (gcloud has {', '.join(names)}), and Keyfit takes no "
+                      f"other account's: gcloud uses it elsewhere\n  → gcloud config configurations create {name} "
+                      f"--no-activate, then: keyfit add gcloud --configuration {name} --project-id ID")
     if len(fits) == 1:
         return fits[0], ""
-    if len(names) == 1:
-        return names[0], ""
     if sys.stdin.isatty():
-        print("gcloud configurations on this Mac:")
-        options = [_configuration_line(n, rows[n]) for n in fits or names]
+        print("gcloud configurations on this Mac" + (f" signed in as {email}:" if email else ":"))
+        options = [_configuration_line(n, rows[n]) for n in fits]
         picked = _choose(f"gcloud configuration for {project}", options)
         if picked:
-            return (fits or names)[options.index(picked)], ""
+            return fits[options.index(picked)], ""
     return None, f"pick a gcloud configuration with --configuration NAME (this Mac has {', '.join(names)})"
 
 
