@@ -93,12 +93,13 @@ COPILOT_VALUED = ("-C", "--config-dir", "--additional-mcp-config", "--enable-mcp
 # has no sign-in command, so Keyfit's is a session that signs in (its own dialog) and quits.
 GEMINI_SUBCOMMANDS = {"mcp", "extensions", "extension", "skills", "skill", "hooks", "hook", "gemma"}
 GEMINI_SIGN_INS = (["--prompt-interactive", "/quit"], ["-i", "/quit"], ["--prompt-interactive=/quit"], ["-i=/quit"])
-# Sign-in and setup commands always run — they are how a failed check gets fixed.
+# Sign-in and setup commands always run — they are how a failed check gets fixed. Only those: `gh auth token` and
+# `status`, or `vercel teams invite`, run checked like any other command.
 LOGIN_COMMANDS = {
     "aws": (("sso", "login"), ("sso", "logout"), ("login",), ("logout",), ("configure",)),
     "claude": (("auth",), ("setup-token",)),
     "codex": (("login",), ("logout",)),
-    "gh": (("auth",),),
+    "gh": (("auth", "login"), ("auth", "logout"), ("auth", "refresh"), ("auth", "switch"), ("auth", "setup-git")),
     "vercel": (("login",), ("logout",), ("switch",), ("whoami",), ("teams",)),
     "supabase": (("login",), ("logout",)),
     "wrangler": (("login",), ("logout",), ("whoami",), ("auth", "create"), ("auth", "activate"), ("auth", "deactivate"),
@@ -149,6 +150,9 @@ VALUE_OPTIONS = {"--profile", "--region", "--output", "--endpoint-url", "--query
                  "-c", "--config", "-m", "--model", "-Q", "--global-config", "-S", "--scope", "-T", "--team",
                  "-t", "--token", "-A", "--local-config", "--cwd", "--api", "--workdir", "--project-ref",
                  "--project-id", "--org-id", "--network-id", "--dns-resolver", "-o"}
+# gh's options that decide which account's token `gh auth token` and `status` print, and those taking a value.
+GH_SHORT = {"h": "--hostname", "u": "--user", "t": "--show-token", "a": "--active"}
+GH_VALUED = {"--hostname", "--user", "--json", "--jq", "--template"}
 
 
 class Refused(Exception):
@@ -220,6 +224,8 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
                 raise Refused(f"keyfit: this folder belongs to {project.name} (AWS profile {profile}); "
                               f"refusing --profile {asked}.\n  Bypass once: KEYFIT_DISABLE=1 aws …")
         return args
+    if tool == "gh":
+        return gh_args(project, args)
     if tool == "vercel":
         return vercel_args(project, args, env, cwd)
     if tool == "supabase":
@@ -265,6 +271,67 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
         return copilot_args(project, args, env, cwd, owners)
     if tool == "gemini":
         return gemini_args(project, args, env, cwd, owners)
+    return args
+
+
+def gh_options(args: list[str]) -> list[tuple[str, str | None]]:
+    """(long name, value) of gh's options before `--`, read like gh: `--user x`, `--user=x`, `-u x`, `-ux` and
+    letters grouped (`-at`). A switch has the value None, or what follows its "=" (`--show-token=false`)."""
+    found, i = [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            break
+        if arg.startswith("--"):
+            name, eq, value = arg.partition("=")
+            if name in GH_VALUED and not eq:
+                value = args[i + 1] if i + 1 < len(args) else None
+                i += 1
+            found.append((name, value if eq or name in GH_VALUED else None))
+        elif arg.startswith("-") and len(arg) > 1:
+            letters = arg[1:]
+            for j, letter in enumerate(letters):
+                name, rest = GH_SHORT.get(letter, "-" + letter), letters[j + 1:]
+                if name in GH_VALUED:  # the rest of the word is its value, else the next word
+                    if not rest:
+                        rest = args[i + 1] if i + 1 < len(args) else None
+                        i += 1
+                    found.append((name, rest.removeprefix("=") if rest else rest))
+                    break
+                if rest.startswith("="):
+                    found.append((name, rest[1:]))
+                    break
+                found.append((name, None))
+        i += 1
+    return found
+
+
+def gh_switch(given: list[tuple[str, str | None]], name: str) -> bool:
+    values = [value for option, value in given if option == name]  # the last one counts
+    return bool(values) and (values[-1] is None or values[-1].lower() not in ("false", "f", "0"))
+
+
+def gh_args(project: Project, args: list[str]) -> list[str]:
+    """`gh auth token`, `status` and `git-credential` run with the project's GH_TOKEN, which gh answers with first.
+    Refuse what would make them answer with another account's token: --user other than the project's login,
+    `--secure-storage` without it (the token of gh's active account) and `--show-token` without --active (the tokens
+    of every account gh keeps)."""
+    if positionals(args)[:1] != ["auth"]:
+        return args
+    login = project.connections["github"].get("login") or ""
+    refuse = f"keyfit: this folder belongs to {project.name} (GitHub {login}); refusing"
+    bypass = "\n  Bypass once: KEYFIT_DISABLE=1 gh …"
+    given = gh_options(args)
+    users = [value for name, value in given if name == "--user"]
+    for user in users:
+        if (user or "").lower() != login.lower():  # GitHub logins ignore case
+            raise Refused(f"{refuse} --user {printable(user or '')}.{bypass}")
+    if gh_switch(given, "--secure-storage") and not users:
+        raise Refused(f"{refuse} --secure-storage without --user {login}: gh would read the token of its active "
+                      f"account, which may be another one.{bypass}")
+    if gh_switch(given, "--show-token") and not gh_switch(given, "--active"):
+        raise Refused(f"{refuse} --show-token without --active: gh would print the token of every account it "
+                      f"keeps, not only {login}'s.\n  Only {login}'s: gh auth status --active --show-token{bypass}")
     return args
 
 
