@@ -568,6 +568,32 @@ class AddVercelTests(VercelCase):
         self.assertEqual(self.registry()["accounts"]["vercel"]["own"],
                          {"config_dir": str(self.own), "user": "hubot", "team": "globex", "team_id": "team_globex"})
 
+    def test_a_second_login_in_the_same_team_never_takes_over_the_first_projects_account(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["init", "--yes", "--root", str(self.repos["mine"]), "--name", "mine"])
+        self.login(self.default, team="team_acme")
+        self.assertEqual(self.add()[0], 0)  # client: octocat in team acme → 'acme'
+        self.login(self.own, HUBOT, team="team_acme")
+        with mock.patch.dict(MEMBERS, {"hubot": {"team_acme"}}):
+            code, out, err = self.add("--project", "mine", "--config-dir", str(self.own))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, "mine: vercel account 'acme-2' → hubot, team acme (selected in that login; another: "
+                              f"--team SLUG) in {self.own}\n")
+        reg = self.registry()
+        self.assertEqual(reg["accounts"]["vercel"]["acme"],
+                         {"config_dir": "~/Library/Application Support/com.vercel.cli", "user": "octocat",
+                          "team": "acme", "team_id": "team_acme"})
+        self.assertEqual(reg["accounts"]["vercel"]["acme-2"],
+                         {"config_dir": str(self.own), "user": "hubot", "team": "acme", "team_id": "team_acme"})
+        self.assertEqual((reg["projects"]["client"]["vercel"], reg["projects"]["mine"]["vercel"]), ("acme", "acme-2"))
+
+    def test_new_refuses_a_name_that_is_not_a_name(self):
+        for name in ("../x", "../../x", "a\nb"):
+            self.assertEqual(self.add("--new", "--name", name),
+                             (1, "", "a name is letters, digits, '.', '_' and '-' (at most 64)\n"))
+        self.assertFalse((self.config / "x").exists() or (self.tmp / "x").exists())
+        self.assertNotIn("vercel", self.registry()["projects"]["client"])
+
     def test_new_and_config_dir_exclude_each_other(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             main(["add", "vercel", "--new", "--name", "x", "--config-dir", "/x"])
