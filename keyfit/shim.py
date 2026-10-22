@@ -1142,9 +1142,9 @@ def main(argv: list[str]) -> int:
             if failed:
                 _say([f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"])
                 return 1
-        if tool in AGENTS:
-            for check in (c for c in checks if c.status == "warn"):
-                _say([f"keyfit: {check.lines()[0].strip()}"])
+        # agents: every warning; every tool: a success trusted from the cache because the provider did not answer
+        for check in (c for c in checks if c.status == "warn" and (tool in AGENTS or c.transient)):
+            _say([f"keyfit: {check.lines()[0].strip()}"])
         seen = [var for check in checks if check.kind == tool for var in check.scrub]
         args = adjust_args(tool, project, args, run_env, Path.cwd(), registry.mcp_owners(), seen)
     except Refused as refusal:

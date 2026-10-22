@@ -3,8 +3,10 @@
 Local checks run on every launch. A remote check is reused while it is fresh
 (30 minutes) and while the connection and its fingerprint (a new sign-in, a
 different key) are unchanged. When the network does not answer, a success from
-the last 24 hours is shown as a warning instead of blocking. Failures are never
-cached. The file holds statuses, labels and variable names only — no secrets.
+the last 24 hours is shown as a warning instead of blocking. Only successes are
+cached (with the names of the shell keys OpenCode reported): a failure or a
+warning removes the entry, so the next launch checks again. The file holds
+statuses, labels and variable names only — no secrets.
 """
 
 from __future__ import annotations
@@ -52,14 +54,26 @@ def put(k: str, status: str, detail: str, scrub=()) -> None:
         now = time.time()
         data = {key_: v for key_, v in _load().items() if now - v.get("at", 0) < STALE}
         data[k] = {"at": now, "status": status, "detail": detail, **({"scrub": list(scrub)} if scrub else {})}
-        path = _path()
-        try:
-            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")  # unique per process and thread
-            write_private(tmp, json.dumps(data))
-            os.replace(tmp, path)
-        except OSError:
-            pass
+        _save(data)
+
+
+def drop(k: str) -> None:
+    """Forget one check after the provider answered otherwise. Best effort, like put; no write when it is not there."""
+    with _LOCK:
+        data = _load()
+        if data.pop(k, None) is not None:
+            _save(data)
+
+
+def _save(data: dict) -> None:
+    path = _path()
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")  # unique per process and thread
+        write_private(tmp, json.dumps(data))
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 def clear() -> None:

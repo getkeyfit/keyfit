@@ -58,7 +58,8 @@ def _names(entry: dict) -> tuple:
 
 
 def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cache: bool = False) -> list[Check]:
-    """Check the selected connections. Remote checks run in parallel; successes are cached."""
+    """Check the selected connections. Remote checks run in parallel; successes are cached, and any other answer from
+    the provider forgets the success before it."""
 
     def one(item):
         kind, conn = item
@@ -83,11 +84,15 @@ def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cac
             last = cache.get(k, max_age=cache.STALE)
             if last is not None:
                 age = human(time.time() - last["at"])
-                return local.merge(Check(kind, "warn", local.label,
-                                         f"{last['detail']} {age} ago · could not re-check now ({result.detail})",
-                                         scrub=_names(last)))
-        if not result.failed:
+                trusted = local.merge(Check(kind, "warn", local.label,
+                                            f"{last['detail']} {age} ago · could not re-check now ({result.detail})",
+                                            scrub=_names(last)))
+                trusted.transient = True  # the shim says so for every tool, not only the agents
+                return trusted
+        elif result.status == "ok" or result.scrub:  # and the shell keys OpenCode reported, by name, for its sessions
             cache.put(k, result.status, result.detail, result.scrub)
+        else:  # a failure or a warning: the next launch asks again instead of trusting the success before it
+            cache.drop(k)
         return local.merge(result)
 
     items = _selected(project, kinds)

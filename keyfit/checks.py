@@ -16,7 +16,7 @@ class Check:
     detail: str = ""
     fix: str = ""
     pending: bool = False  # the local verdict depends on a remote check
-    transient: bool = False  # failed because the network did not answer — retry, or trust a recent success
+    transient: bool = False  # the network did not answer: a failure to retry, or a warning trusting a recent success
     scrub: tuple = ()  # variables from the shell the tool must start without (names only, kept with a cached check)
 
     @property
