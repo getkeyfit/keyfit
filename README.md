@@ -1,12 +1,20 @@
-# Keyfit
+<div align="center">
 
-**Your AI agents and cloud CLIs use the accounts of the project you are in, checked before they start.**
+<img src="https://keyfit.dev/logo/keyfit-icon-dark.svg" alt="Keyfit icon" width="96" height="96" />
 
-![macOS](https://img.shields.io/badge/platform-macOS-lightgrey) ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue) ![zsh | bash](https://img.shields.io/badge/shell-zsh%20%7C%20bash-green) ![MIT](https://img.shields.io/badge/license-MIT-brightgreen)
+### Keyfit
 
-[![In harbor-api, claude starts with harbor's accounts and /mcp lists only harbor's Linear server. In lumen-web, the AWS sign-in has expired: Keyfit does not start Claude, offers the sign-in, then starts it, and /mcp lists only lumen's Linear server.](.github/demo.gif)](https://keyfit.dev/#demo-title)
+Your AI agents and cloud CLIs use the accounts of the project you are in, checked before they start.
 
-<sub>Real Keyfit and Claude Code with two made-up clients, whose AWS and Linear accounts are stand-ins (<a href="scripts/demo">scripts/demo</a> records it).</sub>
+[**Install**](#install) &nbsp;&bull;&nbsp; [Website](https://keyfit.dev) &nbsp;&bull;&nbsp; [Documentation](https://keyfit.dev/docs/quickstart/) &nbsp;&bull;&nbsp; [Security](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/security.md) &nbsp;&bull;&nbsp; [Changelog](https://github.com/FlamurMaliqi/keyfit/blob/main/CHANGELOG.md)
+
+<p align="center">
+  <a href="https://keyfit.dev/#demo-title"><img width="800" alt="In harbor-api, claude starts with harbor's accounts and /mcp lists only harbor's Linear server. In lumen-web, the AWS sign-in has expired: Keyfit does not start Claude, offers the sign-in, then starts it, and /mcp lists only lumen's Linear server." src="https://keyfit.dev/demo/keyfit-demo.gif" /></a>
+</p>
+
+<sub>Real Keyfit and Claude Code with two made-up clients, whose AWS and Linear accounts are stand-ins (<a href="https://github.com/FlamurMaliqi/keyfit/tree/main/scripts/demo">scripts/demo</a> records it).</sub>
+
+</div>
 
 After a one-time `keyfit setup`, you keep typing `claude`, `aws`, `gh` and the rest as usual. Keyfit works out which project the current folder belongs to and checks that project's accounts with the services themselves. If everything matches, the tool starts with only that project's credentials. If a check fails, the tool does not start, and you see the command that fixes it:
 
@@ -34,24 +42,24 @@ If you work with a single set of accounts, you don't need Keyfit.
 
 | Agent | Command | Keyfit confirms |
 |---|---|---|
-| [Claude Code][claude] | `claude` | the Claude organization |
-| [Codex][codex] | `codex` | a ChatGPT login, without an API key |
-| [OpenCode][opencode] | `opencode` | OpenCode's sign-ins |
-| [Copilot CLI][copilot] | `copilot` | the GitHub account it runs as |
-| [Gemini CLI][gemini] | `gemini` | the Google account it is signed in to |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/claude-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/claude.svg" /></picture> &nbsp;[Claude Code][claude] | `claude` | the Claude organization |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/openai-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/openai.svg" /></picture> &nbsp;[Codex][codex] | `codex` | a ChatGPT login, without an API key |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/opencode-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/opencode.svg" /></picture> &nbsp;[OpenCode][opencode] | `opencode` | OpenCode's sign-ins |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/copilot-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/copilot.svg" /></picture> &nbsp;[Copilot CLI][copilot] | `copilot` | the GitHub account it runs as |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/gemini-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/gemini.svg" /></picture> &nbsp;[Gemini CLI][gemini] | `gemini` | the Google account it is signed in to |
 
 **CLIs** get only their own account:
 
 | Service | Command | Keyfit confirms |
 |---|---|---|
-| [AWS][aws] | `aws` | the account behind the profile |
-| [GitHub][github] | `gh` | the login |
-| [Vercel][vercel] | `vercel` | the login and the team |
-| [Supabase][supabase] | `supabase` | the organization, and that the linked project belongs to it |
-| [Cloudflare][cloudflare] | `wrangler` | the account behind wrangler's sign-in |
-| [Convex][convex] | `convex` | the team, and that the folder's deployment belongs to it |
-| [Google Cloud][gcloud] | `gcloud` | the Google account and the project |
-| [Firebase][firebase] | `firebase` | the Google account and the Firebase project |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/aws-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/aws.svg" /></picture> &nbsp;[AWS][aws] | `aws` | the account behind the profile |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/github-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/github.svg" /></picture> &nbsp;[GitHub][github] | `gh` | the login |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/vercel-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/vercel.svg" /></picture> &nbsp;[Vercel][vercel] | `vercel` | the login and the team |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/supabase-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/supabase.svg" /></picture> &nbsp;[Supabase][supabase] | `supabase` | the organization, and that the linked project belongs to it |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/cloudflare-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/cloudflare.svg" /></picture> &nbsp;[Cloudflare][cloudflare] | `wrangler` | the account behind wrangler's sign-in |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/convex-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/convex.svg" /></picture> &nbsp;[Convex][convex] | `convex` | the team, and that the folder's deployment belongs to it |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/gcloud-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/gcloud.svg" /></picture> &nbsp;[Google Cloud][gcloud] | `gcloud` | the Google account and the project |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/firebase-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/firebase.svg" /></picture> &nbsp;[Firebase][firebase] | `firebase` | the Google account and the Firebase project |
 
 **Also for agents:** the [Linear][linear] workspace behind the key, and the Google account behind the project's [Gmail, Drive and Calendar][google-mcp] MCP servers. [MCP servers][mcp] that belong to other projects are hidden.
 
@@ -198,6 +206,9 @@ Measured on a MacBook Pro with an Apple M4 (16 GB, macOS 26.6, Python 3.13.3), w
 | **~0.2 s** | For `gh`, `claude`, `codex`, `opencode`, `copilot` and `gemini` in a project with a GitHub or Copilot account |
 | **0.5–2 s** | When the checks have to go online: at most once every 30 minutes per project, and right after a new sign-in |
 
+<details>
+<summary>Where the time goes</summary>
+
 - **The 0.2 s:** half of it is `gh auth token`, which Keyfit runs to get the account's token (once: a Copilot account that is the project's GitHub login reuses that token once its check confirmed it). Inside a session that Keyfit started, `gh` and `copilot` keep the token their check already confirmed, and cost about 0.1 s.
 - **Online checks:** GitHub, Linear, Vercel, Supabase, Cloudflare, Convex and Claude are checked in parallel. A few start a CLI and take longer:
   - Cloudflare's starts wrangler (`wrangler whoami`), which takes 1–2 s.
@@ -206,6 +217,8 @@ Measured on a MacBook Pro with an Apple M4 (16 GB, macOS 26.6, Python 3.13.3), w
   - Gemini CLI's asks Google once, and only while the sign-in's token is still valid.
   - Firebase's asks Google twice; when the access token the firebase CLI keeps has expired (it lasts an hour), it first starts the CLI to renew it (`firebase projects:list`, about 2 s).
   - AWS takes about 1 s with a console sign-in (`aws login`), because its check starts the AWS CLI; longer when your credential tool has to renew a login.
+
+</details>
 
 `--version` is checked like any other command, so `time gh --version` inside a project shows the full cost. To measure Keyfit alone on your Mac, with stub tools and no accounts or network: `python3 scripts/bench_shim.py`.
 
@@ -231,16 +244,31 @@ Measured on a MacBook Pro with an Apple M4 (16 GB, macOS 26.6, Python 3.13.3), w
 - **Delete its data too:** `keyfit setup --remove --purge` also deletes `~/.config/keyfit`: the registry, the check cache, and the Claude, Vercel, OpenCode and Gemini CLI login folders Keyfit made (with the logins in them). It asks first (`--yes` skips the question). Keys Keyfit stored in the Keychain are kept; it lists their names so you can delete them in Keychain Access.
 - **Uninstall:** run `keyfit setup --remove` first, then `pipx uninstall keyfit` or `brew uninstall keyfit`. Done the other way round, the thirteen tools stop with a note that names the line to remove.
 
-## More
+## Private by design
 
-- [Accounts][accounts]: every account, tool by tool: what it gets, what is checked, what is refused, and its limits
-- [Security](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/security.md): what Keyfit reads, stores and sends, and what it does not protect against
-- [Troubleshooting](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/troubleshooting.md)
-- [Contributing](https://github.com/FlamurMaliqi/keyfit/blob/main/CONTRIBUTING.md): running the tests and the rules every change follows
-- [Reporting a vulnerability](https://github.com/FlamurMaliqi/keyfit/blob/main/SECURITY.md)
-- [Changelog](https://github.com/FlamurMaliqi/keyfit/blob/main/CHANGELOG.md)
+- **No account, no server, no telemetry.** A small open-source command-line tool with no dependencies.
+- **Keys stay secret.** Never printed or logged. Keys you add are stored in the macOS Keychain.
+- **Each key goes only where it belongs.** The Linear key goes to Linear, the GitHub token to GitHub. Nothing else leaves your Mac.
+- **Your repositories stay untouched.** Nothing is written into your code or into another tool's login.
 
-MIT licensed.
+[Everything Keyfit reads, stores and sends](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/security.md), and what it does not protect against.
+
+## Learn more
+
+- **[Accounts][accounts]**: every account, tool by tool: what it gets, what is checked, what is refused, and its limits
+- **[Security](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/security.md)**: what Keyfit reads, stores and sends
+- **[Troubleshooting](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/troubleshooting.md)**: when a tool doesn't go through Keyfit, or a check fails
+- **[Changelog](https://github.com/FlamurMaliqi/keyfit/blob/main/CHANGELOG.md)**: what changed in each version
+
+## Contributing
+
+Bugs and ideas go in [issues](https://github.com/FlamurMaliqi/keyfit/issues). [CONTRIBUTING.md](https://github.com/FlamurMaliqi/keyfit/blob/main/CONTRIBUTING.md) covers running the tests and the rules every change follows. Please report vulnerabilities privately, as [SECURITY.md](https://github.com/FlamurMaliqi/keyfit/blob/main/SECURITY.md) describes.
+
+![macOS](https://img.shields.io/badge/platform-macOS-lightgrey?style=flat) ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=flat) ![zsh | bash](https://img.shields.io/badge/shell-zsh%20%7C%20bash-green?style=flat) [![MIT](https://img.shields.io/badge/license-MIT-brightgreen?style=flat)](https://github.com/FlamurMaliqi/keyfit/blob/main/LICENSE)
+
+## License
+
+Keyfit is free and open source under the MIT license.
 
 [accounts]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md
 [claude]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#claude-code
