@@ -56,13 +56,24 @@ AGENTS = ("claude", "codex", "opencode", "copilot", "gemini")
 OPTIONAL = ("supabase", "wrangler", "convex", "gcloud", "firebase")
 PINNED = ("aws", "gh", "vercel", "supabase", "wrangler", "convex", "gcloud", "firebase")
 MAX_DEPTH = 6
-CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs",
-                      "mcp", "plugin", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update", "help"}
+CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "daemon", "doctor", "gateway", "import", "install",
+                      "logs", "mcp", "plugin", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update",
+                      "help"}
+# Claude Code's background sessions run under one supervisor per config folder, which keeps the environment of the start
+# that launched it and gives it to every background session, in any folder. What starts or wakes one is refused where
+# that environment holds a project's accounts (see claude_background); `daemon status`, `logs` and `stop` only read or
+# stop it.
+CLAUDE_BACKGROUND = {"agents", "attach", "respawn"}
+CLAUDE_DAEMON_READ = {"status", "logs", "stop"}
 CODEX_SUBCOMMANDS = {"agents", "exec", "e", "review", "login", "logout", "mcp", "plugin", "app-server",
                      "remote-control", "app", "completion", "update", "doctor", "sandbox", "debug", "apply", "a",
                      "resume", "queue", "archive", "delete", "migrate-rollouts", "unarchive", "fork", "cloud",
                      "exec-server", "features", "help"}
 CODEX_SESSIONS = {None, "exec", "e", "review", "resume", "fork"}
+# The interactive sessions, which use Codex's shared app server unless told --no-daemon, and the commands that work on
+# that server: it keeps the environment of the start that launched it, for every folder.
+CODEX_NO_DAEMON = {None, "resume", "fork"}
+CODEX_SHARED = {"agents", "queue", "remote-control", "app-server"}
 OPENCODE_SUBCOMMANDS = {"upgrade", "update", "uninstall", "acp", "api", "debug", "auth", "mcp", "plugin", "models",
                         "stats", "mini", "run", "session", "service", "reload", "pair", "serve"}
 # OpenCode's background server serves every folder and keeps the environment of the start that launched it. Its own
@@ -221,10 +232,16 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
     if tool == "claude":
         if subcommand(args, CLAUDE_SUBCOMMANDS):
             return args
+        env["CLAUDE_CODE_DISABLE_AGENT_VIEW"] = "1"  # no background sessions, also from ← and /background
         settings = mcp.claude_settings(project, env, cwd, owners)
         return (["--settings", json.dumps(settings)] if settings else []) + args
     if tool == "codex":
         sub = subcommand(args, CODEX_SUBCOMMANDS)
+        if sub in CODEX_SHARED:
+            raise Refused(f"keyfit: codex not started: `codex {sub}` works on Codex's shared app server, which keeps "
+                          f"the environment it started with for every folder: {project.name}'s accounts could reach "
+                          f"other folders, or another project's accounts this one.\n  Run it in a terminal outside "
+                          f"every project (bypass once: KEYFIT_DISABLE=1 codex …)")
         if sub not in CODEX_SESSIONS:
             return args
         try:
@@ -233,7 +250,7 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
             raise Refused(f"keyfit: codex not started, {project.name} must not see MCP server {printable(str(server))}, "
                           f"and Codex cannot hide a name with a dot, \"=\" or a space at either end.\n"
                           f"  Rename it in ~/.codex/config.toml (underscores work), or remove it.") from None
-        if sub is None:
+        if sub in CODEX_NO_DAEMON:
             extra.append("--no-daemon")  # the shared daemon keeps the first launcher's environment
         return extra + args
     if tool == "opencode":
@@ -243,6 +260,38 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
     if tool == "gemini":
         return gemini_args(project, args, env, cwd, owners)
     return args
+
+
+def claude_background(args: list[str], env: dict, project: Project | None) -> None:
+    """Refuse what starts or wakes Claude Code's background sessions (`--bg`, CLAUDE_BACKGROUND, `daemon run`) in a
+    project, and inside a session Keyfit started (KEYFIT_PROJECT set), whose environment holds that project's accounts.
+    Sessions in a project start with background sessions off (adjust_args); elsewhere Claude runs unchanged."""
+    session = env.get("KEYFIT_PROJECT")
+    if project is None and not session:
+        return
+    end = args.index("--") if "--" in args else len(args)
+    sub = subcommand(args, CLAUDE_SUBCOMMANDS)
+    if sub == "daemon":
+        words = [a for a in args[:end] if not a.startswith("-")]
+        after = words[words.index(sub) + 1:][:1]
+        command = None if after and after[0] in CLAUDE_DAEMON_READ else " ".join([sub, *after])
+    elif sub in CLAUDE_BACKGROUND:
+        command = sub
+    elif sub is None:
+        command = next((a for a in args[:end] if a in ("--bg", "--background")), None)
+    else:
+        command = None
+    if command is None:
+        return
+    if session:
+        raise Refused(f"keyfit: claude not started: inside a session of {printable(session)}, "
+                      f"`claude {printable(command)}` could start Claude's background supervisor with that project's "
+                      f"accounts, and every background session, in any folder, would get them.\n  Run it in a terminal "
+                      f"outside the session (bypass once: KEYFIT_DISABLE=1 claude …)")
+    raise Refused(f"keyfit: claude not started: `claude {printable(command)}` runs under Claude's background "
+                  f"supervisor, which keeps the environment it started with for every background session, in any "
+                  f"folder: {project.name}'s accounts could reach other folders, or another project's accounts this "
+                  f"one.\n  Bypass once, with your own environment: KEYFIT_DISABLE=1 claude …")
 
 
 def opencode_standalone(args: list[str]) -> list[str]:
@@ -1081,6 +1130,8 @@ def main(argv: list[str]) -> int:
                           f"once: KEYFIT_DISABLE=1 {tool} …")
         if tool in ("opencode", "copilot"):
             folder_check(tool, opencode_folder(args) if tool == "opencode" else copilot_folder(args), registry, project)
+        if tool == "claude":  # before the checks, and inside a session outside every project too
+            claude_background(args, env, project)
         if project is None:  # not a registered project: exactly as before Keyfit
             return start(real, tool, opencode_private(args, env) if tool == "opencode" else args, env, env)
         if tool == "gcloud":  # before sign-in commands too: they write into configurations
