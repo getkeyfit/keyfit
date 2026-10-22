@@ -41,5 +41,15 @@ class PrivateNameTests(unittest.TestCase):
             self.assertFalse(pairs & PRIVATE_NAMES, f"{path.relative_to(ROOT)} names a private project")
 
 
+
+@unittest.skipUnless((ROOT / ".git").exists(), "needs a git checkout")
+class GitignoreTests(unittest.TestCase):
+    def test_per_machine_files_are_never_committed(self):
+        # direnv's .envrc and its cache, and the .vercel link the keyfit.dev deploy copies into the worktree root
+        for name in (".envrc", ".direnv/python-3.13/bin/python", ".vercel/project.json", "site/.vercel/project.json"):
+            out = subprocess.run(["git", "check-ignore", "--no-index", "-v", name], cwd=ROOT, capture_output=True,
+                                 text=True, timeout=60)
+            self.assertEqual(out.stdout.split(":")[0], ".gitignore", f"{name} is not in .gitignore")
+
 if __name__ == "__main__":
     unittest.main()
