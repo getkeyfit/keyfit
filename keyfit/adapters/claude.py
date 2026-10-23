@@ -33,8 +33,9 @@ SCRUB = (
     "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_MANTLE",
     "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CONFIG_DIR",
 )
-# Files that follow the user into a new account's config dir (never credentials or .claude.json).
-SHARED = ("settings.json", "keybindings.json", "CLAUDE.md", "skills", "commands", "agents")
+# Files that follow the user into a new account's config dir (never credentials or .claude.json). Claude keeps the
+# plugins and marketplaces settings.json enables in the config dir too (`plugins`).
+SHARED = ("settings.json", "keybindings.json", "CLAUDE.md", "skills", "commands", "agents", "plugins")
 
 
 def default_dir(env: dict) -> Path:

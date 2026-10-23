@@ -141,6 +141,12 @@ class ClaudeTests(unittest.TestCase):
         state = json.loads((self.other / ".claude.json").read_text())
         self.assertEqual(list(state["projects"]), [str(child)])
 
+    def test_seed_links_the_plugins_settings_enable(self):
+        # Claude keeps installed plugins and marketplaces in the config folder; settings.json only enables them
+        (self.home / ".claude" / "plugins").mkdir()
+        self.assertIn("plugins", seed(self.other, {"HOME": str(self.home)}, []))
+        self.assertEqual((self.other / "plugins").resolve(), self.home / ".claude" / "plugins")
+
     def test_seed_creates_an_owner_only_folder(self):
         # Claude keeps the account's transcripts and history in this folder
         fresh = self.tmp / "accounts" / "fresh"
