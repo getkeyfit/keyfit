@@ -449,8 +449,8 @@ def claude_background(args: list[str], env: dict, project: Project | None, regis
         if command is None:  # a session: it starts with background sessions off
             _say([f"keyfit: background sessions off: {running}.", f"  Stop it, and the sessions it runs: {stop}"])
             return False
-        raise Refused(f"keyfit: claude not started: {running}, and every background session it runs gets them, also "
-                      f"{owner.name}'s.\n  Stop it, and the sessions it runs, then try again: {stop}")
+        raise Refused(f"keyfit: claude not started: {running}, and every background session it runs gets that "
+                      f"environment, {owner.name}'s too.\n  Stop it, and the sessions it runs, then try again: {stop}")
     if command is None:
         return False
     way = ("\n  Background sessions work in a project whose Claude login has a config folder of its own: in its folder, "
