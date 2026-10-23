@@ -112,6 +112,8 @@ keyfit add copilot                          # inside the project: Copilot CLI ru
 - **Refused in the project:** an `--allowed-mcp-server-names` of your own that names another project's server.
 - **Sign-in commands:** `gemini --prompt-interactive /quit` always runs. Gemini CLI has no sign-in command: this starts it in the project's Gemini CLI folder, where its own sign-in dialog opens, and quits once you are signed in.
 
+**Which accounts Gemini CLI still serves.** Since 18 June 2026, Gemini CLI no longer serves Google AI Pro, Google AI Ultra or free personal Google accounts: Google moved them to Antigravity CLI ([google-gemini/gemini-cli#28017](https://github.com/google-gemini/gemini-cli/discussions/28017)), which Keyfit doesn't cover. A Google sign-in with a Gemini Code Assist licence and a Gemini API key still work. Keyfit's check confirms which Google account is signed in, not whether Gemini CLI still serves it.
+
 Gemini CLI keeps everything in `~/.gemini`: settings, sessions, extensions and the Google sign-in. `GEMINI_CLI_HOME` moves that folder, so an account is a folder, and its sign-in is checked against the project's Google account, the work or the personal email. `keyfit add gemini` takes your own `~/.gemini` when it is signed in as that account; for the other one, the project gets a folder of its own:
 
 ```bash
