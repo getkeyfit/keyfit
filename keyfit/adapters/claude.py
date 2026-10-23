@@ -19,12 +19,14 @@ remote  — `claude auth status --json` in that environment must report a
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 from pathlib import Path
 
 from ..checks import Check
 from ..realbin import find_real
-from ..registry import canonical, write_private
+from ..registry import Project, Registry, canonical, write_private
 from .base import Adapter
 
 SCRUB = (
@@ -44,6 +46,54 @@ def default_dir(env: dict) -> Path:
 
 def is_default(config_dir: str | Path, env: dict) -> bool:
     return canonical(config_dir) == default_dir(env)
+
+
+def own_folder(project: Project, registry: Registry, env: dict) -> Path | None:
+    """The project's Claude config folder when it is the project's own: not the default login's (~/.claude, or the
+    CLAUDE_CONFIG_DIR your shell sets) and no other project's Claude account is in it. Claude Code runs one background
+    supervisor per config folder, so only there do background sessions keep to the project's accounts."""
+    def folder(p: Project) -> Path | None:
+        conn = p.connections.get("claude")
+        return canonical(conn.get("config_dir") or "~/.claude") if isinstance(conn, dict) else None
+    mine = folder(project)
+    shell = None if env.get("KEYFIT_PROJECT") else env.get("CLAUDE_CONFIG_DIR")  # inside a session: the session's
+    if mine is None or mine == default_dir(env) or (shell and canonical(shell) == mine):
+        return None
+    if any(folder(p) == mine for name, p in registry.projects().items() if name != project.name):
+        return None
+    return mine
+
+
+def supervisor(config_dir: Path) -> str | None:
+    """The project whose environment Claude's background supervisor for *config_dir* runs with (its KEYFIT_PROJECT;
+    "" when it has none, or Keyfit can't read it), or None when none runs. Read only: the pid in the folder's
+    daemon.lock, that process's start time against the lock's procStart (as Claude checks it: a pid gets reused), and
+    its environment (`ps -E`), of which only that one name is kept."""
+    try:
+        lock = json.loads((config_dir / "daemon.lock").read_text())
+        pid = int(lock["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if pid <= 0:
+        return None
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        pass  # another user's process: ps tells
+    except (OSError, OverflowError):
+        return None
+    try:
+        out = subprocess.run(["/bin/ps", "-E", "-ww", "-o", "lstart=,command=", "-p", str(pid)], env={"TZ": "UTC"},
+                             capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if not out.split():
+        return None
+    started = lock.get("procStart")
+    if isinstance(started, str) and started.split() != out.split()[:5]:
+        return None  # the supervisor is gone, and another process has its pid
+    found = set(re.findall(r"(?<!\S)KEYFIT_PROJECT=(\S*)", out))
+    return found.pop() if len(found) == 1 else ""
 
 
 def login_command(config_dir: str | Path, env: dict) -> str:

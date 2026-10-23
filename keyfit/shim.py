@@ -23,6 +23,7 @@ from pathlib import Path
 
 from . import cache, environment, mcp, secrets
 from .adapters import ADAPTERS, cloudflare, convex, copilot, firebase, gcloud, gemini, opencode, supabase, vercel
+from .adapters import claude as claude_adapter
 from .adapters.google import same
 from .checks import printable
 from .realbin import find_real
@@ -61,8 +62,8 @@ CLAUDE_SUBCOMMANDS = {"agents", "attach", "auth", "auto-mode", "daemon", "doctor
                       "help"}
 # Claude Code's background sessions run under one supervisor per config folder, which keeps the environment of the start
 # that launched it and gives it to every background session, in any folder. What starts or wakes one is refused where
-# that environment holds a project's accounts (see claude_background); `daemon status`, `logs` and `stop` only read or
-# stop it.
+# that environment holds a project's accounts, unless the folder is that project's own (see claude_background);
+# `daemon status`, `logs` and `stop` only read or stop it.
 CLAUDE_BACKGROUND = {"agents", "attach", "respawn"}
 CLAUDE_DAEMON_READ = {"status", "logs", "stop"}
 CODEX_SUBCOMMANDS = {"agents", "exec", "e", "review", "login", "logout", "mcp", "plugin", "app-server",
@@ -251,8 +252,9 @@ def requested_profiles(args: list[str]) -> list[str]:
 
 
 def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Path,
-                owners: dict | None = None, seen=()) -> list[str]:
-    """*seen*: the shell variables the checks found that the tool must start without (OpenCode's)."""
+                owners: dict | None = None, seen=(), background: bool = False) -> list[str]:
+    """*seen*: the shell variables the checks found that the tool must start without (OpenCode's). *background*: Claude
+    may run background sessions (claude_background)."""
     if tool == "aws":
         aws_profiles(project, args)
         return args
@@ -269,12 +271,15 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
     if tool == "firebase":
         return firebase_args(project, args, env, cwd)
     if tool == "claude":
-        if subcommand(tool, args, CLAUDE_SUBCOMMANDS):
+        sub = subcommand(tool, args, CLAUDE_SUBCOMMANDS)
+        if sub and not (sub == "agents" and background):  # agent view passes its --settings to the sessions it starts
             return args
-        env["CLAUDE_CODE_DISABLE_AGENT_VIEW"] = "1"  # no background sessions, also from ← and /background
+        if not background:
+            env["CLAUDE_CODE_DISABLE_AGENT_VIEW"] = "1"  # no background sessions, also from ← and /background
         given, configs, rest = claude_given(args)  # one --settings: a repeated option keeps its last value
         try:
-            settings = mcp.claude_settings(project, env, cwd, owners, given[-1] if given else None, configs)
+            settings = mcp.claude_settings(project, env, cwd, owners, given[-1] if given else None, configs,
+                                           background=background)
         except mcp.Unreadable as error:
             if error.option:
                 raise Refused(f"keyfit: claude not started: the JSON given to {error.option} is not a JSON object "
@@ -286,6 +291,9 @@ def adjust_args(tool: str, project: Project, args: list[str], env: dict, cwd: Pa
                           f"and Keyfit would have to put them on Claude's command line, where every process can read "
                           f"them, to add the MCP servers {project.name} must not see.\n  Set them in your shell instead "
                           f"(bypass once: KEYFIT_DISABLE=1 claude …)")
+        if sub and settings:  # after the word: an option in front of a command keeps it from running
+            at = rest.index(sub) + 1
+            return rest[:at] + ["--settings", json.dumps(settings)] + rest[at:]
         return (["--settings", json.dumps(settings)] if settings else []) + rest
     if tool == "codex":
         sub = subcommand(tool, args, CODEX_SUBCOMMANDS)
@@ -395,13 +403,17 @@ def gh_args(project: Project, args: list[str]) -> list[str]:
     return args
 
 
-def claude_background(args: list[str], env: dict, project: Project | None) -> None:
-    """Refuse what starts or wakes Claude Code's background sessions (`--bg`, CLAUDE_BACKGROUND, `daemon run`) in a
-    project, and inside a session Keyfit started (KEYFIT_PROJECT set), whose environment holds that project's accounts.
-    Sessions in a project start with background sessions off (adjust_args); elsewhere Claude runs unchanged."""
-    session = env.get("KEYFIT_PROJECT")
+def claude_background(args: list[str], env: dict, project: Project | None, registry: Registry) -> bool:
+    """Whether Claude may run background sessions here, refusing what starts or wakes them (`--bg`, CLAUDE_BACKGROUND,
+    `daemon run`) where it may not. Claude Code runs them under one supervisor per config folder, which keeps the
+    environment of the start that launched it for every background session. So they run in a project whose Claude
+    account has a config folder of its own (claude_adapter.own_folder), from your terminal or that project's sessions,
+    while a supervisor already running for the folder has that project's environment. Elsewhere in a project, and inside
+    a session Keyfit started (KEYFIT_PROJECT set), they are refused, and sessions start with them off (adjust_args).
+    Outside every project and session Claude runs unchanged."""
+    session = env.get("KEYFIT_PROJECT") or None
     if project is None and not session:
-        return
+        return True
     end = args.index("--") if "--" in args else len(args)
     sub = subcommand("claude", args, CLAUDE_SUBCOMMANDS)
     if sub == "daemon":
@@ -414,17 +426,44 @@ def claude_background(args: list[str], env: dict, project: Project | None) -> No
         command = next((a for a in args[:end] if a in ("--bg", "--background")), None)
     else:
         command = None
+    if command is None and sub is not None:  # Claude's own commands, `daemon status`, `logs` and `stop` among them
+        return False
+    owner = project if project is not None else registry.get(session)
+    folder = None
+    if owner is not None and session in (None, owner.name):  # never with what another project's session left behind
+        folder = claude_adapter.own_folder(owner, registry, env)
+    if folder is not None and project is None and \
+            canonical(env.get("CLAUDE_CONFIG_DIR") or claude_adapter.default_dir(env)) != folder:
+        folder = None  # inside the project's session, but with another config folder
+    if folder is not None and sub == "daemon":
+        raise Refused(f"keyfit: claude not started: `claude {printable(command)}` starts Claude's background supervisor "
+                      f"by hand. In {owner.name}, `claude agents` and `claude --bg` start it when they need it, checked."
+                      f"\n  Bypass once, with your own environment: KEYFIT_DISABLE=1 claude …")
+    if folder is not None:
+        holder = claude_adapter.supervisor(folder)
+        if holder is None or holder == owner.name:
+            return True
+        running = (f"Claude's background supervisor for {tilde(folder)} runs with "
+                   + (f"{printable(holder)}'s accounts" if holder else "an environment Keyfit didn't start"))
+        stop = f"CLAUDE_CONFIG_DIR={folder} claude daemon stop --any"
+        if command is None:  # a session: it starts with background sessions off
+            _say([f"keyfit: background sessions off: {running}.", f"  Stop it, and the sessions it runs: {stop}"])
+            return False
+        raise Refused(f"keyfit: claude not started: {running}, and every background session it runs gets them, also "
+                      f"{owner.name}'s.\n  Stop it, and the sessions it runs, then try again: {stop}")
     if command is None:
-        return
+        return False
+    way = ("\n  Background sessions work in a project whose Claude login has a config folder of its own: in its folder, "
+           "keyfit add claude --new --name NAME (a name no other project uses), then sign in there as printed.")
     if session:
         raise Refused(f"keyfit: claude not started: inside a session of {printable(session)}, "
                       f"`claude {printable(command)}` could start Claude's background supervisor with that project's "
                       f"accounts, and every background session, in any folder, would get them.\n  Run it in a terminal "
-                      f"outside the session (bypass once: KEYFIT_DISABLE=1 claude …)")
+                      f"outside the session (bypass once: KEYFIT_DISABLE=1 claude …){way}")
     raise Refused(f"keyfit: claude not started: `claude {printable(command)}` runs under Claude's background "
                   f"supervisor, which keeps the environment it started with for every background session, in any "
                   f"folder: {project.name}'s accounts could reach other folders, or another project's accounts this "
-                  f"one.\n  Bypass once, with your own environment: KEYFIT_DISABLE=1 claude …")
+                  f"one.{way}\n  Bypass once, with your own environment: KEYFIT_DISABLE=1 claude …")
 
 
 def claude_given(args: list[str]) -> tuple[list[str], list[str], list[str]]:
@@ -1439,8 +1478,9 @@ def main(argv: list[str]) -> int:
         folders = {"opencode": opencode_folder, "copilot": copilot_folder, "codex": codex_folder}
         if tool in folders:
             folder_check(tool, folders[tool](args), registry, project)
+        background = False
         if tool == "claude":  # before the checks, and inside a session outside every project too
-            claude_background(args, env, project)
+            background = claude_background(args, env, project, registry)
         if project is None:  # not a registered project: exactly as before Keyfit
             if tool == "codex":
                 args = codex_private(args, env)
@@ -1512,7 +1552,7 @@ def main(argv: list[str]) -> int:
         for check in (c for c in checks if c.status == "warn" and (tool in AGENTS or c.transient)):
             _say([f"keyfit: {check.lines()[0].strip()}"])
         seen = [var for check in checks if check.kind == tool for var in check.scrub]
-        args = adjust_args(tool, project, args, run_env, Path.cwd(), registry.mcp_owners(), seen)
+        args = adjust_args(tool, project, args, run_env, Path.cwd(), registry.mcp_owners(), seen, background)
     except Refused as refusal:
         print(refusal, file=sys.stderr)
         return 1
