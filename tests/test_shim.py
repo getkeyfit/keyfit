@@ -537,6 +537,103 @@ class ShimTests(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertEqual(json.loads(self.run_tool("claude", *args).stdout)["argv"], args)
 
+    def own_claude_folder(self) -> Path:
+        """demo's Claude account in a config folder of its own, as `keyfit add claude --new --name client` makes it."""
+        folder = self.config / "claude" / "client"
+        folder.mkdir(parents=True)
+        reg = self.config / "registry.toml"
+        reg.write_text(reg.read_text().replace('claude = "work"\n', 'claude = "client"\n') +
+                       f'\n[accounts.claude.client]\nconfig_dir = "{folder}"\norg_id = "org-work"\norg_name = "Work"\n')
+        return folder
+
+    def supervisor(self, folder: Path, project: str | None, started: str | None = None) -> None:
+        """A running process in *folder*'s daemon.lock, as Claude writes it, with KEYFIT_PROJECT=*project*."""
+        env = {"PATH": "/usr/bin:/bin", **({"KEYFIT_PROJECT": project} if project else {})}
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], env=env)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        lstart = subprocess.run(["/bin/ps", "-o", "lstart=", "-p", str(proc.pid)], env={"TZ": "UTC"},
+                                capture_output=True, text=True, check=True).stdout.strip()
+        (folder / "daemon.lock").write_text(json.dumps({"pid": proc.pid, "procStart": started or lstart,
+                                                        "origin": "transient"}))
+
+    def test_claude_background_sessions_run_in_a_project_with_its_own_folder(self):
+        folder = self.own_claude_folder()
+        seen = json.loads(self.run_tool("claude", "agents").stdout)
+        self.assertEqual((seen["argv"][0], seen["argv"][1]), ("agents", "--settings"))  # to the sessions it starts
+        self.assertNotIn("disableAgentView", json.loads(seen["argv"][2]))
+        self.assertIsNone(seen["CLAUDE_CODE_DISABLE_AGENT_VIEW"])
+        for args in (["--bg", "x"], ["-p", "hi"]):
+            with self.subTest(args=args):
+                seen = json.loads(self.run_tool("claude", *args).stdout)
+                self.assertEqual((seen["argv"][0], seen["argv"][2:]), ("--settings", args))
+                self.assertNotIn("disableAgentView", json.loads(seen["argv"][1]))
+                self.assertIsNone(seen["CLAUDE_CODE_DISABLE_AGENT_VIEW"])
+        for args in (["attach", "7c5dcf5d"], ["respawn", "7c5dcf5d"]):
+            with self.subTest(args=args):
+                self.assertEqual(json.loads(self.run_tool("claude", *args).stdout)["argv"], args)
+        self.supervisor(folder, "demo")  # one already running for demo
+        self.assertEqual(json.loads(self.run_tool("claude", "agents").stdout)["argv"][0], "agents")
+        # inside demo's session, in a folder outside every project, with demo's folder
+        seen = json.loads(self.run_tool("claude", "agents", cwd=self.outside, KEYFIT_PROJECT="demo",
+                                        CLAUDE_CONFIG_DIR=str(folder)).stdout)
+        self.assertEqual(seen["argv"], ["agents"])
+
+    def test_claude_background_sessions_stay_off_elsewhere(self):
+        out = self.run_tool("claude", "agents")  # the default folder
+        self.assertIn("keyfit add claude --new --name NAME (a name no other project uses)", out.stderr)
+        folder = self.own_claude_folder()
+        out = self.run_tool("claude", "daemon", "run")  # only the supervisor a checked start launches
+        self.assertEqual((out.returncode, out.stdout), (1, ""))
+        self.assertIn("starts Claude's background supervisor by hand", out.stderr)
+        cases = {"another project's session": dict(KEYFIT_PROJECT="other"),
+                 "demo's session in another config folder": dict(cwd=self.outside, KEYFIT_PROJECT="demo"),
+                 "the folder your shell signs Claude in with": dict(CLAUDE_CONFIG_DIR=str(folder))}
+        for case, extra in cases.items():
+            with self.subTest(case=case):
+                out = self.run_tool("claude", "--bg", "x", **extra)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn("keyfit add claude --new --name NAME", out.stderr)
+        seen = json.loads(self.run_tool("claude", "-p", "hi", KEYFIT_PROJECT="other").stdout)
+        self.assertIs(json.loads(seen["argv"][1])["disableAgentView"], True)
+        other = self.tmp / "other"
+        other.mkdir()
+        reg = self.config / "registry.toml"  # a second project with an account in the same folder
+        reg.write_text(reg.read_text() + f'\n[projects.other]\nroots = ["{other}"]\nclaude = "client"\n')
+        for args in self.BACKGROUND:
+            with self.subTest(args=args):
+                out = self.run_tool("claude", *args)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn("background supervisor", out.stderr)
+        seen = json.loads(self.run_tool("claude", "-p", "hi").stdout)
+        self.assertIs(json.loads(seen["argv"][1])["disableAgentView"], True)
+        self.assertEqual(seen["CLAUDE_CODE_DISABLE_AGENT_VIEW"], "1")
+
+    def test_claude_background_sessions_refused_while_another_projects_supervisor_runs(self):
+        folder = self.own_claude_folder()
+        stop = f"CLAUDE_CONFIG_DIR={folder} claude daemon stop --any"
+        self.supervisor(folder, "other")
+        for args in (["agents"], ["--bg", "x"], ["respawn", "7c5dcf5d"]):
+            with self.subTest(args=args):
+                out = self.run_tool("claude", *args)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))  # the real claude never started
+                self.assertIn(f"Claude's background supervisor for {folder} runs with other's accounts", out.stderr)
+                self.assertIn(stop, out.stderr)
+        out = self.run_tool("claude", "-p", "hi")  # a session starts, with background sessions off
+        seen = json.loads(out.stdout)
+        self.assertIs(json.loads(seen["argv"][1])["disableAgentView"], True)
+        self.assertEqual(seen["CLAUDE_CODE_DISABLE_AGENT_VIEW"], "1")
+        self.assertIn("keyfit: background sessions off", out.stderr)
+        self.assertIn(stop, out.stderr)
+        self.assertEqual(json.loads(self.run_tool("claude", "daemon", "stop", "--any").stdout)["argv"],
+                         ["daemon", "stop", "--any"])  # the fix runs
+        self.supervisor(folder, None)  # started outside Keyfit
+        out = self.run_tool("claude", "agents")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("runs with an environment Keyfit didn't start", out.stderr)
+        self.supervisor(folder, "other", started="Thu Jan  1 00:00:00 2026")  # gone; another process has its pid
+        self.assertEqual(json.loads(self.run_tool("claude", "agents").stdout)["argv"][0], "agents")
+
     CODEX_SESSIONS = ([], ["fix it"], ["resume", "--last"], ["fork", "--last"])
     CODEX_SHARED = (["agents"], ["queue", "--thread", "t", "--message", "m"], ["remote-control"], ["app-server"])
 

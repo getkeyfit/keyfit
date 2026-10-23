@@ -3,6 +3,8 @@ import io
 import json
 import os
 import stat
+import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -11,7 +13,7 @@ from unittest import mock
 
 from keyfit import mcp
 from keyfit.adapters import gemini
-from keyfit.adapters.claude import ClaudeAdapter, login_command, seed
+from keyfit.adapters.claude import ClaudeAdapter, login_command, own_folder, seed, supervisor
 from keyfit.adapters.google_mcp import GoogleMcpAdapter
 from keyfit.cli import main
 from keyfit.realbin import find_real
@@ -140,6 +142,39 @@ class ClaudeTests(unittest.TestCase):
         seed(self.other, {"HOME": str(self.home)}, [child, stranger])
         state = json.loads((self.other / ".claude.json").read_text())
         self.assertEqual(list(state["projects"]), [str(child)])
+
+    def test_seed_links_the_plugins_settings_enable(self):
+        # Claude keeps installed plugins and marketplaces in the config folder; settings.json only enables them
+        (self.home / ".claude" / "plugins").mkdir()
+        self.assertIn("plugins", seed(self.other, {"HOME": str(self.home)}, []))
+        self.assertEqual((self.other / "plugins").resolve(), self.home / ".claude" / "plugins")
+
+    def test_own_folder_is_neither_the_default_nor_shared(self):
+        env = {"HOME": str(self.home)}
+        accounts = {"claude": {"work": self.work, "client": {"config_dir": str(self.other)}}}
+        reg = Registry(self.tmp / "registry.toml", {"projects": {"acme": {"roots": ["/a"], "claude": "client"},
+                                                                  "globex": {"roots": ["/g"], "claude": "work"}},
+                                                     "accounts": accounts})
+        self.assertEqual(own_folder(reg.get("acme"), reg, env), self.other)
+        self.assertIsNone(own_folder(reg.get("globex"), reg, env))  # ~/.claude
+        self.assertIsNone(own_folder(reg.get("acme"), reg, dict(env, CLAUDE_CONFIG_DIR=str(self.other))))  # your shell's
+        reg.data["projects"]["initech"] = {"roots": ["/i"], "claude": "client"}
+        self.assertIsNone(own_folder(reg.get("acme"), reg, env))  # another project's account is in it too
+
+    def test_supervisor_reads_only_a_running_one(self):
+        self.assertIsNone(supervisor(self.other))  # no daemon.lock
+        for lock in ("not json", '{"pid": "x"}', '{"pid": 0}', '{"pid": 99999999}', "[1]"):
+            with self.subTest(lock=lock):
+                (self.other / "daemon.lock").write_text(lock)
+                self.assertIsNone(supervisor(self.other))
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                                env={"KEYFIT_PROJECT": "acme", "OTHER": "a KEYFIT_PROJECT=globex"})
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        (self.other / "daemon.lock").write_text(json.dumps({"pid": proc.pid}))
+        self.assertEqual(supervisor(self.other), "")  # two names: not one Keyfit can tell
+        (self.other / "daemon.lock").write_text(json.dumps({"pid": proc.pid, "procStart": "Thu Jan  1 00:00:00 2026"}))
+        self.assertIsNone(supervisor(self.other))  # another process got the pid
 
     def test_seed_creates_an_owner_only_folder(self):
         # Claude keeps the account's transcripts and history in this folder

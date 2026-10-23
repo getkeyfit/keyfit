@@ -339,7 +339,16 @@ From the third pre-launch review:
   `daemon run` are refused in a project and inside a session. `claude daemon status`, `logs` and
   `stop` run as typed (Keyfit's `--settings` in front of `daemon` kept them from running). A
   supervisor that already runs keeps what it got: stop it once in a terminal outside every project,
-  with `claude daemon stop --any`.
+  with `claude daemon stop --any`. A project whose Claude login has a config folder of its own
+  (`keyfit add claude --new --name NAME`: not `~/.claude`, and no other project's Claude account in
+  it) gets background sessions back, since that folder has a supervisor of its own: there
+  `claude agents`, `--bg`, `attach` and `respawn` run, checked, sessions start with agent view on, and
+  `claude agents` gets Keyfit's `--settings` for the sessions it starts. A supervisor already running
+  for that folder must have that project's environment (Keyfit reads its pid and start time in the
+  folder's `daemon.lock`, and its `KEYFIT_PROJECT` with `ps -E`); otherwise those commands are refused,
+  naming `CLAUDE_CONFIG_DIR=… claude daemon stop --any`. `claude daemon run` stays refused, and the
+  other refusals now name `keyfit add claude --new`. `keyfit add claude --new` also links `plugins`
+  from `~/.claude`: Claude keeps the plugins `settings.json` enables in the config folder.
 - **Codex's shared server no longer gets a project's accounts either.** It keeps the environment of
   the start that launched it, for every folder. `codex resume` and `codex fork` now start with
   `--no-daemon`, like `codex`, and `codex agents`, `queue`, `remote-control` and `app-server`, which

@@ -301,12 +301,12 @@ def _claude_given(value: str, cwd: Path, option: str) -> dict:
 
 
 def claude_settings(project: Project, env: dict, cwd: Path, owners: dict | None = None, given: str | None = None,
-                    configs=()) -> dict:
+                    configs=(), background: bool = False) -> dict:
     """Claude's --settings for a session of *project*: Keyfit's keys merged into *given*, your own --settings (the hidden
-    servers added to yours, background sessions off, the status line only where you set none). A name is denied when
-    any of its definitions must be hidden (the deny goes by name, for every scope), the servers of `--mcp-config` (the
-    files or JSON in *configs*) too. Unreadable: ~/.claude.json, the folder's .mcp.json, *given* or a config can't be
-    parsed."""
+    servers added to yours, background sessions off unless *background*, the status line only where you set none). A
+    name is denied when any of its definitions must be hidden (the deny goes by name, for every scope), the servers of
+    `--mcp-config` (the files or JSON in *configs*) too. Unreadable: ~/.claude.json, the folder's .mcp.json, *given* or
+    a config can't be parsed."""
     servers = claude_servers(env, cwd, strict=True)
     for value in configs:
         servers += [(name, spec) for name, spec in _table(_claude_given(value, cwd, "--mcp-config").get("mcpServers")).items()
@@ -316,7 +316,8 @@ def claude_settings(project: Project, env: dict, cwd: Path, owners: dict | None 
     disabled = [name for name, spec in local.items()
                 if isinstance(spec, dict) and hidden(name, spec, project, owners, verified=False, env=env)]
     settings = _claude_given(given, cwd, "--settings") if given is not None else {}
-    settings["disableAgentView"] = True  # background sessions would run with their supervisor's first environment
+    if not background:
+        settings["disableAgentView"] = True  # background sessions would run with their supervisor's first environment
     if "statusLine" not in settings and not _user_statusline(env):
         settings["statusLine"] = {"type": "command", "command": statusline_command()}
     if denied:
