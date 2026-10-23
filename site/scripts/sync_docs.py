@@ -28,6 +28,8 @@ PAGES = {
     "security": ("Security", "Everything Keyfit reads, stores and sends.", 5, [("docs/security.md", None)]),
     "troubleshooting": ("Troubleshooting", "When a tool doesn't go through Keyfit, or a check fails.", 6,
                         [("docs/troubleshooting.md", None)]),
+    "faq": ("FAQ", "Multiple accounts for Claude Code, Codex, AWS and gh, one per client, and how Keyfit compares.", 7,
+            [("README.md", ["FAQ"])]),
 }
 
 # links in the sources → links on the site

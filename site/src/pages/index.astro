@@ -8,9 +8,9 @@ import Icon from '../components/Icon.astro';
 import Copy from '../components/Copy.astro';
 import Term, { type Line } from '../components/Term.astro';
 
-const title = 'Keyfit: the right accounts for every repo';
+const title = 'Keyfit: multiple client accounts for Claude Code, Codex and AWS, checked per project';
 const description =
-	'Keyfit verifies each project’s AWS, Linear, GitHub, Claude, Codex, OpenCode, Copilot CLI, Gemini CLI, Vercel, Supabase, Cloudflare, Convex, Google Cloud and Firebase accounts before your agent runs.';
+	'Multiple accounts on one Mac, one per client or work and personal: Keyfit checks that Claude Code, Codex, aws, gh and nine more tools use the project’s own accounts before they start, and blocks them if not.';
 const repo = 'https://github.com/FlamurMaliqi/keyfit';
 // Launch day (KEY-38): set to true once PyPI and the Homebrew tap have Keyfit. Until then the
 // install commands stay hidden, so nobody copies `pipx install keyfit` before that name is ours.
@@ -148,6 +148,12 @@ const faq = [
 		<meta property="og:description" content={description} />
 		<meta property="og:type" content="website" />
 		<meta property="og:url" content="https://keyfit.dev/" />
+		<meta property="og:image" content="https://keyfit.dev/og/keyfit-og.png" />
+		<meta property="og:image:width" content="1200" />
+		<meta property="og:image:height" content="630" />
+		<meta property="og:image:alt" content="A terminal: Keyfit doesn't start claude in lumen-web because its AWS sign-in has expired, and asks: Sign in now?" />
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="twitter:image" content="https://keyfit.dev/og/keyfit-og.png" />
 		<link rel="canonical" href="https://keyfit.dev/" />
 		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 		<meta name="theme-color" content="#111111" />

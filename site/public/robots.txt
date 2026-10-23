@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://keyfit.dev/sitemap-index.xml
