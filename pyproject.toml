@@ -5,17 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "keyfit"
 dynamic = ["version"]
-description = "Per-project, verified environments for AI coding tools"
+description = "Per-project accounts for Claude Code, Codex, AWS, gh and other CLIs, checked before they start, for multiple clients on one Mac"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Flamur Maliqi", email = "contact@flamur-maliqi.de" }]
-keywords = ["aws", "claude", "cloudflare", "codex", "convex", "copilot", "credentials", "firebase", "gcloud",
-            "github", "google-cloud", "linear", "mcp", "opencode", "supabase", "vercel"]
+keywords = ["ai-agents", "aws", "aws-profile", "claude", "claude-code", "cloudflare", "codex", "coding-agents", "convex",
+            "copilot", "credentials", "firebase", "gcloud", "gemini-cli", "github", "google-cloud", "keychain", "linear",
+            "macos", "mcp", "multiple-accounts", "opencode", "supabase", "vercel", "wrangler"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
+    "Environment :: MacOS X",
     "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -23,12 +26,14 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
     "Topic :: Software Development",
     "Topic :: Utilities",
 ]
 
 [project.urls]
 Homepage = "https://keyfit.dev"
+Documentation = "https://keyfit.dev/docs/quickstart/"
 Source = "https://github.com/FlamurMaliqi/keyfit"
 Issues = "https://github.com/FlamurMaliqi/keyfit/issues"
 Changelog = "https://github.com/FlamurMaliqi/keyfit/blob/main/CHANGELOG.md"
