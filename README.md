@@ -48,6 +48,8 @@ If you work with a single set of accounts, you don't need Keyfit.
 | <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/copilot-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/copilot.svg" /></picture> &nbsp;[Copilot CLI][copilot] | `copilot` | the GitHub account it runs as |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="https://keyfit.dev/logos/gemini-white.svg" /><img height="16" align="top" alt="" src="https://keyfit.dev/logos/gemini.svg" /></picture> &nbsp;[Gemini CLI][gemini] | `gemini` | the Google account it is signed in to |
 
+Since 18 June 2026, Gemini CLI no longer serves Google AI Pro, Ultra or free personal accounts: Google moved them to Antigravity CLI, which Keyfit doesn't cover. Gemini CLI still works with a Gemini Code Assist licence or an API key.
+
 **CLIs** get only their own account:
 
 | Service | Command | Keyfit confirms |
