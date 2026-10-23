@@ -16,7 +16,7 @@ Your AI agents and cloud CLIs use the accounts of the project you are in, checke
 
 </div>
 
-Keyfit is for multiple accounts on one Mac: one per client, or work and personal. Each project has its own Claude Code and Codex logins, AWS profile, GitHub account and so on. After a one-time `keyfit setup`, you keep typing `claude`, `codex`, `aws`, `gh` and the rest as usual. Keyfit works out which project the current folder belongs to and checks that project's accounts with the services themselves. If everything matches, the tool starts with only that project's credentials. If a check fails, the tool does not start, and you see the command that fixes it:
+Keyfit is for multiple accounts on one Mac: one per client, or work and personal. Each project can have its own Claude Code and Codex login, AWS profile, GitHub account and so on. After a one-time `keyfit setup`, you keep typing `claude`, `codex`, `aws`, `gh` and the rest as usual. Keyfit works out which project the current folder belongs to and checks that project's accounts with the services themselves. If everything matches, the tool starts with only that project's credentials. If a check fails, the tool does not start, and you see the command that fixes it:
 
 ```
 $ cd ~/code/acme-api && claude
