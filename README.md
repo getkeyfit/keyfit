@@ -72,11 +72,12 @@ Each link goes to that account's section in [docs/accounts.md][accounts]: how to
 You need macOS, Python 3.11 or newer, and zsh or bash. The `python3` that comes with macOS is 3.9, which is too old; `brew install pipx` installs pipx together with a current Python (then run `pipx ensurepath` and open a new terminal).
 
 ```bash
-pipx install keyfit                       # coming with the first release
-brew install flamurmaliqi/keyfit/keyfit   # coming with the first release
+pipx install keyfit
+# or, with Homebrew:
+brew install flamurmaliqi/keyfit/keyfit
 ```
 
-Nothing is published yet. Until then, install from source:
+For the latest unreleased code, install from source:
 
 ```bash
 git clone https://github.com/FlamurMaliqi/keyfit.git
