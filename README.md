@@ -273,6 +273,10 @@ In the repository, run `keyfit add aws --profile acme-dev` and `keyfit add githu
 
 No. The folder you are in picks the project, and Keyfit checks that project's accounts before the tool starts. The credentials go into that one tool's environment; gh's active account and the login in `~/.claude` stay as they are. If a check fails, the tool doesn't start.
 
+### Does it work with account switchers such as claude-swap and codex-multi-auth?
+
+Yes. Claude is checked by organization and Codex by being a ChatGPT login, not down to the person, so [claude-swap](https://github.com/realiti4/claude-swap) can move between logins of the project's organization, and [codex-multi-auth](https://github.com/ndycode/codex-multi-auth) between ChatGPT logins. If claude-swap switches to an account in another organization, Keyfit doesn't start Claude. To require one exact login, add it with `--pin-email` (Claude) or `--pin-account` (Codex).
+
 ### Why not `CLAUDE_CONFIG_DIR` or `CODEX_HOME` aliases, direnv or aws-vault?
 
 Each of them picks an account, but none checks whose it is before the tool starts:
