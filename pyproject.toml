@@ -34,9 +34,9 @@ classifiers = [
 [project.urls]
 Homepage = "https://keyfit.dev"
 Documentation = "https://keyfit.dev/docs/quickstart/"
-Source = "https://github.com/FlamurMaliqi/keyfit"
-Issues = "https://github.com/FlamurMaliqi/keyfit/issues"
-Changelog = "https://github.com/FlamurMaliqi/keyfit/blob/main/CHANGELOG.md"
+Source = "https://github.com/getkeyfit/keyfit"
+Issues = "https://github.com/getkeyfit/keyfit/issues"
+Changelog = "https://github.com/getkeyfit/keyfit/blob/main/CHANGELOG.md"
 
 [project.scripts]
 keyfit = "keyfit.cli:main"

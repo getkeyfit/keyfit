@@ -10,8 +10,9 @@
    fresh virtualenv to run its `keyfit --version` and `keyfit setup`, and publishes them with
    PyPI trusted publishing (no token on any laptop or in GitHub secrets). One-time setup on
    pypi.org → Account → Publishing → "Add a new pending publisher": project `keyfit`, owner
-   `FlamurMaliqi`, repository `keyfit`, workflow `release.yaml` (the exact file name: PyPI matches
-   it letter for letter), environment `pypi`. Done for `keyfit` (checked 2026-10-16).
+   `getkeyfit`, repository `keyfit`, workflow `release.yaml` (the exact file name: PyPI matches
+   it letter for letter), environment `pypi`. Done for owner `FlamurMaliqi` (checked 2026-10-16); the
+   repository moved to `getkeyfit` on 2026-10-27, so the pending publisher has to be added again.
    To build locally instead: `python3 -m build && python3 -m twine check dist/*`, and try the wheel
    in a fresh virtualenv (`keyfit --version`).
 6. **Check** <https://pypi.org/project/keyfit/> shows the version, then `pipx install keyfit` on a
@@ -37,10 +38,10 @@
 Once, before the first tag. Private vulnerability reporting and the environment rules need a public
 repository on the free plan, and they must be in place before the tag: pushing it starts the publish.
 
-1. **Public.** `gh repo edit FlamurMaliqi/keyfit --visibility public --accept-visibility-change-consequences`,
-   and the same for the tap, `FlamurMaliqi/homebrew-keyfit`.
+1. **Public.** `gh repo edit getkeyfit/keyfit --visibility public --accept-visibility-change-consequences`,
+   and the same for the tap, `getkeyfit/homebrew-keyfit`.
 2. **Private vulnerability reporting**, which `SECURITY.md` links to:
-   `gh api -X PUT repos/FlamurMaliqi/keyfit/private-vulnerability-reporting`.
+   `gh api -X PUT repos/getkeyfit/keyfit/private-vulnerability-reporting`.
 3. **The `pypi` environment** (Settings → Environments → `pypi`): Flamur as required reviewer, and
    deployments only from tags matching `v*`. A pushed tag then waits for that approval before it publishes.
 4. **Tag** (steps 1–4 above). `v0.1.0` already exists, on an older commit, from a release run that never
@@ -51,4 +52,4 @@ repository on the free plan, and they must be in place before the tag: pushing i
    awk '/^## \[/ { notes = /^## \[0\.1\.0\]/; next } /^\[[^]]+\]: / { next } notes' CHANGELOG.md > notes.md
    gh release create v0.1.0 --verify-tag --title "Keyfit 0.1.0" --notes-file notes.md
    ```
-6. **The tap** (step 7 above), then `brew install flamurmaliqi/keyfit/keyfit` works on a clean account.
+6. **The tap** (step 7 above), then `brew install getkeyfit/keyfit/keyfit` works on a clean account.
