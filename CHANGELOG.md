@@ -27,6 +27,10 @@ reviews, before anything was published.
   keyfit`, a Homebrew formula for a tap); the shims and the Claude status line run the
   installed package with the Python that ran `keyfit setup`. `keyfit --version` prints the
   version.
+- **claude-swap and codex-multi-auth on the first setup.** In a terminal, the first `keyfit setup`
+  asks whether to install each of these login switchers whose agent is installed and which isn't
+  yet (`uv tool install claude-swap` or `pipx install claude-swap`; `npm install -g
+  codex-multi-auth`). Enter skips; running setup again asks nothing.
 - **Guided first run.** In a terminal, `keyfit init` registers the repository, then offers what
   it finds on this Mac one at a time: an AWS profile from `~/.aws/config` (or `AWS_CONFIG_FILE`),
   a GitHub account `gh` is signed in to, the current Claude, Codex and Vercel logins, and a Linear key
