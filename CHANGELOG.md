@@ -677,5 +677,5 @@ From the third pre-launch review:
   Any name with `LINEAR` and `KEY` or `TOKEN`, in any case, now goes (LinearB's `LINEARB_…` stays); the
   project's own variable is set again.
 
-[Unreleased]: https://github.com/FlamurMaliqi/keyfit/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/FlamurMaliqi/keyfit/releases/tag/v0.1.0
+[Unreleased]: https://github.com/getkeyfit/keyfit/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/getkeyfit/keyfit/releases/tag/v0.1.0

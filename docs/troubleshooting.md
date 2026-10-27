@@ -261,7 +261,7 @@ keyfit: internal error (TypeError: …) — claude was not started.
 When Keyfit itself fails, it stops the tool instead of starting it unchecked.
 
 1. Run `keyfit doctor` and fix anything it marks with ✘.
-2. If that doesn't help, please [open a bug report](https://github.com/FlamurMaliqi/keyfit/issues/new/choose) and include:
+2. If that doesn't help, please [open a bug report](https://github.com/getkeyfit/keyfit/issues/new/choose) and include:
    - the full `internal error` line
    - the output of `keyfit doctor`, run in the same folder
    - the output of `keyfit --version`

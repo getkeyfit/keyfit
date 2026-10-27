@@ -126,7 +126,7 @@ Keyfit's own requests use HTTPS with certificate and hostname checks (Python's d
 
 Please don't report a vulnerability in a public issue, pull request or discussion. Report it privately instead:
 
-- on GitHub, with private vulnerability reporting: the repository's **Security** tab, then **Report a vulnerability** (<https://github.com/FlamurMaliqi/keyfit/security/advisories/new>), or
+- on GitHub, with private vulnerability reporting: the repository's **Security** tab, then **Report a vulnerability** (<https://github.com/getkeyfit/keyfit/security/advisories/new>), or
 - by email to <contact@flamur-maliqi.de>.
 
 [SECURITY.md](../SECURITY.md) says what to include and what counts. Never send real keys or tokens, not even expired ones.

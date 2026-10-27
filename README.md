@@ -6,13 +6,13 @@
 
 Your AI agents and cloud CLIs use the accounts of the project you are in, checked before they start.
 
-[**Install**](#install) &nbsp;&bull;&nbsp; [Website](https://keyfit.dev) &nbsp;&bull;&nbsp; [Documentation](https://keyfit.dev/docs/quickstart/) &nbsp;&bull;&nbsp; [Security](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/security.md) &nbsp;&bull;&nbsp; [Changelog](https://github.com/FlamurMaliqi/keyfit/blob/main/CHANGELOG.md)
+[**Install**](#install) &nbsp;&bull;&nbsp; [Website](https://keyfit.dev) &nbsp;&bull;&nbsp; [Documentation](https://keyfit.dev/docs/quickstart/) &nbsp;&bull;&nbsp; [Security](https://github.com/getkeyfit/keyfit/blob/main/docs/security.md) &nbsp;&bull;&nbsp; [Changelog](https://github.com/getkeyfit/keyfit/blob/main/CHANGELOG.md)
 
 <p align="center">
   <a href="https://keyfit.dev/#demo-title"><img width="800" alt="In harbor-api, claude starts with harbor's accounts and /mcp lists only harbor's Linear server. In lumen-web, the AWS sign-in has expired: Keyfit does not start Claude, offers the sign-in, then starts it, and /mcp lists only lumen's Linear server." src="https://keyfit.dev/demo/keyfit-demo.gif" /></a>
 </p>
 
-<sub>Real Keyfit and Claude Code with two made-up clients, whose AWS and Linear accounts are stand-ins (<a href="https://github.com/FlamurMaliqi/keyfit/tree/main/scripts/demo">scripts/demo</a> records it).</sub>
+<sub>Real Keyfit and Claude Code with two made-up clients, whose AWS and Linear accounts are stand-ins (<a href="https://github.com/getkeyfit/keyfit/tree/main/scripts/demo">scripts/demo</a> records it).</sub>
 
 </div>
 
@@ -74,13 +74,13 @@ You need macOS, Python 3.11 or newer, and zsh or bash. The `python3` that comes 
 ```bash
 pipx install keyfit
 # or, with Homebrew:
-brew install flamurmaliqi/keyfit/keyfit
+brew install getkeyfit/keyfit/keyfit
 ```
 
 For the latest unreleased code, install from source:
 
 ```bash
-git clone https://github.com/FlamurMaliqi/keyfit.git
+git clone https://github.com/getkeyfit/keyfit.git
 pipx install ./keyfit        # or run it without installing: ./keyfit/bin/keyfit … (uses the python3 on PATH, 3.11 or newer)
 ```
 
@@ -135,7 +135,7 @@ acme-api
   ✔ google-mcp gmail_acme, gcal_acme   me@acme.com · confirmed by Google
 ```
 
-If something seems off, run `keyfit doctor`. It checks the installation and prints the fix under every ✘. See also the [troubleshooting guide](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/troubleshooting.md).
+If something seems off, run `keyfit doctor`. It checks the installation and prints the fix under every ✘. See also the [troubleshooting guide](https://github.com/getkeyfit/keyfit/blob/main/docs/troubleshooting.md).
 
 ### Setup options
 
@@ -202,7 +202,7 @@ keyfit secret set NAME             # store a key from a hidden prompt; prints ke
 keyfit secret list                 # names of the keys Keyfit stored (never the values)
 ```
 
-`--project NAME` makes any `keyfit add …` change another project. Account names (`--name`) can be shared between projects that use the same login; given another login, a shared name changes for all of them, and `keyfit add` names the projects it changed. Without `--name`, a second login never takes the first one's name: it gets the next free one, such as `pro-2`. The registry lives in `~/.config/keyfit/registry.toml`. It stores where secrets live, never their values; see [security](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/security.md).
+`--project NAME` makes any `keyfit add …` change another project. Account names (`--name`) can be shared between projects that use the same login; given another login, a shared name changes for all of them, and `keyfit add` names the projects it changed. Without `--name`, a second login never takes the first one's name: it gets the next free one, such as `pro-2`. The registry lives in `~/.config/keyfit/registry.toml`. It stores where secrets live, never their values; see [security](https://github.com/getkeyfit/keyfit/blob/main/docs/security.md).
 
 ## Speed
 
@@ -260,7 +260,7 @@ Measured on a MacBook Pro with an Apple M4 (16 GB, macOS 26.6, Python 3.13.3), w
 - **Each key goes only where it belongs.** The Linear key goes to Linear, the GitHub token to GitHub. Nothing else leaves your Mac.
 - **Your repositories stay untouched.** Nothing is written into your code or into another tool's login.
 
-[Everything Keyfit reads, stores and sends](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/security.md), and what it does not protect against.
+[Everything Keyfit reads, stores and sends](https://github.com/getkeyfit/keyfit/blob/main/docs/security.md), and what it does not protect against.
 
 ## FAQ
 
@@ -307,34 +307,34 @@ No. The thirteen commands go through Keyfit when they are typed in a terminal or
 ## Learn more
 
 - **[Accounts][accounts]**: every account, tool by tool: what it gets, what is checked, what is refused, and its limits
-- **[Security](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/security.md)**: what Keyfit reads, stores and sends
-- **[Troubleshooting](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/troubleshooting.md)**: when a tool doesn't go through Keyfit, or a check fails
-- **[Changelog](https://github.com/FlamurMaliqi/keyfit/blob/main/CHANGELOG.md)**: what changed in each version
+- **[Security](https://github.com/getkeyfit/keyfit/blob/main/docs/security.md)**: what Keyfit reads, stores and sends
+- **[Troubleshooting](https://github.com/getkeyfit/keyfit/blob/main/docs/troubleshooting.md)**: when a tool doesn't go through Keyfit, or a check fails
+- **[Changelog](https://github.com/getkeyfit/keyfit/blob/main/CHANGELOG.md)**: what changed in each version
 
 ## Contributing
 
-Bugs and ideas go in [issues](https://github.com/FlamurMaliqi/keyfit/issues). [CONTRIBUTING.md](https://github.com/FlamurMaliqi/keyfit/blob/main/CONTRIBUTING.md) covers running the tests and the rules every change follows. Please report vulnerabilities privately, as [SECURITY.md](https://github.com/FlamurMaliqi/keyfit/blob/main/SECURITY.md) describes.
+Bugs and ideas go in [issues](https://github.com/getkeyfit/keyfit/issues). [CONTRIBUTING.md](https://github.com/getkeyfit/keyfit/blob/main/CONTRIBUTING.md) covers running the tests and the rules every change follows. Please report vulnerabilities privately, as [SECURITY.md](https://github.com/getkeyfit/keyfit/blob/main/SECURITY.md) describes.
 
-![macOS](https://img.shields.io/badge/platform-macOS-lightgrey?style=flat) ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=flat) ![zsh | bash](https://img.shields.io/badge/shell-zsh%20%7C%20bash-green?style=flat) [![MIT](https://img.shields.io/badge/license-MIT-brightgreen?style=flat)](https://github.com/FlamurMaliqi/keyfit/blob/main/LICENSE)
+![macOS](https://img.shields.io/badge/platform-macOS-lightgrey?style=flat) ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=flat) ![zsh | bash](https://img.shields.io/badge/shell-zsh%20%7C%20bash-green?style=flat) [![MIT](https://img.shields.io/badge/license-MIT-brightgreen?style=flat)](https://github.com/getkeyfit/keyfit/blob/main/LICENSE)
 
 ## License
 
 Keyfit is free and open source under the MIT license.
 
-[accounts]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md
-[claude]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#claude-code
-[codex]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#codex
-[opencode]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#opencode
-[copilot]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#copilot-cli
-[gemini]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#gemini-cli
-[aws]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#aws
-[github]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#github
-[vercel]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#vercel
-[supabase]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#supabase
-[cloudflare]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#cloudflare
-[convex]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#convex
-[gcloud]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#google-cloud
-[firebase]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#firebase
-[linear]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#linear
-[google-mcp]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#gmail-drive-and-calendar
-[mcp]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#mcp-ownership
+[accounts]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md
+[claude]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#claude-code
+[codex]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#codex
+[opencode]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#opencode
+[copilot]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#copilot-cli
+[gemini]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#gemini-cli
+[aws]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#aws
+[github]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#github
+[vercel]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#vercel
+[supabase]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#supabase
+[cloudflare]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#cloudflare
+[convex]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#convex
+[gcloud]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#google-cloud
+[firebase]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#firebase
+[linear]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#linear
+[google-mcp]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#gmail-drive-and-calendar
+[mcp]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#mcp-ownership
