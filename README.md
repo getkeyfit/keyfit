@@ -94,6 +94,8 @@ The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkou
 keyfit setup --rc
 ```
 
+The first time, it also asks whether to install [claude-swap](https://github.com/realiti4/claude-swap) and [codex-multi-auth](https://github.com/ndycode/codex-multi-auth), which switch between your Claude logins and your ChatGPT logins in Codex. Enter skips them.
+
 **2. Register a project.** Open a new terminal, then go to a repository of one of your clients (a repository, not your home folder: everything under the folder you register belongs to that project):
 
 ```bash
@@ -143,6 +145,7 @@ If something seems off, run `keyfit doctor`. It checks the installation and prin
 - **bash:** the line goes into the login profile macOS terminals read. That is the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile` that exists. It also goes into `~/.bashrc` when that profile sources it.
 - **Another file:** `--rc PATH`.
 - **Keep the line last** in the file, so nothing added to PATH later in that file comes before the shims.
+- **claude-swap and codex-multi-auth:** in a terminal, the first `keyfit setup` (also the first after `--remove`) offers each one whose agent is installed and which isn't installed yet. A yes runs `uv tool install claude-swap` (or `pipx install claude-swap`) or `npm install -g codex-multi-auth`; without uv, pipx or npm, it prints how to get them. Running `keyfit setup` again asks nothing.
 
 ## How it works
 
@@ -275,7 +278,7 @@ No. The folder you are in picks the project, and Keyfit checks that project's ac
 
 ### Does it work with account switchers such as claude-swap and codex-multi-auth?
 
-Yes. Claude is checked by organization and Codex by being a ChatGPT login, not down to the person, so [claude-swap](https://github.com/realiti4/claude-swap) can move between logins of the project's organization, and [codex-multi-auth](https://github.com/ndycode/codex-multi-auth) between ChatGPT logins. If claude-swap switches to an account in another organization, Keyfit doesn't start Claude. To require one exact login, add it with `--pin-email` (Claude) or `--pin-account` (Codex).
+Yes. Claude is checked by organization and Codex by being a ChatGPT login, not down to the person, so [claude-swap](https://github.com/realiti4/claude-swap) can move between logins of the project's organization, and [codex-multi-auth](https://github.com/ndycode/codex-multi-auth) between ChatGPT logins. If claude-swap switches to an account in another organization, Keyfit doesn't start Claude. To require one exact login, add it with `--pin-email` (Claude) or `--pin-account` (Codex). The first `keyfit setup` offers to install both.
 
 ### Why not `CLAUDE_CONFIG_DIR` or `CODEX_HOME` aliases, direnv or aws-vault?
 
