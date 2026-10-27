@@ -30,4 +30,4 @@ sidebar:
 - **Delete its data too:** `keyfit setup --remove --purge` also deletes `~/.config/keyfit`: the registry, the check cache, and the Claude, Vercel, OpenCode and Gemini CLI login folders Keyfit made (with the logins in them). It asks first (`--yes` skips the question). Keys Keyfit stored in the Keychain are kept; it lists their names so you can delete them in Keychain Access.
 - **Uninstall:** run `keyfit setup --remove` first, then `pipx uninstall keyfit` or `brew uninstall keyfit`. Done the other way round, the thirteen tools stop with a note that names the line to remove.
 
-[accounts]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md
+[accounts]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md

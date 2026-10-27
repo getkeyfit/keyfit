@@ -53,20 +53,20 @@ Since 18 June 2026, Gemini CLI no longer serves Google AI Pro, Ultra or free per
 
 Each link goes to that account's section in [docs/accounts.md][accounts]: how to map it, what the tool gets, what is checked, and its limits.
 
-[accounts]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md
-[claude]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#claude-code
-[codex]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#codex
-[opencode]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#opencode
-[copilot]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#copilot-cli
-[gemini]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#gemini-cli
-[aws]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#aws
-[github]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#github
-[vercel]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#vercel
-[supabase]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#supabase
-[cloudflare]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#cloudflare
-[convex]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#convex
-[gcloud]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#google-cloud
-[firebase]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#firebase
-[linear]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#linear
-[google-mcp]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#gmail-drive-and-calendar
-[mcp]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#mcp-ownership
+[accounts]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md
+[claude]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#claude-code
+[codex]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#codex
+[opencode]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#opencode
+[copilot]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#copilot-cli
+[gemini]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#gemini-cli
+[aws]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#aws
+[github]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#github
+[vercel]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#vercel
+[supabase]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#supabase
+[cloudflare]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#cloudflare
+[convex]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#convex
+[gcloud]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#google-cloud
+[firebase]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#firebase
+[linear]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#linear
+[google-mcp]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#gmail-drive-and-calendar
+[mcp]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#mcp-ownership

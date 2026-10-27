@@ -43,7 +43,7 @@ Yes. Every worktree of a registered repository belongs to its project, wherever 
 
 No. The thirteen commands go through Keyfit when they are typed in a terminal or run by an agent Keyfit started; apps that don't start from your shell, such as Claude Desktop and IDE extensions, don't. Keyfit runs only on macOS for now: keys live in the macOS Keychain.
 
-[claude]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#claude-code
-[codex]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#codex
-[aws]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#aws
-[github]: https://github.com/FlamurMaliqi/keyfit/blob/main/docs/accounts.md#github
+[claude]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#claude-code
+[codex]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#codex
+[aws]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#aws
+[github]: https://github.com/getkeyfit/keyfit/blob/main/docs/accounts.md#github

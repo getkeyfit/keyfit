@@ -11,7 +11,7 @@ import Term, { type Line } from '../components/Term.astro';
 const title = 'Keyfit: multiple client accounts for Claude Code, Codex and AWS, checked per project';
 const description =
 	'Multiple accounts on one Mac, one per client or work and personal: Keyfit checks that Claude Code, Codex, aws, gh and nine more tools use the project’s own accounts before they start, and blocks them if not.';
-const repo = 'https://github.com/FlamurMaliqi/keyfit';
+const repo = 'https://github.com/getkeyfit/keyfit';
 // Launch day (KEY-38): set to true once PyPI and the Homebrew tap have Keyfit. Until then the
 // install commands stay hidden, so nobody copies `pipx install keyfit` before that name is ours.
 const released = false;
@@ -274,7 +274,7 @@ const faq = [
 							<p class="label">Install</p>
 							{released ? (
 								<>
-									<Copy command="brew install flamurmaliqi/keyfit/keyfit" />
+									<Copy command="brew install getkeyfit/keyfit/keyfit" />
 									<p class="or">or</p>
 									<Copy command="pipx install keyfit" />
 								</>

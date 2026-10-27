@@ -239,7 +239,7 @@ Deleting `~/.config/keyfit/cache/checks.json` is also safe; the next launch simp
 
 ## Starts feel slow
 
-With the checks cached, a shim adds about 0.1 s, and about 0.2 s for `gh`, `claude`, `codex`, `opencode`, `copilot` and `gemini` in a project with a GitHub or Copilot CLI account (see [Speed](https://github.com/FlamurMaliqi/keyfit/blob/main/docs/../README.md#speed)). If every start takes longer:
+With the checks cached, a shim adds about 0.1 s, and about 0.2 s for `gh`, `claude`, `codex`, `opencode`, `copilot` and `gemini` in a project with a GitHub or Copilot CLI account (see [Speed](https://github.com/getkeyfit/keyfit/blob/main/docs/../README.md#speed)). If every start takes longer:
 
 - **A check goes online every time.** Only successful checks are cached. A check that fails, ends in a warning (`account not confirmed`, say), or is accepted only from the last 24 hours because the service did not answer (`could not re-check now`), is tried online again at the next start, with one retry. Run `keyfit status` and fix what it shows.
 - **The cache can't be written.** Keyfit keeps it in `~/.config/keyfit/cache/checks.json`. If that folder isn't writable, every start checks online.
@@ -268,7 +268,7 @@ keyfit: internal error (TypeError: …) — claude was not started.
 When Keyfit itself fails, it stops the tool instead of starting it unchecked.
 
 1. Run `keyfit doctor` and fix anything it marks with ✘.
-2. If that doesn't help, please [open a bug report](https://github.com/FlamurMaliqi/keyfit/issues/new/choose) and include:
+2. If that doesn't help, please [open a bug report](https://github.com/getkeyfit/keyfit/issues/new/choose) and include:
    - the full `internal error` line
    - the output of `keyfit doctor`, run in the same folder
    - the output of `keyfit --version`
