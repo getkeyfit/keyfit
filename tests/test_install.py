@@ -29,8 +29,10 @@ def _version(text: str) -> tuple:
 
 def _cannot_build() -> str:
     # Probe in a child process: importing setuptools here can fail in odd ways (some CI Pythons raise an
-    # AssertionError from its distutils shim) and must never break the rest of the test run.
-    probe = "import pip, setuptools; print(setuptools.__version__, pip.__version__)"
+    # AssertionError from its distutils shim) and must never break the rest of the test run. setuptools comes
+    # first: on Python 3.11, pip imported before it leaves the standard library's distutils in place, and the
+    # shim asserts (the build itself imports only setuptools).
+    probe = "import setuptools, pip; print(setuptools.__version__, pip.__version__)"
     try:
         out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError) as err:
