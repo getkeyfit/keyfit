@@ -122,14 +122,12 @@ class ResilienceTests(unittest.TestCase):
 
 
 class ClaudeIdentityTests(unittest.TestCase):
-    def test_org_accounts_pin_the_org_not_the_login(self):
+    def test_org_accounts_record_the_org_not_the_login(self):
         record = identity_from({"email": "a@x.io", "orgId": "org-1", "orgName": "X"}, "~/.claude")
-        self.assertNotIn("email", record)
-        self.assertNotIn("pin_email", record)
+        self.assertEqual(record, {"config_dir": "~/.claude", "org_id": "org-1", "org_name": "X"})
 
-    def test_personal_accounts_and_explicit_pins_keep_the_login(self):
-        self.assertTrue(identity_from({"email": "a@x.io"}, "~/.claude")["pin_email"])
-        self.assertTrue(identity_from({"email": "a@x.io", "orgId": "o"}, "~/.claude", pin_email=True)["pin_email"])
+    def test_personal_accounts_note_the_login_without_pinning_it(self):
+        self.assertEqual(identity_from({"email": "a@x.io"}, "~/.claude"), {"config_dir": "~/.claude", "email": "a@x.io"})
 
 
 if __name__ == "__main__":

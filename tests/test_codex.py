@@ -61,11 +61,11 @@ class CodexTests(unittest.TestCase):
         (self.home / "auth.json").write_text(json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": "sk-x"}))
         self.assertTrue(self.verify()[1].failed)
 
-    def test_pool_rotation_allowed_unless_pinned(self):
+    def test_any_chatgpt_account_passes(self):  # account switchers such as codex-multi-auth move between them
         self.write(account="acct-2")
         self.assertEqual(self.verify()[1].status, "ok")
-        pinned = dict(self.conn, account_id="acct-1", pin_account=True)
-        self.assertTrue(self.verify(pinned)[1].failed)
+        old_pin = dict(self.conn, account_id="acct-1", pin_account=True)  # recorded before pinning was dropped
+        self.assertEqual(self.verify(old_pin)[1].status, "ok")
 
 
 class AddCodexTests(unittest.TestCase):
@@ -112,13 +112,6 @@ class AddCodexTests(unittest.TestCase):
         self.assertEqual(self.run_main("add", "codex", "--project", "globex", "--codex-home", "~/codex-globex")[1],
                          "globex: codex account 'pro-2' → ChatGPT pro in ~/codex-globex\n")
         self.assertEqual(len(self.registry()["accounts"]["codex"]), 2)
-
-    def test_a_pinned_account_is_never_unpinned_by_another_project(self):
-        self.run_main("add", "codex", "--project", "acme", "--pin-account")
-        self.assertEqual(self.run_main("add", "codex", "--project", "globex")[1],
-                         "globex: codex account 'pro-2' → ChatGPT pro in ~/.codex\n")
-        self.assertEqual(self.registry()["accounts"]["codex"]["pro"],
-                         {"codex_home": "~/.codex", "plan": "pro", "account_id": "acct-1", "pin_account": True})
 
     def test_a_shared_name_is_shared_and_another_login_under_it_names_who_changed(self):
         self.run_main("add", "codex", "--project", "acme", "--name", "work")
