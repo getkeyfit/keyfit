@@ -224,7 +224,7 @@ def _offer_claude(name: str, base: dict) -> None:
     print(f"Claude: signed in to {status.get('orgName') or 'a personal account'}" + (f" ({plan})" if plan else "")
           + f" in {tilde(folder)}")
     if _yes(f"Use this Claude login for {name}?"):
-        cmd_add_claude(argparse.Namespace(**base, name=None, config_dir=None, new=False, pin_email=False))
+        cmd_add_claude(argparse.Namespace(**base, name=None, config_dir=None, new=False))
 
 
 def _offer_codex(name: str, base: dict) -> None:
@@ -242,7 +242,7 @@ def _offer_codex(name: str, base: dict) -> None:
         return
     print(f"Codex: signed in with ChatGPT {login['plan'] or ''}".rstrip() + f" in {tilde(folder)}")
     if _yes(f"Use this Codex login for {name}?"):
-        cmd_add_codex(argparse.Namespace(**base, name=None, codex_home=None, pin_account=False))
+        cmd_add_codex(argparse.Namespace(**base, name=None, codex_home=None))
 
 
 def _offer_opencode(name: str, base: dict) -> None:
@@ -785,7 +785,7 @@ def cmd_add_claude(args) -> int:
     project = _project_from_args(reg, args)
     if project is None or _bad_name(args.name):
         return 1
-    identity = ("config_dir", "org_id", "email")
+    identity = ("config_dir", "org_id")
     if args.new:
         if not args.name:
             print("--new needs --name (the account's short name)", file=sys.stderr)
@@ -815,7 +815,7 @@ def cmd_add_claude(args) -> int:
         print(f"no claude.ai login in {tilde(folder)} (auth method: {status.get('authMethod')})", file=sys.stderr)
         print(f"  sign in with: {claude_adapter.login_command(folder, os.environ)}", file=sys.stderr)
         return 1
-    record = claude_adapter.identity_from(status, tilde(folder), pin_email=args.pin_email)
+    record = claude_adapter.identity_from(status, tilde(folder))
     name, note = _pick_name(reg, project, "claude", args.name, claude_adapter.slug(status.get("orgName") or "personal"),
                             record, identity)
     reg.set_account("claude", name, record)
@@ -898,17 +898,12 @@ def cmd_add_codex(args) -> int:
     if login is None:
         print(f"{problem} — run: codex login", file=sys.stderr)
         return 1
-    account = {"codex_home": tilde(folder), "plan": login["plan"]}
-    if args.pin_account:
-        account.update(account_id=login["account_id"], pin_account=True)
-    account = {k: v for k, v in account.items() if v}
-    name, note = _pick_name(reg, project, "codex", args.name, login["plan"] or "chatgpt", account,
-                            ("codex_home", "account_id"))
+    account = {k: v for k, v in {"codex_home": tilde(folder), "plan": login["plan"]}.items() if v}
+    name, note = _pick_name(reg, project, "codex", args.name, login["plan"] or "chatgpt", account, ("codex_home",))
     reg.set_account("codex", name, account)
     reg.set_connection(project.name, "codex", name)
     reg.save()
-    print(f"{project.name}: codex account '{name}' → ChatGPT {login['plan']} in {tilde(folder)}"
-          + (" (pinned to this account)" if args.pin_account else ""))
+    print(f"{project.name}: codex account '{name}' → ChatGPT {login['plan']} in {tilde(folder)}")
     if note:
         print(note)
     return 0
@@ -2564,15 +2559,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help="short account name, reusable across projects (default: from the org name)")
     p.add_argument("--config-dir", help="the account's config directory (default: ~/.claude, your current login)")
     p.add_argument("--new", action="store_true", help="create a new config directory for another account")
-    p.add_argument("--pin-email", action="store_true",
-                   help="require this exact login, not just the org (default: any login of the org, e.g. claude-swap pools)")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_claude)
     p = command(kinds, "codex", "Codex (ChatGPT) login for this project")
     p.add_argument("--name", help="short account name, reusable across projects (default: the plan, e.g. pro)")
     p.add_argument("--codex-home", help="the account's CODEX_HOME (default: ~/.codex, your current login)")
-    p.add_argument("--pin-account", action="store_true",
-                   help="require this exact ChatGPT account (default: any ChatGPT login, e.g. codex-multi-auth pools)")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_codex)
     p = command(kinds, "opencode", "OpenCode sign-ins (its login database) for this project")
