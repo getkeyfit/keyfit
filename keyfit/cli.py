@@ -2069,6 +2069,62 @@ def _add_line(rc: Path, line: str, earlier: tuple[str, ...]) -> None:
         print(f"Added to the end of {tilde(rc)} (new terminals pick it up):\n  {line}")
 
 
+# Login switchers that work alongside Keyfit (README FAQ). The first `keyfit setup` in a terminal offers each one
+# whose agent is installed and which isn't yet. Only a yes installs it, with the first command whose installer is on
+# PATH; without one, it prints how to get one (`needs`).
+SWITCHERS = {
+    "claude-swap": {"agent": "claude", "command": "cswap", "what": "switches between your Claude logins",
+                    "url": "https://github.com/realiti4/claude-swap",
+                    "install": ("uv tool install claude-swap", "pipx install claude-swap"),
+                    "needs": "brew install uv", "next": "Save each Claude login with: cswap add"},
+    "codex-multi-auth": {"agent": "codex", "command": "codex-multi-auth",
+                         "what": "switches between your ChatGPT logins in Codex",
+                         "url": "https://github.com/ndycode/codex-multi-auth",
+                         "install": ("npm install -g codex-multi-auth",), "needs": "brew install node",
+                         "next": "Add your ChatGPT logins with: codex-multi-auth login"},
+}
+
+
+def _offer_switchers() -> None:
+    """Offer each login switcher whose agent is installed and which isn't yet; Enter skips. Setup is done by then, so
+    a no, a failed install or Ctrl-C leaves it as it is."""
+    import shutil
+    import subprocess
+
+    from .realbin import find_real
+
+    env = dict(os.environ)
+    path = env.get("PATH", "")
+    shown = False
+    try:
+        for name, switcher in SWITCHERS.items():
+            if find_real(switcher["agent"], env, skip_wrappers=True) is None or \
+                    shutil.which(switcher["command"], path=path):
+                continue
+            shown = True
+            print(f"\n{name} {switcher['what']} ({switcher['url']}).")
+            options = [(command, shutil.which(command.split()[0], path=path)) for command in switcher["install"]]
+            install, installer = next(((command, exe) for command, exe in options if exe), (None, None))
+            if install is None:
+                print(f"To install it: {switcher['needs']} && {switcher['install'][0]}")
+                continue
+            if not _yes(f"Install it now ({install})?"):
+                continue
+            try:
+                code = subprocess.run([installer, *install.split()[1:]], check=False).returncode
+            except OSError:
+                code = None
+            if code == 0:
+                print(f"{name} installed. {switcher['next']}")
+            else:
+                print(f"{name} was not installed ({install} did not finish); see {switcher['url']}",
+                      file=sys.stderr)
+    except KeyboardInterrupt:
+        print("\nStopped. Keyfit itself is set up.")
+    if shown:
+        print()
+
+
 def cmd_setup(args) -> int:
     """Write the shims and the PATH files; only with --rc (or --zshrc) touch a shell startup file."""
     from .realbin import MARKER, shim_dir, stable_path
@@ -2088,6 +2144,8 @@ def cmd_setup(args) -> int:
               file=sys.stderr)
         return 1
     folder = shim_dir()
+    # the first setup (on this Mac, or since --remove) in a terminal offers the login switchers; a rerun repairs quietly
+    offer = not (folder / MARKER).exists() and sys.stdin.isatty() and sys.stdout.isatty()
     folder.mkdir(parents=True, exist_ok=True)
     python, entry = stable_path(sys.executable), stable_path(Path(__file__).resolve().parent / "_shim_entry.py")
     (folder / MARKER).write_text("Keyfit shims live here; Keyfit never resolves a real binary from this folder.\n")
@@ -2099,6 +2157,8 @@ def cmd_setup(args) -> int:
         (config_dir() / filename).write_text(template.replace("@SHIMS@", str(folder)))
     print(f"Shims written to {tilde(folder)}: {', '.join(TOOLS)}")
     if shell not in SHELLS:
+        if offer:
+            _offer_switchers()
         print(f"Keyfit has PATH files for zsh and bash; in {shell or 'your shell'}, put {folder} first on PATH "
               f"(after Superset's wrapper, if you use Superset).")
         return 0
@@ -2106,16 +2166,19 @@ def cmd_setup(args) -> int:
     candidates = dict.fromkeys(_rc_files(shell) + ([Path.home() / ".zshrc"] if shell == "zsh" else []))
     active = [path for path in candidates
               if path.is_file() and any(known in path.read_text(errors="replace") for known in (line, old))]
-    if rc is None and active:  # running setup again (an upgrade): the shims are rewritten in place
+    if rc is not None:
+        for path in [Path(rc).expanduser()] if rc else _rc_files(shell):
+            _add_line(path, line, (old, OLD_PATH_LINE))
+    if offer:  # after the startup file and before what to do next, which installers' output would bury
+        _offer_switchers()
+    if rc is not None:
+        print("Next: open a new terminal, go to a project's repository and run: keyfit init")
+    elif active:  # running setup again (an upgrade): the shims are rewritten in place
         print(f"Already active: {' and '.join(tilde(p) for p in active)} loads them; new starts use them now.")
-    elif rc is None:
+    else:
         again = "keyfit setup" + (f" --shell {shell}" if args.shell != "auto" else "") + " --rc"
         files = " and ".join(tilde(p) for p in _rc_files(shell))
         print(f"To activate, add this as the LAST line of {files} (or run: {again}):\n  {line}")
-    else:
-        for path in [Path(rc).expanduser()] if rc else _rc_files(shell):
-            _add_line(path, line, (old, OLD_PATH_LINE))
-        print("Next: open a new terminal, go to a project's repository and run: keyfit init")
     undo = "keyfit setup --remove" + (f" --rc {tilde(Path(rc).expanduser())}" if rc else "")
     print(f"Undo any time: {undo}; run a tool once without checks: KEYFIT_DISABLE=1 claude")
     return 0
@@ -2447,7 +2510,8 @@ def build_parser() -> argparse.ArgumentParser:
         return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
 
     p = command(sub, "setup", "write the shims for claude, codex, opencode, copilot, gemini, aws, gh, vercel, "
-                              "supabase, wrangler, convex, gcloud and firebase; with --rc also put them on PATH")
+                              "supabase, wrangler, convex, gcloud and firebase; with --rc also put them on PATH; "
+                              "the first time, in a terminal, also offer to install claude-swap and codex-multi-auth")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
     p.add_argument("--rc", nargs="?", const="", metavar="FILE",
