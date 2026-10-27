@@ -62,8 +62,8 @@ reviews, before anything was published.
   - GitHub: the project's account from `gh`'s stored logins, checked against the expected login;
     a different git author email or SSH host shows as a warning (`keyfit add github`).
   - Claude Code: the project's login, checked to be a claude.ai subscription in the expected
-    organisation, optionally the exact login (`keyfit add claude`, `--new` for another account).
-  - Codex: the project's ChatGPT login, optionally pinned to one account (`keyfit add codex`).
+    organisation, never down to one login (`keyfit add claude`, `--new` for another account).
+  - Codex: the project's ChatGPT login, never down to one account (`keyfit add codex`).
   - Vercel: the project's login (the CLI's global config folder) and team, checked with Vercel's API
     against the expected username and team membership (`keyfit add vercel`, `--new` for another
     login). `vercel` gets the folder (`--global-config`) and the team (`--scope`); inside a project,
