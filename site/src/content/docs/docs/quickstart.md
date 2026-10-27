@@ -13,13 +13,13 @@ You need macOS, Python 3.11 or newer, and zsh or bash. The `python3` that comes 
 
 ```bash
 pipx install keyfit                       # coming with the first release
-brew install flamurmaliqi/keyfit/keyfit   # coming with the first release
+brew install getkeyfit/keyfit/keyfit   # coming with the first release
 ```
 
 Nothing is published yet. Until then, install from source:
 
 ```bash
-git clone https://github.com/FlamurMaliqi/keyfit.git
+git clone https://github.com/getkeyfit/keyfit.git
 pipx install ./keyfit        # or run it without installing: ./keyfit/bin/keyfit … (uses the python3 on PATH, 3.11 or newer)
 ```
 

@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "site" / "src" / "content" / "docs" / "docs"
-REPO = "https://github.com/FlamurMaliqi/keyfit/blob/main"
+REPO = "https://github.com/getkeyfit/keyfit/blob/main"
 
 # page slug → (title, description, sidebar order, [(source file, [README sections] or None for the whole file)])
 PAGES = {
