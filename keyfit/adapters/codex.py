@@ -1,15 +1,13 @@
 """Codex: the ChatGPT login a project's Codex sessions run on.
 
 Account:  [accounts.codex.pro]  codex_home = "~/.codex"   plan = "pro"
-          optional: account_id = "…", pin_account = true (require exactly this ChatGPT account)
 Project:  codex = "pro"
 
 inject  — remove CODEX_API_KEY (it overrides the stored login in exec/review and bills the API)
           and point CODEX_HOME at the account's home.
 local   — read <home>/auth.json: a ChatGPT login (subscription), not an API key; never both
-          (a stored API key next to the login can silently switch billing); the account is the
-          pinned one when pinning is on. Identity comes from the id_token claims; nothing is printed.
-          Pools such as codex-multi-auth switch between accounts, so pinning is opt-in.
+          (a stored API key next to the login can silently switch billing). Any ChatGPT account
+          passes, so pools such as codex-multi-auth can switch between accounts; nothing is printed.
 """
 
 from __future__ import annotations
@@ -83,9 +81,6 @@ class CodexAdapter(Adapter):
             return Check(self.kind, "fail", label,
                          "Codex is signed in with an API key (API billing), not your ChatGPT subscription",
                          f"codex logout && {login_fix}")
-        if conn.get("pin_account") and login["account_id"] != conn.get("account_id"):
-            return Check(self.kind, "fail", label, "signed in to a different ChatGPT account than the pinned one",
-                         login_fix)
         return Check(self.kind, "ok", label, "subscription login, no API key")
 
     def remote(self, conn, env: dict) -> Check:

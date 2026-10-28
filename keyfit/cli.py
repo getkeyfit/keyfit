@@ -224,7 +224,7 @@ def _offer_claude(name: str, base: dict) -> None:
     print(f"Claude: signed in to {status.get('orgName') or 'a personal account'}" + (f" ({plan})" if plan else "")
           + f" in {tilde(folder)}")
     if _yes(f"Use this Claude login for {name}?"):
-        cmd_add_claude(argparse.Namespace(**base, name=None, config_dir=None, new=False, pin_email=False))
+        cmd_add_claude(argparse.Namespace(**base, name=None, config_dir=None, new=False))
 
 
 def _offer_codex(name: str, base: dict) -> None:
@@ -242,7 +242,7 @@ def _offer_codex(name: str, base: dict) -> None:
         return
     print(f"Codex: signed in with ChatGPT {login['plan'] or ''}".rstrip() + f" in {tilde(folder)}")
     if _yes(f"Use this Codex login for {name}?"):
-        cmd_add_codex(argparse.Namespace(**base, name=None, codex_home=None, pin_account=False))
+        cmd_add_codex(argparse.Namespace(**base, name=None, codex_home=None))
 
 
 def _offer_opencode(name: str, base: dict) -> None:
@@ -785,7 +785,7 @@ def cmd_add_claude(args) -> int:
     project = _project_from_args(reg, args)
     if project is None or _bad_name(args.name):
         return 1
-    identity = ("config_dir", "org_id", "email")
+    identity = ("config_dir", "org_id")
     if args.new:
         if not args.name:
             print("--new needs --name (the account's short name)", file=sys.stderr)
@@ -815,7 +815,7 @@ def cmd_add_claude(args) -> int:
         print(f"no claude.ai login in {tilde(folder)} (auth method: {status.get('authMethod')})", file=sys.stderr)
         print(f"  sign in with: {claude_adapter.login_command(folder, os.environ)}", file=sys.stderr)
         return 1
-    record = claude_adapter.identity_from(status, tilde(folder), pin_email=args.pin_email)
+    record = claude_adapter.identity_from(status, tilde(folder))
     name, note = _pick_name(reg, project, "claude", args.name, claude_adapter.slug(status.get("orgName") or "personal"),
                             record, identity)
     reg.set_account("claude", name, record)
@@ -898,17 +898,12 @@ def cmd_add_codex(args) -> int:
     if login is None:
         print(f"{problem} — run: codex login", file=sys.stderr)
         return 1
-    account = {"codex_home": tilde(folder), "plan": login["plan"]}
-    if args.pin_account:
-        account.update(account_id=login["account_id"], pin_account=True)
-    account = {k: v for k, v in account.items() if v}
-    name, note = _pick_name(reg, project, "codex", args.name, login["plan"] or "chatgpt", account,
-                            ("codex_home", "account_id"))
+    account = {k: v for k, v in {"codex_home": tilde(folder), "plan": login["plan"]}.items() if v}
+    name, note = _pick_name(reg, project, "codex", args.name, login["plan"] or "chatgpt", account, ("codex_home",))
     reg.set_account("codex", name, account)
     reg.set_connection(project.name, "codex", name)
     reg.save()
-    print(f"{project.name}: codex account '{name}' → ChatGPT {login['plan']} in {tilde(folder)}"
-          + (" (pinned to this account)" if args.pin_account else ""))
+    print(f"{project.name}: codex account '{name}' → ChatGPT {login['plan']} in {tilde(folder)}")
     if note:
         print(note)
     return 0
@@ -2069,6 +2064,62 @@ def _add_line(rc: Path, line: str, earlier: tuple[str, ...]) -> None:
         print(f"Added to the end of {tilde(rc)} (new terminals pick it up):\n  {line}")
 
 
+# Login switchers that work alongside Keyfit (README FAQ). The first `keyfit setup` in a terminal offers each one
+# whose agent is installed and which isn't yet. Only a yes installs it, with the first command whose installer is on
+# PATH; without one, it prints how to get one (`needs`).
+SWITCHERS = {
+    "claude-swap": {"agent": "claude", "command": "cswap", "what": "switches between your Claude logins",
+                    "url": "https://github.com/realiti4/claude-swap",
+                    "install": ("uv tool install claude-swap", "pipx install claude-swap"),
+                    "needs": "brew install uv", "next": "Save each Claude login with: cswap add"},
+    "codex-multi-auth": {"agent": "codex", "command": "codex-multi-auth",
+                         "what": "switches between your ChatGPT logins in Codex",
+                         "url": "https://github.com/ndycode/codex-multi-auth",
+                         "install": ("npm install -g codex-multi-auth",), "needs": "brew install node",
+                         "next": "Add your ChatGPT logins with: codex-multi-auth login"},
+}
+
+
+def _offer_switchers() -> None:
+    """Offer each login switcher whose agent is installed and which isn't yet; Enter skips. Setup is done by then, so
+    a no, a failed install or Ctrl-C leaves it as it is."""
+    import shutil
+    import subprocess
+
+    from .realbin import find_real
+
+    env = dict(os.environ)
+    path = env.get("PATH", "")
+    shown = False
+    try:
+        for name, switcher in SWITCHERS.items():
+            if find_real(switcher["agent"], env, skip_wrappers=True) is None or \
+                    shutil.which(switcher["command"], path=path):
+                continue
+            shown = True
+            print(f"\n{name} {switcher['what']} ({switcher['url']}).")
+            options = [(command, shutil.which(command.split()[0], path=path)) for command in switcher["install"]]
+            install, installer = next(((command, exe) for command, exe in options if exe), (None, None))
+            if install is None:
+                print(f"To install it: {switcher['needs']} && {switcher['install'][0]}")
+                continue
+            if not _yes(f"Install it now ({install})?"):
+                continue
+            try:
+                code = subprocess.run([installer, *install.split()[1:]], check=False).returncode
+            except OSError:
+                code = None
+            if code == 0:
+                print(f"{name} installed. {switcher['next']}")
+            else:
+                print(f"{name} was not installed ({install} did not finish); see {switcher['url']}",
+                      file=sys.stderr)
+    except KeyboardInterrupt:
+        print("\nStopped. Keyfit itself is set up.")
+    if shown:
+        print()
+
+
 def cmd_setup(args) -> int:
     """Write the shims and the PATH files; only with --rc (or --zshrc) touch a shell startup file."""
     from .realbin import MARKER, shim_dir, stable_path
@@ -2088,6 +2139,8 @@ def cmd_setup(args) -> int:
               file=sys.stderr)
         return 1
     folder = shim_dir()
+    # the first setup (on this Mac, or since --remove) in a terminal offers the login switchers; a rerun repairs quietly
+    offer = not (folder / MARKER).exists() and sys.stdin.isatty() and sys.stdout.isatty()
     folder.mkdir(parents=True, exist_ok=True)
     python, entry = stable_path(sys.executable), stable_path(Path(__file__).resolve().parent / "_shim_entry.py")
     (folder / MARKER).write_text("Keyfit shims live here; Keyfit never resolves a real binary from this folder.\n")
@@ -2099,6 +2152,8 @@ def cmd_setup(args) -> int:
         (config_dir() / filename).write_text(template.replace("@SHIMS@", str(folder)))
     print(f"Shims written to {tilde(folder)}: {', '.join(TOOLS)}")
     if shell not in SHELLS:
+        if offer:
+            _offer_switchers()
         print(f"Keyfit has PATH files for zsh and bash; in {shell or 'your shell'}, put {folder} first on PATH "
               f"(after Superset's wrapper, if you use Superset).")
         return 0
@@ -2106,16 +2161,19 @@ def cmd_setup(args) -> int:
     candidates = dict.fromkeys(_rc_files(shell) + ([Path.home() / ".zshrc"] if shell == "zsh" else []))
     active = [path for path in candidates
               if path.is_file() and any(known in path.read_text(errors="replace") for known in (line, old))]
-    if rc is None and active:  # running setup again (an upgrade): the shims are rewritten in place
+    if rc is not None:
+        for path in [Path(rc).expanduser()] if rc else _rc_files(shell):
+            _add_line(path, line, (old, OLD_PATH_LINE))
+    if offer:  # after the startup file and before what to do next, which installers' output would bury
+        _offer_switchers()
+    if rc is not None:
+        print("Next: open a new terminal, go to a project's repository and run: keyfit init")
+    elif active:  # running setup again (an upgrade): the shims are rewritten in place
         print(f"Already active: {' and '.join(tilde(p) for p in active)} loads them; new starts use them now.")
-    elif rc is None:
+    else:
         again = "keyfit setup" + (f" --shell {shell}" if args.shell != "auto" else "") + " --rc"
         files = " and ".join(tilde(p) for p in _rc_files(shell))
         print(f"To activate, add this as the LAST line of {files} (or run: {again}):\n  {line}")
-    else:
-        for path in [Path(rc).expanduser()] if rc else _rc_files(shell):
-            _add_line(path, line, (old, OLD_PATH_LINE))
-        print("Next: open a new terminal, go to a project's repository and run: keyfit init")
     undo = "keyfit setup --remove" + (f" --rc {tilde(Path(rc).expanduser())}" if rc else "")
     print(f"Undo any time: {undo}; run a tool once without checks: KEYFIT_DISABLE=1 claude")
     return 0
@@ -2447,7 +2505,8 @@ def build_parser() -> argparse.ArgumentParser:
         return parent.add_parser(name, help=text, description=text[0].upper() + text[1:] + ".")
 
     p = command(sub, "setup", "write the shims for claude, codex, opencode, copilot, gemini, aws, gh, vercel, "
-                              "supabase, wrangler, convex, gcloud and firebase; with --rc also put them on PATH")
+                              "supabase, wrangler, convex, gcloud and firebase; with --rc also put them on PATH; "
+                              "the first time, in a terminal, also offer to install claude-swap and codex-multi-auth")
     p.add_argument("--shell", choices=("auto", "zsh", "bash"), default="auto",
                    help="shell to set up (default: auto, from $SHELL)")
     p.add_argument("--rc", nargs="?", const="", metavar="FILE",
@@ -2500,15 +2559,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help="short account name, reusable across projects (default: from the org name)")
     p.add_argument("--config-dir", help="the account's config directory (default: ~/.claude, your current login)")
     p.add_argument("--new", action="store_true", help="create a new config directory for another account")
-    p.add_argument("--pin-email", action="store_true",
-                   help="require this exact login, not just the org (default: any login of the org, e.g. claude-swap pools)")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_claude)
     p = command(kinds, "codex", "Codex (ChatGPT) login for this project")
     p.add_argument("--name", help="short account name, reusable across projects (default: the plan, e.g. pro)")
     p.add_argument("--codex-home", help="the account's CODEX_HOME (default: ~/.codex, your current login)")
-    p.add_argument("--pin-account", action="store_true",
-                   help="require this exact ChatGPT account (default: any ChatGPT login, e.g. codex-multi-auth pools)")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_codex)
     p = command(kinds, "opencode", "OpenCode sign-ins (its login database) for this project")

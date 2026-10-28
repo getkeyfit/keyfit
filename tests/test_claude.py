@@ -117,6 +117,17 @@ class ClaudeTests(unittest.TestCase):
         self.assertTrue(check.failed)
         self.assertIn("'Other'", check.detail)
 
+    def test_any_login_of_the_org_passes(self):  # account switchers such as claude-swap move between them
+        _, check = self.run_verify(self.work, {str(self.home / ".claude"): dict(WORK, email="you@work.io")})
+        self.assertEqual(check.status, "ok", check.detail)
+
+    def test_a_personal_account_takes_any_claude_login(self):
+        personal = {"name": "personal", "config_dir": str(self.home / ".claude"), "email": "me@home.io",
+                    "pin_email": True}  # a pin recorded before pinning was dropped no longer counts
+        login = {k: v for k, v in WORK.items() if k not in ("orgId", "orgName")}
+        _, check = self.run_verify(personal, {str(self.home / ".claude"): dict(login, email="you@home.io")})
+        self.assertEqual(check.status, "ok", check.detail)
+
     def test_login_command_for_default(self):
         self.assertEqual(login_command(self.home / ".claude", {"HOME": str(self.home)}), "claude auth login")
 
@@ -245,7 +256,7 @@ class AddClaudeTests(unittest.TestCase):
                          (0, f"globex: claude account 'personal-2' → personal (max) in {self.other}\n", ""))
         reg = self.registry()
         self.assertEqual(reg["accounts"]["claude"]["personal"],
-                         {"config_dir": "~/.claude", "email": "me@home.io", "pin_email": True})
+                         {"config_dir": "~/.claude", "email": "me@home.io"})
         self.assertEqual(reg["accounts"]["claude"]["personal-2"]["config_dir"], str(self.other))
         self.assertEqual((reg["projects"]["acme"]["claude"], reg["projects"]["globex"]["claude"]),
                          ("personal", "personal-2"))
@@ -254,7 +265,7 @@ class AddClaudeTests(unittest.TestCase):
         self.run_main("add", "claude", "--project", "acme", "--name", "work")
         code, out, err = self.run_main("add", "claude", "--project", "globex", "--new", "--name", "work")
         self.assertEqual(code, 0, err)
-        self.assertIn("  account 'work' was config_dir ~/.claude, email me@home.io; it changed for acme too\n", out)
+        self.assertIn("  account 'work' was config_dir ~/.claude; it changed for acme too\n", out)
 
     def test_new_refuses_a_name_that_is_not_a_name(self):
         for name in ("../x", "../../x", "a\nb"):

@@ -12,7 +12,7 @@ inject  — remove everything that could switch Claude to another identity or
           the variable's text, so an explicit ~/.claude would look for a
           different (empty) entry. Any other account gets CLAUDE_CONFIG_DIR.
 remote  — `claude auth status --json` in that environment must report a
-          claude.ai subscription login for the expected org and email. An
+          claude.ai subscription login for the expected org (any login). An
           inherited API key would show up as authMethod "api_key" — a failure.
 """
 
@@ -183,7 +183,7 @@ class ClaudeAdapter(Adapter):
         return Check(self.kind, "ok", label, "", pending=True)
 
     def fingerprint(self, conn, env: dict) -> str:
-        """The org recorded in the config dir's .claude.json (and the login, when pinned) — a change re-verifies."""
+        """The org recorded in the config dir's .claude.json — a change re-verifies."""
         config_dir = conn.get("config_dir", "~/.claude")
         state = (Path(env.get("HOME") or Path.home()) / ".claude.json" if is_default(config_dir, env)
                  else canonical(config_dir) / ".claude.json")
@@ -191,8 +191,7 @@ class ClaudeAdapter(Adapter):
             account = json.loads(state.read_text()).get("oauthAccount") or {}
         except (OSError, ValueError):
             return ""
-        who = account.get("accountUuid", "") if conn.get("pin_email") else ""
-        return f"{who}:{account.get('organizationUuid', '')}"
+        return account.get("organizationUuid", "")
 
     def remote(self, conn, env: dict) -> Check:
         label = self.label(conn)
@@ -214,19 +213,17 @@ class ClaudeAdapter(Adapter):
         if conn.get("org_id") and status.get("orgId") != conn["org_id"]:
             return Check(self.kind, "fail", label,
                          f"signed in to org '{status.get('orgName')}', project expects '{conn.get('org_name')}'", fix)
-        # The organization is the identity (who pays, whose data). A specific login is pinned only on request:
-        # pooling tools such as claude-swap rotate between logins of the same org.
-        if conn.get("pin_email") and status.get("email") != conn.get("email"):
-            return Check(self.kind, "fail", label, "signed in as a different user than the pinned one", fix)
+        # The organization is the identity (who pays, whose data), never one login: account switchers such as
+        # claude-swap move between logins.
         plan = status.get("subscriptionType") or "subscription"
         return Check(self.kind, "ok", label, f"{status.get('orgName') or 'personal'} ({plan}) confirmed")
 
 
-def identity_from(status: dict, config_dir: str, pin_email: bool = False) -> dict:
+def identity_from(status: dict, config_dir: str) -> dict:
     """The account record kept in the registry — identity labels only, no credentials."""
     record = {"config_dir": config_dir, "org_id": status.get("orgId", ""), "org_name": status.get("orgName", "")}
-    if pin_email or not status.get("orgId"):  # personal accounts have no org: the login is the identity
-        record.update(email=status.get("email", ""), pin_email=True)
+    if not status.get("orgId"):  # personal accounts have no org: the login it was added with, never checked
+        record.update(email=status.get("email", ""))
     return {k: v for k, v in record.items() if v}
 
 

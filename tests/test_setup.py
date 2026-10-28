@@ -319,6 +319,122 @@ class SetupTests(unittest.TestCase):
         code, _, err = self.setup("--purge")
         self.assertEqual((code, err.strip()), (1, "keyfit setup: --purge goes with --remove"))
 
+
+class SwitcherOfferTests(unittest.TestCase):
+    """The first `keyfit setup` in a terminal offers claude-swap and codex-multi-auth. Every tool on PATH is a stub
+    that logs how it was run, so nothing is installed."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+        self.config = self.tmp / "keyfit"
+        self.stubs = self.tmp / "stubs"
+        self.stubs.mkdir()
+        self.log = self.tmp / "ran.log"
+
+    def stub(self, *names, code=0):
+        for name in names:
+            exe = self.stubs / name
+            exe.write_text(f'#!/bin/sh\necho "$(basename "$0") $*" >> "{self.log}"\nexit {code}\n')
+            exe.chmod(0o755)
+
+    def ran(self):
+        return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def setup(self, *args, answers=(), tty=True):
+        answers, self.asked = list(answers), []
+
+        def ask(question):
+            self.asked.append(question)
+            answer = answers.pop(0)
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer
+
+        class Terminal(io.StringIO):
+            def isatty(self):
+                return tty
+
+        env = {"HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config), "SHELL": "/bin/zsh",
+               "PATH": f"{self.stubs}:/usr/bin:/bin"}
+        out, err = Terminal(), io.StringIO()
+        with mock.patch.dict(os.environ, env), mock.patch.object(sys, "platform", "darwin"), \
+                mock.patch("sys.stdin", mock.Mock(isatty=lambda: tty)), mock.patch.object(cli, "_ask", ask), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            os.environ.pop("ZDOTDIR", None)
+            code = main(["setup", *args])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_first_setup_offers_both_and_installs_on_yes(self):
+        self.stub("claude", "codex", "uv", "pipx", "npm")
+        code, out, _ = self.setup("--rc", answers=["y", "yes"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.asked, ["Install it now (uv tool install claude-swap)? [y/N] ",
+                                      "Install it now (npm install -g codex-multi-auth)? [y/N] "])
+        self.assertEqual(self.ran(), ["uv tool install claude-swap", "npm install -g codex-multi-auth"])
+        self.assertIn("\nclaude-swap switches between your Claude logins (https://github.com/realiti4/claude-swap).\n"
+                      "claude-swap installed. Save each Claude login with: cswap add\n", out)
+        self.assertIn("\ncodex-multi-auth switches between your ChatGPT logins in Codex "
+                      "(https://github.com/ndycode/codex-multi-auth).\n"
+                      "codex-multi-auth installed. Add your ChatGPT logins with: codex-multi-auth login\n\n"
+                      "Next: open a new terminal", out)  # what to do next stays last, below the installers' output
+        self.assertLess(out.index("Added to the end of ~/.zshrc"), out.index("claude-swap switches"))
+
+    def test_enter_skips(self):
+        self.stub("claude", "codex", "uv", "npm")
+        code, out, _ = self.setup(answers=["", "n"])
+        self.assertEqual((code, len(self.asked), self.ran()), (0, 2, []))
+        self.assertNotIn("installed.", out)
+        self.assertIn("To activate, add this as the LAST line", out)
+
+    def test_pipx_without_uv_and_how_to_get_an_installer(self):
+        self.stub("claude", "codex", "pipx")
+        _, out, _ = self.setup(answers=["y"])
+        self.assertEqual(self.asked, ["Install it now (pipx install claude-swap)? [y/N] "])
+        self.assertEqual(self.ran(), ["pipx install claude-swap"])
+        self.assertIn("To install it: brew install node && npm install -g codex-multi-auth\n", out)
+        (self.stubs / "pipx").unlink()
+        self.setup("--remove")
+        _, out, _ = self.setup()
+        self.assertEqual(self.asked, [])
+        self.assertIn("To install it: brew install uv && uv tool install claude-swap\n", out)
+
+    def test_only_for_agents_that_are_installed_without_their_switcher(self):
+        self.stub("claude", "cswap", "uv", "npm")  # no codex, and claude-swap is installed already
+        _, out, _ = self.setup()
+        self.assertEqual((self.asked, self.ran()), ([], []))
+        self.assertNotIn("claude-swap", out)
+        self.assertNotIn("codex-multi-auth", out)
+
+    def test_only_the_first_setup_and_only_in_a_terminal(self):
+        self.stub("claude", "codex", "uv", "npm")
+        self.setup(tty=False)
+        self.assertEqual(self.asked, [])
+        self.setup()  # a rerun (an upgrade, or a repair doctor asks for) rewrites the shims and asks nothing
+        self.assertEqual(self.asked, [])
+        self.setup("--remove")
+        self.setup(answers=["n", "n"])  # after --remove, setup is a first one again
+        self.assertEqual(len(self.asked), 2)
+
+    def test_a_failed_install_leaves_setup_done(self):
+        self.stub("claude", "codex")
+        self.stub("uv", "npm", code=1)
+        code, out, err = self.setup("--rc", answers=["y", "y"])
+        self.assertEqual(code, 0)
+        self.assertIn("claude-swap was not installed (uv tool install claude-swap did not finish); "
+                      "see https://github.com/realiti4/claude-swap\n", err)
+        self.assertIn("codex-multi-auth was not installed (npm install -g codex-multi-auth did not finish)", err)
+        self.assertIn("# keyfit: tool shims on PATH", (self.home / ".zshrc").read_text())
+        self.assertIn("Next: open a new terminal", out)
+
+    def test_ctrl_c_stops_only_the_offers(self):
+        self.stub("claude", "codex", "uv", "npm")
+        code, out, _ = self.setup("--rc", answers=[KeyboardInterrupt()])
+        self.assertEqual((code, len(self.asked), self.ran()), (0, 1, []))
+        self.assertIn("\nStopped. Keyfit itself is set up.\n\nNext: open a new terminal", out)
+
+
 class OldPythonTests(unittest.TestCase):
     def test_too_old_python_gets_a_sentence_not_a_traceback(self):
         # macOS's own python3 is 3.9; `bin/keyfit` from a checkout runs whatever python3 comes first
