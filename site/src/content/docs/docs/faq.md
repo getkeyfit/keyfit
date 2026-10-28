@@ -9,7 +9,7 @@ sidebar:
 
 ### Can I use Claude Code and Codex with multiple accounts, one per client?
 
-Yes: one login per project, and several projects side by side in different terminals. `keyfit add claude --new --name globex` makes a Claude config folder of its own for a second login (you sign in there once), and `keyfit add codex --codex-home PATH` maps a Codex login kept in another folder. In that project, `claude` and `codex` start with its login and its other accounts. Claude is checked by organization (`--pin-email` for the exact login), Codex by being a ChatGPT login without an API key (`--pin-account` for the exact one). See [Claude Code][claude] and [Codex][codex].
+Yes: one login per project, and several projects side by side in different terminals. `keyfit add claude --new --name globex` makes a Claude config folder of its own for a second login (you sign in there once), and `keyfit add codex --codex-home PATH` maps a Codex login kept in another folder. In that project, `claude` and `codex` start with its login and its other accounts. Claude is checked by organization, Codex by being a ChatGPT login without an API key; neither is tied to one login. See [Claude Code][claude] and [Codex][codex].
 
 ### How do I use a different AWS profile or GitHub account per project?
 
@@ -18,6 +18,10 @@ In the repository, run `keyfit add aws --profile acme-dev` and `keyfit add githu
 ### Does Keyfit switch accounts?
 
 No. The folder you are in picks the project, and Keyfit checks that project's accounts before the tool starts. The credentials go into that one tool's environment; gh's active account and the login in `~/.claude` stay as they are. If a check fails, the tool doesn't start.
+
+### Does it work with account switchers such as claude-swap and codex-multi-auth?
+
+Yes. Keyfit never ties a project to one login. Claude is checked by organization: in a project added with a personal account any Claude login works, and in one of an organization any login of that organization. Codex only has to be a ChatGPT login. So [claude-swap](https://github.com/realiti4/claude-swap) and [codex-multi-auth](https://github.com/ndycode/codex-multi-auth) can move between your logins. If claude-swap switches an organization's project to an account outside it, Keyfit doesn't start Claude. The first `keyfit setup` offers to install both.
 
 ### Why not `CLAUDE_CONFIG_DIR` or `CODEX_HOME` aliases, direnv or aws-vault?
 

@@ -301,6 +301,7 @@ pipx uninstall keyfit            # last, or: brew uninstall keyfit
 - **What stays.** Without `--purge`, the registry stays, and `keyfit setup --rc` turns everything back on.
 - **What `--purge` deletes:** the registry, the check cache, the Claude config folders made by `keyfit add claude --new`, the Vercel login folders made by `keyfit add vercel --new`, the OpenCode databases made by `keyfit add opencode --new` and the Gemini CLI folders made by `keyfit add gemini --new` or `--key` (with the logins in them). It refuses if `~/.config/keyfit` holds files Keyfit didn't write; delete those yourself if you are sure. Without a terminal it needs `--yes`.
 - **Keychain items** Keyfit stored (service `keyfit`) are never deleted; `--purge` prints their names. Delete them in Keychain Access, or with `security delete-generic-password -s keyfit -a NAME`.
+- **claude-swap and codex-multi-auth**, if you installed them when `keyfit setup` offered them, stay. Each one's README says how to uninstall it.
 - **Afterwards,** open a new terminal (or run `hash -r`). `claude`, `codex`, `opencode`, `copilot`, `gemini`, `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` then run directly again.
 
 If `keyfit` itself no longer runs, do it by hand:

@@ -18,7 +18,7 @@ Please do not open a public issue, pull request or discussion for a vulnerabilit
 Report it privately instead:
 
 - on GitHub: the repository's **Security** tab, then **Report a vulnerability**
-  (<https://github.com/FlamurMaliqi/keyfit/security/advisories/new>), or
+  (<https://github.com/getkeyfit/keyfit/security/advisories/new>), or
 - by email to <contact@flamur-maliqi.de>.
 
 Please include:

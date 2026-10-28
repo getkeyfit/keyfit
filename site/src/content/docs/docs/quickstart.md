@@ -12,11 +12,12 @@ sidebar:
 You need macOS, Python 3.11 or newer, and zsh or bash. The `python3` that comes with macOS is 3.9, which is too old; `brew install pipx` installs pipx together with a current Python (then run `pipx ensurepath` and open a new terminal).
 
 ```bash
-pipx install keyfit                       # coming with the first release
-brew install getkeyfit/keyfit/keyfit   # coming with the first release
+pipx install keyfit
+# or, with Homebrew:
+brew install getkeyfit/keyfit/keyfit
 ```
 
-Nothing is published yet. Until then, install from source:
+For the latest unreleased code, install from source:
 
 ```bash
 git clone https://github.com/getkeyfit/keyfit.git
@@ -32,6 +33,8 @@ The shims run Keyfit with the Python that ran `keyfit setup`, and from a checkou
 ```bash
 keyfit setup --rc
 ```
+
+The first time, it also asks whether to install [claude-swap](https://github.com/realiti4/claude-swap) and [codex-multi-auth](https://github.com/ndycode/codex-multi-auth), which switch between your Claude logins and your ChatGPT logins in Codex. Enter skips them.
 
 **2. Register a project.** Open a new terminal, then go to a repository of one of your clients (a repository, not your home folder: everything under the folder you register belongs to that project):
 
@@ -82,3 +85,4 @@ If something seems off, run `keyfit doctor`. It checks the installation and prin
 - **bash:** the line goes into the login profile macOS terminals read. That is the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile` that exists. It also goes into `~/.bashrc` when that profile sources it.
 - **Another file:** `--rc PATH`.
 - **Keep the line last** in the file, so nothing added to PATH later in that file comes before the shims.
+- **claude-swap and codex-multi-auth:** in a terminal, the first `keyfit setup` (also the first after `--remove`) offers each one whose agent is installed and which isn't installed yet. A yes runs `uv tool install claude-swap` (or `pipx install claude-swap`) or `npm install -g codex-multi-auth`; without uv, pipx or npm, it prints how to get them. Running `keyfit setup` again asks nothing.

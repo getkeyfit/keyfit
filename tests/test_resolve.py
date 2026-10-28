@@ -203,7 +203,8 @@ class ResolveTests(unittest.TestCase):
         stale = self.tmp / "stale-worktree"
         stale.mkdir()
         (stale / ".git").write_text(f"gitdir: {self.tmp / 'gone' / '.git' / 'worktrees' / 'x'}\n")
-        with self.assertRaisesRegex(GitError, "not a git repository"):
+        # older git: "not a git repository", newer git: "gitfile does not point to a valid repository"
+        with self.assertRaisesRegex(GitError, "not a git repository|does not point to a valid repository"):
             resolve(stale, self.registry)
 
     def test_inside_git_dir_and_bare_repositories_still_answer(self):
