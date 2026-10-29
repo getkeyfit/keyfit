@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no higher than the repository's top (outside a repository, the nearest `package.json`) or your home
   folder. For a project outside your home folder the search went up to `/`, so a
   `node_modules/.bin/firebase` another local user created in `/private/tmp` or `/Users/Shared` could run.
+- The project's own wrangler, which Keyfit runs for its Cloudflare check, `keyfit add cloudflare`, `Sign in
+  now?` and `Bind this folder now?`, is looked for the same way: for a project outside your home folder the
+  search for `node_modules/.bin/wrangler` went up to `/` too.
 - **Only a Google API key goes to Google.** `keyfit add gemini --key` sent any printable value to the
   Gemini API and stored it, so a typo such as `--key env:GITHUB_TOKEN` shipped a GitHub token to Google.
   Now only a value shaped like a Google API key (`AIza…`) is sent, there and in the Gemini check.

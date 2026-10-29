@@ -266,18 +266,25 @@ def account_ids(path: Path) -> list[tuple[str, object]] | None:
     return found
 
 
-def wrangler_bin(env: dict, start) -> str | None:
-    """The wrangler `npx wrangler` runs in *start*: the nearest node_modules/.bin/wrangler (up to the home folder),
-    else the one on PATH."""
+def npx_bin(name: str, env: dict, start) -> str | None:
+    """The *name* `npx` runs in *start*: the nearest node_modules/.bin/*name* up to the repository's top or the home
+    folder (outside both: up to the nearest package.json, else in *start* only), else the one on PATH. Never higher: a
+    node_modules another user created in /private/tmp or /Users/Shared would run."""
     home = _home(env)
     folder = Path(os.path.abspath(start))
-    for d in (folder, *folder.parents):
-        candidate = d / "node_modules" / ".bin" / "wrangler"
+    up = [folder, *folder.parents]
+    top = next((d for d in up if d == home or (d / ".git").exists()), None) or \
+        next((d for d in up if (d / "package.json").is_file()), folder)
+    for d in up[:up.index(top) + 1]:
+        candidate = d / "node_modules" / ".bin" / name
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
-        if d == home:
-            break
-    return find_real("wrangler", env, skip_wrappers=True)
+    return find_real(name, env, skip_wrappers=True)
+
+
+def wrangler_bin(env: dict, start) -> str | None:
+    """The wrangler `npx wrangler` runs in *start* (see npx_bin)."""
+    return npx_bin("wrangler", env, start)
 
 
 def version(binary: str) -> tuple[int, ...] | None:
