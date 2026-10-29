@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 
 _BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")  # TOML reads these only escaped: one written raw makes the file unreadable
 
 
 def _key(k: str) -> str:
@@ -21,6 +22,7 @@ def _key(k: str) -> str:
 
 def _string(s: str) -> str:
     escaped = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\t", "\\t")
+    escaped = _CONTROL.sub(lambda m: f"\\u{ord(m.group()):04X}", escaped)
     return f'"{escaped}"'
 
 

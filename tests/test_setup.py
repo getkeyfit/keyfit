@@ -30,12 +30,13 @@ class SetupTests(unittest.TestCase):
         self.shims = str(self.config / "bin")
         self.ss = str(self.home / ".superset" / "bin")
 
-    def setup(self, *args, shell="/bin/zsh", platform="darwin"):
+    def setup(self, *args, shell="/bin/zsh", platform="darwin", **extra):
         env = {"HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config), "SHELL": shell}
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.dict(os.environ, env), mock.patch.object(sys, "platform", platform), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             os.environ.pop("ZDOTDIR", None)  # restored with the rest of os.environ
+            os.environ.update(extra)
             code = main(["setup", *args])
         return code, out.getvalue(), err.getvalue()
 
@@ -115,6 +116,68 @@ class SetupTests(unittest.TestCase):
                       "version, '# keyfit: claude/codex/aws/gh shims on PATH') from your shell startup file, then open "
                       "a new terminal.\n", out.stderr)
         self.assertNotIn("No such file", out.stderr)
+
+    def test_shim_whose_python_is_gone_says_how_to_reinstall_and_can_be_bypassed(self):
+        # KEY-83: Homebrew removed the Python pipx's Keyfit ran on. Every tool said "keyfit setup", which can't run
+        # either, and KEYFIT_DISABLE=1 couldn't help: the check runs in sh, before Python
+        self.setup()
+        shim = self.config / "bin" / "claude"
+        gone = self.tmp / "gone" / "python3"
+        shim.write_text(shim.read_text().replace(sys.executable, str(gone)))
+        real = self.tmp / "real"
+        real.mkdir()
+        (real / "claude").write_text('#!/bin/sh\necho "real claude $*"\n')
+        (real / "claude").chmod(0o755)
+        (Path(self.ss) / "claude").write_text("#!/bin/sh\necho wrapper\n")  # Superset's: it would call the shim again
+        (Path(self.ss) / "claude").chmod(0o755)
+        path = f"{self.ss}:{self.shims}:{real}:/usr/bin:/bin"
+        run = lambda **extra: subprocess.run([str(shim), "-p", "hi"], capture_output=True, text=True, timeout=30,
+                                             env={"HOME": str(self.home), "PATH": path, **extra})
+        out = run()
+        self.assertEqual((out.returncode, out.stdout), (127, ""))
+        self.assertEqual(out.stderr, f"keyfit: claude not started: the Python Keyfit was set up with is gone ({gone}).\n"
+                                     "  Reinstall Keyfit (pipx reinstall keyfit, or brew reinstall keyfit), then run: "
+                                     "keyfit setup\n  Bypass once: KEYFIT_DISABLE=1 claude …\n")
+        out = run(KEYFIT_DISABLE="1")
+        self.assertEqual((out.returncode, out.stdout, out.stderr), (0, "real claude -p hi\n", ""))
+        (real / "claude").unlink()
+        out = run(KEYFIT_DISABLE="1")
+        self.assertEqual((out.returncode, out.stderr), (127, "keyfit: claude is not installed (no claude on PATH "
+                                                            "besides Keyfit's shim).\n"))
+
+    @unittest.skipUnless(ZSH, "zsh not installed")
+    def test_folders_with_shell_characters_stay_one_word(self):
+        # KEY-82: paths went into double quotes, so $HOME, ` or " in a folder name made every tool exit 127, and a
+        # backtick ran its command at every launch
+        weird = self.tmp / 'in $HOME `touch ran` "q" it\'s'
+        weird.mkdir()
+        (weird / "python").symlink_to(sys.executable)
+        (weird / "keyfit").symlink_to(Path(cli.__file__).resolve().parent)
+        self.config = weird / "config"
+        self.shims = str(self.config / "bin")
+        moved = lambda p: str(weird / "python") if str(p) == sys.executable else str(weird / "keyfit" / Path(p).name)
+        with mock.patch("keyfit.realbin.stable_path", moved):
+            code, out, err = self.setup("--rc")
+        self.assertEqual(code, 0, err)
+        real = self.tmp / "real"
+        real.mkdir()
+        (real / "claude").write_text('#!/bin/sh\necho "real claude $*"\n')
+        (real / "claude").chmod(0o755)
+        out = subprocess.run([f"{self.shims}/claude", "-p", "hi"], capture_output=True, text=True, timeout=30,
+                             cwd=self.tmp, env={"HOME": str(self.home), "PATH": f"{real}:/usr/bin:/bin",
+                                                "KEYFIT_CONFIG_DIR": str(self.config), "KEYFIT_DISABLE": "1"})
+        self.assertEqual((out.returncode, out.stdout, out.stderr), (0, "real claude -p hi\n", ""))  # through Keyfit
+        self.assertEqual(cli._check_shims(self.config / "bin").status, "ok")
+        for shell, file in (([ZSH, "-f"], self.config / "shell.zsh"), (["/bin/sh"], self.config / "shell.sh"),
+                            ([ZSH, "-f"], self.home / ".zshrc")):
+            placed = subprocess.run([*shell, "-c", '. "$1"; printf %s "$PATH"', "sh", str(file)], capture_output=True,
+                                    text=True, env={"HOME": str(self.home), "PATH": "/usr/bin"}, timeout=30)
+            self.assertEqual((placed.stdout, placed.stderr), (f"{self.shims}:/usr/bin", ""), file)
+        self.assertEqual(list(self.tmp.rglob("ran")), [])  # the backtick never ran
+        (weird / "python").unlink()
+        self.assertEqual(cli._check_shims(self.config / "bin").detail,
+                         f"claude runs {weird / 'python'}, which no longer exists")
+        self.assertIn("Removed the Keyfit line from ~/.zshrc", self.remove()[1])  # found again by its text
 
     def test_not_macos(self):
         code, out, err = self.setup(platform="linux")
@@ -279,6 +342,60 @@ class SetupTests(unittest.TestCase):
         self.assertEqual((self.home / ".zshrc").read_text(), "")
         _, out, _ = self.remove()
         self.assertIn("No Keyfit line in ~/.zshrc", out)
+
+    def test_startup_file_with_bytes_that_are_not_utf8(self):
+        # KEY-82: `--rc` raised UnicodeDecodeError; `--remove` said "No Keyfit line" but deleted shell.zsh, which the
+        # line still loaded: every new zsh printed an error
+        zshrc = self.home / ".zshrc"
+        zshrc.write_bytes(b"export A='caf\xe9'\n")  # Latin-1
+        code, _, err = self.setup("--rc")
+        self.assertEqual((code, err), (0, ""))
+        line = f'source "{self.config}/shell.zsh"  # keyfit: tool shims on PATH'
+        self.assertEqual(zshrc.read_bytes(), b"export A='caf\xe9'\n\n" + line.encode() + b"\n")
+        self.assertEqual(self.setup("--rc")[1].splitlines()[1], "~/.zshrc already loads them")
+        code, out, _ = self.remove()
+        self.assertIn("Removed the Keyfit line from ~/.zshrc", out)
+        self.assertEqual(zshrc.read_bytes(), b"export A='caf\xe9'\n")  # every other byte as it was
+
+    def test_startup_file_keyfit_cannot_change_is_said_not_raised(self):
+        # KEY-82: a folder, or a ZDOTDIR that doesn't exist, gave a traceback after the shims were written
+        folder = self.tmp / "folder"
+        folder.mkdir()
+        code, out, err = self.setup("--rc", str(folder))
+        self.assertEqual(code, 1)
+        line = f'source "{self.config}/shell.zsh"  # keyfit: tool shims on PATH'
+        self.assertEqual(err, f"keyfit setup: cannot change {folder} (Is a directory); add this as its last line "
+                              f"yourself:\n  {line}\n")
+        self.assertTrue((self.config / "bin" / "claude").exists())
+        code, out, err = self.setup("--rc", ZDOTDIR=str(self.tmp / "missing"))
+        self.assertEqual(code, 1)
+        self.assertIn(f"keyfit setup: cannot change {self.tmp}/missing/.zshrc (No such file or directory)", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_commented_out_line_loads_nothing(self):
+        # KEY-82: found as a substring, `# source "…"  # keyfit: …` counted as active and no line was added
+        line = f'source "{self.config}/shell.zsh"  # keyfit: tool shims on PATH'
+        old = f'source "{self.config}/shell.zsh"  {OLD_COMMENT}'
+        (self.home / ".zshrc").write_text(f"# {line}\n#{old}\n")
+        _, out, _ = self.setup()
+        self.assertIn("add this as the LAST line of ~/.zshrc", out)
+        _, out, _ = self.setup("--rc")
+        self.assertIn("Added to the end of ~/.zshrc", out)
+        self.assertEqual((self.home / ".zshrc").read_text(), f"# {line}\n#{old}\n\n{line}\n")
+
+    def test_purge_of_a_linked_config_folder_changes_nothing(self):
+        # KEY-82: shutil.rmtree refuses a link: a traceback half-way, after the line and the shims were already gone
+        real = self.tmp / "real-keyfit"
+        real.mkdir()
+        self.config.symlink_to(real)
+        self.setup("--rc")
+        before = (self.home / ".zshrc").read_text()
+        code, out, err = self.remove("--purge", "--yes")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, f"{self.config} is a link to {real}, which --purge does not delete — nothing changed; "
+                              "run keyfit setup --remove, then delete both yourself if you are sure\n")
+        self.assertEqual((self.home / ".zshrc").read_text(), before)
+        self.assertTrue((real / "bin" / "claude").exists())
 
     def test_remove_works_anywhere(self):
         self.setup()

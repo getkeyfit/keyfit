@@ -118,7 +118,6 @@ class LinearTests(unittest.TestCase):
         servers = json.dumps(self.linear.mcp_servers(self.conn))
         self.assertNotIn("lin_api_", servers)
         self.assertIn("${LINEAR_API_KEY}", servers)
-        self.assertIn("/mcp/readonly", json.dumps(self.linear.mcp_servers(dict(self.conn, readonly=True))))
 
     def test_keychain_reference(self):
         tmp = Path(tempfile.mkdtemp())

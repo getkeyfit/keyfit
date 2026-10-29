@@ -33,10 +33,16 @@ def key(project: str, kind: str, conn, fingerprint: str) -> str:
 
 
 def _load() -> dict:
+    """The entries Keyfit wrote; anything else in the file (a hand edit: `[]`, `null`) is left out, so it costs one
+    more remote check instead of stopping every tool."""
     try:
-        return json.loads(_path().read_text())
+        data = json.loads(_path().read_text())
     except (OSError, ValueError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict) and isinstance(v.get("at"), (int, float))
+            and v.get("status") in ("ok", "warn", "fail") and isinstance(v.get("detail"), str)}
 
 
 def get(k: str, now: float | None = None, max_age: float = TTL) -> dict | None:

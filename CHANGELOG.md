@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`keyfit add linear --readonly`.** It was recorded in the registry, but nothing read it: no MCP server Keyfit
+  sets up uses Linear's read-only endpoint, and the docs never offered it. A `readonly = true` already in the
+  registry is ignored.
+
 ### Fixed
 
 - **The AWS check skips Superset's agent wrappers too.** It ran the first `aws` on PATH after
@@ -24,6 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   firebase` and `keyfit init`; it is taken from the current folder, as gcloud does.
 - With Claude Code older than 2.1.268, whose `claude auth status --json` doesn't name its config folder,
   every check failed ("Claude used config directory None"). The organisation alone decides then.
+- **A shim whose Python is gone** (for example, Homebrew removed the Python that pipx's Keyfit ran on) says so and
+  names the fix, `pipx reinstall keyfit` (or `brew reinstall keyfit`), then `keyfit setup`, instead of only
+  `keyfit setup`, which can't run either. `KEYFIT_DISABLE=1` now runs the tool when Keyfit can't start, too. Run
+  `keyfit setup` once to rewrite your shims.
+- **Setup edge cases.** `keyfit setup --rc` on a startup file that isn't UTF-8, on a folder or with a `ZDOTDIR`
+  that doesn't exist printed a traceback after writing the shims; it now keeps every byte of such a file, or says
+  which line to add by hand. `--remove` said "No Keyfit line" in a file that isn't UTF-8 and deleted the PATH file
+  that line loads, so every new zsh printed an error; it now takes the line out. A commented-out Keyfit line no
+  longer counts as active. `--remove --purge` with `~/.config/keyfit` a symbolic link stops before changing
+  anything instead of half-way. An unwritable config folder is said in one line instead of a traceback.
+- **Ctrl-C during online checks** (`keyfit status`, the end of `keyfit init`) stops at once with exit status 130,
+  instead of waiting for the slowest check (up to 40 seconds) and then printing a traceback.
+- **Hand edits.** `roots = ["."]` is refused: a relative root made every folder the project. A number or a date
+  where Keyfit writes text (`config_dir = 5`, `token = 5`, `login = 5`) fails that account's check, and stops its
+  sign-in commands, instead of an internal error. A check cache of another shape (`[]`, `null`) counts as empty
+  instead of stopping every tool until it was deleted.
 
 ### Security
 
@@ -44,6 +66,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   get-caller-identity` (an AccessDenied with an ARN, say) showed them in full.
 - **`vercel --api URL` is refused inside a project**: every request carries the login's token. Vercel's
   own API may still be named.
+- **Control characters can't lock the registry or drive the terminal.** Written as they were, a control character
+  in a project name, or in an AWS profile imported from a repository's `.envrc` on `keyfit init`, made
+  `registry.toml` unreadable, so every `keyfit` command and all thirteen tools stopped, in every folder. The registry
+  now escapes them, project names refuse them and `.envrc` profiles with them are not imported. Supabase
+  organization names, `.firebaserc` project IDs, Google Workspace server names and the emails in their login files,
+  and the Claude status line show them escaped.
+- **Folder names can't run commands through the generated shell code.** The shims, the PATH files and the
+  startup-file line put paths in double quotes, so a `$`, backtick or quote in the install or config folder's name
+  made every tool exit 127, and a backtick ran its command at every launch. Such paths are now single-quoted;
+  others are written as before. Run `keyfit setup` once to rewrite them.
 
 ## [0.1.0] - 2026-10-27
 

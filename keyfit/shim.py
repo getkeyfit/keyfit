@@ -1516,6 +1516,12 @@ def main(argv: list[str]) -> int:
         if is_login_command(tool, args):
             # run sign-in/setup with the project's environment (so `aws sso login` / `claude auth login`
             # target the project's profile / account) but without checks
+            for kind in LOGIN_KINDS.get(tool, ()):  # unless its account holds a number where text belongs (a hand edit)
+                conn = project.connections.get(kind)
+                broken = environment.unusable(kind, conn) if isinstance(conn, dict) else None
+                if broken is not None:
+                    raise Refused("\n".join([f"keyfit: {tool} not started, {project.name} needs attention",
+                                              *broken.lines(), f"  (bypass once: KEYFIT_DISABLE=1 {tool} …)"]))
             if tool == "aws":  # not another profile's sign-in, settings or keys
                 aws_profiles(project, args)
             if tool == "supabase":

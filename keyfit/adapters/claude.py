@@ -54,7 +54,8 @@ def own_folder(project: Project, registry: Registry, env: dict) -> Path | None:
     supervisor per config folder, so only there do background sessions keep to the project's accounts."""
     def folder(p: Project) -> Path | None:
         conn = p.connections.get("claude")
-        return canonical(conn.get("config_dir") or "~/.claude") if isinstance(conn, dict) else None
+        given = (conn.get("config_dir") or "~/.claude") if isinstance(conn, dict) else None
+        return canonical(given) if isinstance(given, str) else None  # not text (a hand edit): its check fails
     mine = folder(project)
     shell = None if env.get("KEYFIT_PROJECT") else env.get("CLAUDE_CONFIG_DIR")  # inside a session: the session's
     if mine is None or mine == default_dir(env) or (shell and canonical(shell) == mine):

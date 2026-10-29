@@ -928,6 +928,22 @@ class CliTests(unittest.TestCase):
         self.assertIn("solo has no Google account yet, which its Google Workspace servers are checked against.", err)
         self.assertEqual(self.registry()["accounts"].get("google-mcp"), None)
 
+    def test_names_and_emails_from_files_never_drive_the_terminal(self):
+        # KEY-82: server names come from the agents' configs (a repository's .mcp.json too), emails from file names
+        workspace(self.home / ".google_workspace_mcp" / "credentials", "x\x1b[2J@acme.io")
+        self.claude(**{"ws\x1b]0;x\x07": WORKSPACE})
+        code, _, err = self.keyfit("add", "google-mcp")  # no terminal: it names the servers there are
+        self.assertIn(r"(your agents have ws\x1b]0;x\x07)", err)
+        self.claude(ws=WORKSPACE)
+        code, _, err = self.keyfit("add", "google-mcp", "--server", "ws")  # signed in as another account
+        self.assertEqual(code, 1)
+        self.assertIn(r"is signed in as x\x1b[2j@acme.io, the project's Google account is me@acme.io", err)  # lowercased
+        out = io.StringIO()
+        with mock.patch.object(cli, "_ask", lambda prompt: "n"), contextlib.redirect_stdout(out):
+            cli._offer_google_mcp("acme", {"registry": None, "project": "acme"})
+        self.assertIn(r"credentials: x\x1b[2j@acme.io) — not offered", out.getvalue())
+        self.assertNotIn("\x1b", err + out.getvalue())
+
     def test_init_offers_the_servers_signed_in_as_the_projects_account(self):
         write(self.gmail, tokens(ACME))
         cal = write(self.home / ".config" / "google-calendar-mcp" / "tokens.json",

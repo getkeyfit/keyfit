@@ -15,7 +15,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from keyfit import cli, secrets
+from keyfit import cli, secrets, tomlwrite
 from keyfit.adapters import ADAPTERS
 from keyfit.adapters.github import logins
 from keyfit.cli import main
@@ -428,6 +428,71 @@ class MessagesTests(Machine):
         code, out, err = self.run_main("which", str(self.home))
         self.assertIn('roots holds "~", which would put every folder under it in acme', err)
         self.assertIn("→ remove that root from", err)
+
+    def test_relative_root_is_refused(self):
+        # KEY-82: "." is the folder each command runs in, so every folder was the project
+        self.write_registry('[projects.acme]\nroots = ["."]\n')
+        code, out, err = self.run_main("which", str(self.tmp))
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn('[projects.acme]: roots holds ".", a relative path, which would put whatever folder Keyfit runs '
+                      'in in acme\n  → write the full path (like "~/code/acme") in', err)
+
+    def test_control_characters_never_reach_the_registry_or_the_terminal(self):
+        # KEY-82: one of them written raw made registry.toml unreadable, so every command and tool stopped everywhere
+        (self.repo / ".envrc").write_text("use aws acme\x1b[2J 123456789012\n")  # from a repository: not imported
+        code, out, err = self.run_main("init", "--yes")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("aws", self.registry()["projects"]["acme"])
+        (self.tmp / "web").mkdir()
+        code, out, err = self.run_main("init", "--yes", "--name", "web\x1b]0;owned\x07", "--root", str(self.tmp / "web"))
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, "a project name can't hold control characters (web\\x1b]0;owned\\x07): name it with "
+                              "--name NAME\n")
+        odd = self.tmp / "x\x1b[2J\r" / "api"  # a name of its own; the folder above holds them
+        odd.mkdir(parents=True)
+        self.assertEqual(self.run_main("init", "--yes", "--root", str(odd))[0], 0)
+        self.assertEqual(self.registry()["projects"]["api"]["roots"], [str(odd)])  # readable, and read back the same
+        code, out, err = self.run_main("which", str(odd))
+        self.assertEqual((code, out.split()[0], err), (0, "api", ""))
+        data = {"projects": {"a\x00\x1f\x7f": {"roots": ["~/\x1b\r\t\n\\\"x"]}}}
+        self.assertEqual(tomllib.loads(tomlwrite.dumps(data)), data)
+
+    def test_numbers_where_text_belongs_fail_only_their_check(self):
+        # KEY-82: a hand edit such as config_dir = 5 stopped with a TypeError instead of failing that one check
+        self.write_registry(f'[projects.acme]\nroots = ["{self.repo}"]\nclaude = "work"\nsupabase = "s"\ncopilot = "c"\n'
+                            'aws = { profile = "acme-dev", account = "123456789012" }\n'
+                            'linear = { workspace = "acme", key = 5 }\n\n'
+                            '[accounts.claude.work]\nconfig_dir = 5\n\n[accounts.supabase.s]\ntoken = 5\norg = "acme-org"\n\n'
+                            '[accounts.copilot.c]\nlogin = 5\n')
+        code, out, err = self.run_main("status")
+        self.assertEqual((code, err), (1, ""))
+        for kind, field in (("claude", "config_dir"), ("supabase", "token"), ("copilot", "login"), ("linear", "key")):
+            self.assertRegex(out, rf"✘ {kind} +\S* +{field} = 5 is not text \(a hand edit\?\)\n    → write it in quotes "
+                                  rf'\({field} = "…"\) in .*registry.toml, or map it again: keyfit add {kind} …')
+        self.assertRegex(out, r"✔ aws +acme-dev → …9012 .*account confirmed\n")  # the project's other accounts work
+        code, out, err = self.run_main("which", "-v")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("  claude     work\n", out)
+
+    def test_unwritable_config_folder_is_said_not_raised(self):
+        # KEY-82: a PermissionError traceback
+        self.config.mkdir()
+        self.config.chmod(0o500)
+        self.addCleanup(self.config.chmod, 0o700)
+        code, out, err = self.run_main("init", "--yes")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, f"keyfit: cannot use {self.config}/registry.toml: cannot write it (Permission denied)\n"
+                              f"  → make {self.config} writable for you\n")
+        with mock.patch.object(sys, "platform", "darwin"):
+            code, out, err = self.run_main("setup")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, f"keyfit: Permission denied: {self.config}/bin\n")
+
+    def test_linear_readonly_option_is_gone(self):
+        # KEY-82: `keyfit add linear --readonly` was recorded, but nothing read it: no read-only Linear for anyone
+        with redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            main(["add", "linear", "--readonly"])
+        self.assertIn("unrecognized arguments: --readonly", err.getvalue())
 
     def test_unusable_connections_fail_their_check_with_the_fix(self):
         self.write_registry(f'[projects.acme]\nroots = ["{self.repo}"]\ngithub = "octocta"\n'

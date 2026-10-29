@@ -10,12 +10,19 @@ from .adapters import ADAPTERS
 from .checks import Check, human
 from .registry import Project, default_path, tilde
 
+CHECKS = "keyfit-check"  # the name of the threads that run checks in parallel
+
 
 def label(kind: str, conn) -> str:
     adapter = ADAPTERS.get(kind)
     if adapter is not None and isinstance(conn, dict):
-        return adapter.label(conn)
+        return adapter.label(conn) if _odd(conn) is None else str(conn.get("name") or "?")
     return secrets.describe(str(conn)) if secrets.looks_like_key(str(conn)) else str(conn)  # a key written in by hand
+
+
+def _odd(conn: dict) -> str | None:
+    """A field of the connection that holds a number or a date where Keyfit writes text (a hand edit), else None."""
+    return next((f for f, v in conn.items() if v is not None and not isinstance(v, (str, bool, list, dict))), None)
 
 
 def unusable(kind: str, conn) -> Check | None:
@@ -29,7 +36,11 @@ def unusable(kind: str, conn) -> Check | None:
         return Check(kind, "fail", shown, f"unknown connection (a typo? Keyfit knows {', '.join(ADAPTERS)})",
                      f"rename or remove {kind} in {registry}")
     if isinstance(conn, dict):
-        return None
+        odd = _odd(conn)
+        if odd is None:
+            return None
+        return Check(kind, "fail", str(conn.get("name") or ""), f"{odd} = {conn[odd]} is not text (a hand edit?)",
+                     f'write it in quotes ({odd} = "…") in {registry}, or map it again: keyfit add {kind} …')
     reason = f"no account [accounts.{kind}.{conn}]" if shown else f"not a table ({kind} = {{ … }})"
     if key:
         reason = "a key, not an account name"
@@ -107,5 +118,8 @@ def verify(project: Project, env: dict, remote: bool = True, kinds=None, use_cac
         return [one(item) for item in items]
     from concurrent.futures import ThreadPoolExecutor
 
-    with ThreadPoolExecutor(max_workers=len(items)) as pool:
+    pool = ThreadPoolExecutor(max_workers=len(items), thread_name_prefix=CHECKS)
+    try:
         return list(pool.map(one, items))
+    finally:  # on Ctrl-C, return at once instead of waiting for the slowest check (`keyfit` then exits: cli.main)
+        pool.shutdown(wait=False, cancel_futures=True)
