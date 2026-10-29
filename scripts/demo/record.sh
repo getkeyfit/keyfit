@@ -22,7 +22,7 @@ bash "$DEMO/build.sh"
 import hashlib, json, sys
 from datetime import datetime, timedelta, timezone
 home, now = sys.argv[1], datetime.now(timezone.utc)
-token = {"startUrl": "https://lumen.awsapps.com/start", "region": "eu-central-1", "accessToken": "stand-in",
+token = {"startUrl": "https://my-sso-portal.awsapps.com/start", "region": "eu-central-1", "accessToken": "stand-in",
          "expiresAt": (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")}
 open(f"{home}/.aws/sso/cache/{hashlib.sha1(b'lumen').hexdigest()}.json", "w").write(json.dumps(token))
 EOF
