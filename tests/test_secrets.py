@@ -244,6 +244,77 @@ class StoreKeysTests(unittest.TestCase):
         self.assertEqual(self.fetched, [])
         self.assertNotIn(token, out + err)
 
+    def test_only_values_shaped_like_google_keys_are_sent_to_google(self):
+        # `keyfit add gemini --key env:VAR` can name any variable: a typo's GitHub token must stay on this Mac
+        token, sent = "ghp_" + "T" * 36, []
+        with mock.patch.dict(os.environ, {"SOME_TOKEN": token}), \
+                mock.patch.object(ADAPTERS["gemini"], "models", lambda key, timeout: sent.append(key)):
+            code, out, err = self.keyfit("add", "gemini", "--key", "env:SOME_TOKEN")
+            code2, out2, err2 = self.keyfit("add", "gemini", "--key", stdin=io.StringIO(token + "\n"))
+        self.assertEqual((code, code2), (1, 1))
+        self.assertIn("not a Gemini API key (AIza…), so it was not sent to Google", err)
+        self.assertIn("not a Gemini API key (AIza…), so it was not sent to Google", err2)
+        self.assertEqual((sent, self.keychain()), ([], {}))
+        self.assertNotIn("gemini", self.registry()["projects"]["demo"])
+        self.assert_never_leaked(token, out, err, out2, err2)
+
+    def test_a_key_typed_as_an_argument_is_never_echoed_by_the_parser(self):
+        # `keyfit add linear lin_api_…` (--key forgotten): argparse names what it could not place
+        google = "AIza" + "Fake" * 8 + "123"
+        outputs = []
+        for argv in (["add", "linear", KEY], ["add", "gemini", google], ["secret", "set", "NAME", KEY], ["add", KEY],
+                     ["secret", KEY], [KEY]):
+            out, err = io.StringIO(), io.StringIO()
+            with self.subTest(argv=argv), redirect_stdout(out), redirect_stderr(err), \
+                    self.assertRaises(SystemExit) as stop:
+                main(argv)
+            self.assertEqual(stop.exception.code, 2)
+            self.assertIn("keyfit", err.getvalue())
+            self.assertIn("<a key, not shown>", err.getvalue())
+            outputs += [out.getvalue(), err.getvalue()]
+        self.assertEqual((self.fetched, self.keychain()), ([], {}))
+        self.assert_never_leaked(KEY, *outputs)
+        self.assert_never_leaked(google, *outputs)
+
+    def test_a_key_typed_where_a_name_belongs_is_refused_and_never_echoed(self):
+        outputs = []
+        for argv in (["add", "aws", "--profile", KEY], ["add", "linear", "--workspace", KEY],
+                     ["add", "github", "--login", KEY], ["add", "github", "--login", "octocat", "--email", KEY],
+                     ["add", "copilot", "--login", KEY], ["add", "cloudflare", "--profile", KEY],
+                     ["add", "google", "--email", KEY], ["add", "google-mcp", "--login", KEY]):
+            option = argv[argv.index(KEY) - 1]
+            with self.subTest(argv=argv):
+                code, out, err = self.keyfit(*argv, stdin=io.StringIO(OTHER + "\n"))
+                self.assertEqual(code, 1)
+                self.assertEqual(err, f"{option} takes a name, not a key; nothing was done and the key is not shown "
+                                      f"(it may now be in your shell history)\n")
+                outputs += [out, err]
+        self.assertEqual((self.fetched, self.keychain()), ([], {}))  # nothing read from stdin, sent or stored
+        self.assert_never_leaked(KEY, *outputs)
+
+    def test_a_key_written_into_the_registry_by_hand_is_never_shown(self):
+        # linear = "lin_api_…" instead of a table: it fails its check, and is named without being repeated
+        reg = Registry.load(self.config / "registry.toml")
+        reg.data["projects"]["demo"]["linear"] = KEY
+        reg.data["projects"]["demo"]["lineer"] = KEY  # a typo of the kind too
+        reg.save()
+        code, out, err = self.keyfit("status")
+        self.assertEqual(code, 1)
+        self.assertRegex(out, r"✘ linear\s+a key written where its reference belongs \(not shown\)\s+"
+                              r"a key, not an account name\n")
+        self.assertRegex(out, r"✘ lineer\s+a key written where its reference belongs \(not shown\)\s+"
+                              r"unknown connection")
+        code2, out2, err2 = self.keyfit("which", "-v")
+        self.assertIn("linear     a key written where its reference belongs (not shown)", out2)
+        # the fix it names: mapping it again replaces the line, and the key goes into the Keychain
+        reg = Registry.load(self.config / "registry.toml")
+        del reg.data["projects"]["demo"]["lineer"]
+        reg.save()
+        code3, out3, err3 = self.keyfit("add", "linear", stdin=io.StringIO(KEY + "\n"))
+        self.assertEqual(code3, 0, err3)
+        self.assertEqual(self.keychain(), {"keyfit/linear-acme": KEY})
+        self.assert_never_leaked(KEY, out, err, out2, err2, out3, err3)
+
     def test_a_terminal_that_would_echo_the_key_reads_nothing(self):
         import getpass
         import warnings

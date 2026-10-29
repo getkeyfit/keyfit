@@ -30,6 +30,7 @@ from test_vercel import executable  # noqa: E402
 # Fake people; never real ones.
 ACME, PERSONAL = "me@acme.io", "someone@gmail.com"
 KEY = "AIzaFakeFakeFakeFakeFakeFakeFakeFake123"  # shaped like a Google API key; not one
+RESTRICTED, BUSY, WRONG = (f"{word:x<39}" for word in ("AIzaRestricted", "AIzaBusy", "AIzaWrong"))  # shaped likewise
 LINEAR = {"httpUrl": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}
 
 # Fake gemini: prints its argv and the variables that decide its sign-in. Its sign-in (`--prompt-interactive /quit`)
@@ -86,8 +87,8 @@ def tokeninfo(url, token, timeout):
 
 def models(key, timeout):
     """Stands in for the Gemini API's model list."""
-    return {KEY: (200, {"models": [{"name": "models/gemini-x"}]}), "AIzaRestricted": (403, {}),
-            "AIzaBusy": (503, {})}.get(key, (400, {"error": {"status": "INVALID_ARGUMENT"}}))
+    return {KEY: (200, {"models": [{"name": "models/gemini-x"}]}), RESTRICTED: (403, {}),
+            BUSY: (503, {})}.get(key, (400, {"error": {"status": "INVALID_ARGUMENT"}}))
 
 
 class AdapterTests(unittest.TestCase):
@@ -386,13 +387,26 @@ class AdapterTests(unittest.TestCase):
         settings(self.own, {"security": {"auth": {"selectedType": "gemini-api-key"}}})
         check = self.verify(conn, ACME_GEMINI_KEY=KEY)
         self.assertEqual((check.status, check.label, check.detail), ("ok", "acme · API key", "key accepted by Google"))
-        check = self.verify(conn, ACME_GEMINI_KEY="AIzaWrong")
+        check = self.verify(conn, ACME_GEMINI_KEY=WRONG)
         self.assertEqual((check.status, check.detail), ("fail", "Google does not accept the API key (invalid, expired "
                                                                 "or deleted)"))
-        self.assertIn("may not use the Gemini API", self.verify(conn, ACME_GEMINI_KEY="AIzaRestricted").detail)
-        self.assertTrue(self.verify(conn, ACME_GEMINI_KEY="AIzaBusy").transient)
+        self.assertIn("may not use the Gemini API", self.verify(conn, ACME_GEMINI_KEY=RESTRICTED).detail)
+        self.assertTrue(self.verify(conn, ACME_GEMINI_KEY=BUSY).transient)
         check = self.verify(conn)
         self.assertEqual((check.detail, check.fix), ("the API key ($ACME_GEMINI_KEY) is missing", "keyfit add gemini --key"))
+
+    def test_only_a_value_shaped_like_a_google_key_is_sent_to_google(self):
+        # `env:VAR` can name any variable: whatever it holds now, a GitHub token never goes to Google's models endpoint
+        conn = {"name": "acme", "home": str(self.own), "key": "env:ACME_GEMINI_KEY"}
+        settings(self.own, {"security": {"auth": {"selectedType": "gemini-api-key"}}})
+        sent = []
+        self.adapter.models = lambda key, timeout: sent.append(key)
+        for value in ("ghp_" + "T" * 36, "AIza" + "x" * 20, KEY + "x"):
+            check = self.verify(conn, ACME_GEMINI_KEY=value)
+            self.assertEqual((check.status, check.detail, check.fix),
+                             ("fail", "$ACME_GEMINI_KEY does not hold a Gemini API key (AIza…), so it was not sent to "
+                                      "Google", "keyfit add gemini --key"))
+        self.assertEqual(sent, [])
 
     def test_a_key_account_needs_the_api_key_method(self):
         conn = {"name": "acme", "home": str(self.own), "key": "env:ACME_GEMINI_KEY"}
@@ -885,7 +899,7 @@ class AddTests(unittest.TestCase):
         self.assertNotIn(KEY, out + err)
 
     def test_a_key_google_refuses_is_not_stored(self):
-        code, out, err = self.run_main("add", "gemini", "--key", stdin="AIzaWrongWrongWrongWrongWrong\n")
+        code, out, err = self.run_main("add", "gemini", "--key", stdin=WRONG + "\n")
         self.assertEqual((code, out), (1, ""))
         self.assertIn("Google does not accept the API key", err)
         self.assertEqual(self.stored, {})

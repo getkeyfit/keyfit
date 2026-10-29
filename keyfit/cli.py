@@ -1592,9 +1592,6 @@ def cmd_add_gemini(args) -> int:
     return 0
 
 
-GEMINI_KEY = re.compile(r"[\x21-\x7e]{20,200}")  # Google API keys are AIza…; anything printable is let through to Google
-
-
 def _add_gemini_key(reg: Registry, project: Project, args, env: dict, extra: dict) -> int:
     """A Gemini API key instead of a Google sign-in: checked with Google, kept in the Keychain (or where --key points),
     with a Gemini CLI folder of its own that uses the API-key method."""
@@ -1622,9 +1619,9 @@ def _add_gemini_key(reg: Registry, project: Project, args, env: dict, extra: dic
         if not key:
             print("no key given — paste it at the prompt, or pipe it on stdin", file=sys.stderr)
             return 1
-    if not GEMINI_KEY.fullmatch(key):
-        print("that is not a Gemini API key, so it was not sent to Google — create one at aistudio.google.com/apikey",
-              file=sys.stderr)
+    if not gemini_adapter.KEY_SHAPE.fullmatch(key):  # a typo's GitHub token stays on this Mac
+        print("that is not a Gemini API key (AIza…), so it was not sent to Google — create one at "
+              "aistudio.google.com/apikey", file=sys.stderr)
         return 1
     check = ADAPTERS["gemini"].remote({"key": ref or "pasted", "name": args.name or project.name}, {"GEMINI_API_KEY": key})
     if check.failed:
@@ -2494,9 +2491,17 @@ something off? keyfit doctor
 """
 
 
+class _Parser(argparse.ArgumentParser):
+    """argparse repeats what it could not place (`keyfit add linear lin_api_…` with --key forgotten): never a key.
+    Its subparsers are of this class too."""
+
+    def error(self, message):
+        super().error(secrets.redact(message))
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="keyfit", description="Per-project, verified environments for AI coding tools.",
-                                     epilog=START, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = _Parser(prog="keyfit", description="Per-project, verified environments for AI coding tools.",
+                     epilog=START, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--registry", type=Path, help="registry file (default: ~/.config/keyfit/registry.toml)")
     parser.add_argument("--version", action="version", version=f"keyfit {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -2718,6 +2723,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:  # plain `keyfit`: what it is and where to start
         parser.print_help()
         return 0
+    for option in ("profile", "login", "email", "workspace"):  # names, which messages repeat: never a key
+        if secrets.looks_like_key(getattr(args, option, None)):
+            print(f"--{option} takes a name, not a key; nothing was done and the key is not shown "
+                  "(it may now be in your shell history)", file=sys.stderr)
+            return 1
     try:
         return args.func(args)
     except RegistryError as err:  # a hand edit: say where and how to fix it, not a traceback

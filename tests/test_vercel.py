@@ -431,6 +431,22 @@ class ShimTests(VercelCase):
         code, argv, _ = self.run_shim("env", "run", "--", "node", "--token", "x")  # after `--`: not vercel's
         self.assertIsNone(code, self.stderr)
 
+    def test_another_api_host_is_refused(self):
+        # every request carries the login's token: only to Vercel's own API, as wrangler's API host is pinned
+        self.login(self.default)
+        for args in (["--api", "https://collector.example", "deploy"], ["ls", "--api=https://collector.example"],
+                     ["whoami", "--api", "https://collector.example"], ["logout", "--api=https://collector.example"]):
+            with self.subTest(args=args):
+                code, argv, _ = self.run_shim(*args)
+                self.assertEqual(code, 1)
+                self.assertIsNone(argv)  # the real vercel never ran
+                self.assertEqual(self.stderr, "keyfit: this folder belongs to client; refusing --api: vercel would send "
+                                              "client's Vercel token to another host than https://api.vercel.com.\n"
+                                              "  Bypass once: KEYFIT_DISABLE=1 vercel …\n")
+        code, argv, _ = self.run_shim("ls", "--api", "https://api.vercel.com/")  # Vercel's own may be named
+        self.assertIsNone(code, self.stderr)
+        self.assertEqual(argv, ["vercel", "--scope", "acme", "ls", "--api", "https://api.vercel.com/"])
+
     def test_example_refusal_message(self):
         self.login(self.default)
         self.run_shim("--scope", "globex", "deploy")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import time
 
-from . import cache
+from . import cache, secrets
 from .adapters import ADAPTERS
 from .checks import Check, human
 from .registry import Project, default_path, tilde
@@ -13,19 +13,26 @@ from .registry import Project, default_path, tilde
 
 def label(kind: str, conn) -> str:
     adapter = ADAPTERS.get(kind)
-    return adapter.label(conn) if adapter is not None and isinstance(conn, dict) else str(conn)
+    if adapter is not None and isinstance(conn, dict):
+        return adapter.label(conn)
+    return secrets.describe(str(conn)) if secrets.looks_like_key(str(conn)) else str(conn)  # a key written in by hand
 
 
 def unusable(kind: str, conn) -> Check | None:
     """A connection the registry holds in a form Keyfit cannot use (a hand edit): it fails, so the tool does not
     start without it, and says how to fix it. None for a usable one."""
     registry, shown = tilde(default_path()), conn if isinstance(conn, str) else ""
+    key = secrets.looks_like_key(shown)
+    if key:  # a key written in by hand (linear = "lin_api_…"): named, never shown
+        shown = secrets.describe(shown)
     if kind not in ADAPTERS:
         return Check(kind, "fail", shown, f"unknown connection (a typo? Keyfit knows {', '.join(ADAPTERS)})",
                      f"rename or remove {kind} in {registry}")
     if isinstance(conn, dict):
         return None
     reason = f"no account [accounts.{kind}.{conn}]" if shown else f"not a table ({kind} = {{ … }})"
+    if key:
+        reason = "a key, not an account name"
     return Check(kind, "fail", shown, reason, f"map it again: keyfit add {kind} …   (or fix it in {registry})")
 
 
