@@ -312,6 +312,17 @@ class AwsTests(unittest.TestCase):
         env = self.env_for(conn, {"iam": {"account": "444444444444"}}, PATH=f"{wrapper}{os.pathsep}{self.env['PATH']}")
         self.assertEqual(self.aws.remote(conn, env).detail, "account confirmed")
 
+    def test_account_ids_in_aws_errors_show_only_their_last_four_digits(self):
+        conn = {"profile": "role", "account": "333333333333"}
+        error = ("An error occurred (AccessDenied) when calling the AssumeRole operation: arn:aws:sts::444455556666:"
+                 "assumed-role/Dev/me is not authorized to perform: sts:AssumeRole on resource: "
+                 "arn:aws:iam::333333333333:role/Admin")  # 212 characters, 198 once masked
+        c = self.aws.verify(conn, self.env_for(conn, {"role": {"error": error}}))
+        self.assertTrue(c.failed)
+        self.assertIn("arn:aws:sts::…6666:assumed-role/Dev/me is not authorized", c.detail)
+        self.assertTrue(c.detail.endswith("arn:aws:iam::…3333:role/Admin"), c.detail)  # masked before it is cut
+        self.assertNotIn("444455556666", c.detail)
+
     def test_missing_cli_says_how_to_install_it(self):
         conn = {"profile": "iam", "account": "444444444444"}
         c = self.aws.verify(conn, self.env_for(conn, PATH="/usr/bin:/bin"))

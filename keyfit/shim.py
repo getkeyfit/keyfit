@@ -732,6 +732,16 @@ def copilot_login_check(project: Project) -> None:
                   f"  Bypass once: KEYFIT_DISABLE=1 copilot …")
 
 
+def vercel_api(project: Project, given) -> None:
+    """`vercel --api URL` sends the token of the login it uses to URL: refused with the project's login, as wrangler's
+    API host is pinned. Vercel's own API may be named."""
+    for name, value in given:
+        if name == "--api" and (value or "").rstrip("/") != vercel.API:
+            raise Refused(f"keyfit: this folder belongs to {project.name}; refusing --api: vercel would send "
+                          f"{project.name}'s Vercel token to another host than {vercel.API}.\n"
+                          f"  Bypass once: KEYFIT_DISABLE=1 vercel …")
+
+
 def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list[str]:
     """Refuse options that would leave the project's Vercel login or team (like `aws --profile`) and a folder to
     work in that is linked to another team (--cwd, `deploy <path>`, `vercel <path>`, `dev <dir>`), then add the
@@ -741,6 +751,7 @@ def vercel_args(project: Project, args: list[str], env: dict, cwd: Path) -> list
     team = conn.get("team") or conn.get("team_id")
     bypass = "\n  Bypass once: KEYFIT_DISABLE=1 vercel …"
     given = vercel.options(args)
+    vercel_api(project, given)
     for name, value in given:
         if name == "--token":
             raise Refused(f"keyfit: this folder belongs to {project.name} (Vercel login in {tilde(folder)}); "
@@ -1263,6 +1274,8 @@ def login_environment(tool: str, project: Project, env: dict) -> dict:
 def vercel_login_args(project: Project, args: list[str], env: dict) -> list[str]:
     """Sign-in commands (`vercel login`, …) go to the project's login folder, unless the user named one."""
     conn = project.connections.get("vercel")
+    if isinstance(conn, dict):  # `vercel whoami --api URL` would send the project's token there
+        vercel_api(project, vercel.options(args))
     if not isinstance(conn, dict) or any(name == "--global-config" for name, _ in vercel.options(args)):
         return args
     return vercel.config_args(conn, env) + args

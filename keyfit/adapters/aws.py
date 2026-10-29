@@ -328,7 +328,8 @@ class AwsAdapter(Adapter):
             return None, f"AWS did not answer within {self.timeout:g} s", True
         if out.returncode != 0:
             lines = [line.strip() for line in out.stderr.splitlines() if line.strip()]
-            reason = (lines[-1] if lines else f"aws exited with {out.returncode}")[:200]
+            reason = (lines[-1] if lines else f"aws exited with {out.returncode}")
+            reason = re.sub(r"(?<!\d)\d{8}(\d{4})(?!\d)", r"…\1", reason)[:200]  # account IDs (in ARNs) as mask_account
             network = any(s in reason for s in ("Could not connect", "EndpointConnectionError", "Connect timeout",
                                                   "Read timeout", "Temporary failure in name resolution"))
             return None, reason, network

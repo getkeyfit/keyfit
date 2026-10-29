@@ -31,6 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no higher than the repository's top (outside a repository, the nearest `package.json`) or your home
   folder. For a project outside your home folder the search went up to `/`, so a
   `node_modules/.bin/firebase` another local user created in `/private/tmp` or `/Users/Shared` could run.
+- **Only a Google API key goes to Google.** `keyfit add gemini --key` sent any printable value to the
+  Gemini API and stored it, so a typo such as `--key env:GITHUB_TOKEN` shipped a GitHub token to Google.
+  Now only a value shaped like a Google API key (`AIza…`) is sent, there and in the Gemini check.
+- **A key typed where a name belongs is never repeated.** argparse echoed it (`keyfit add linear
+  lin_api_…` without `--key`: `unrecognized arguments: lin_api_…`), and so did the messages about
+  `--profile`, `--login`, `--email` and `--workspace`. It is now shown as `<a key, not shown>`, and those
+  options refuse a key before anything runs.
+- **A key written into the registry by hand** (`linear = "lin_api_…"`) is named, not shown, in
+  `keyfit status`, `keyfit which -v` and every failed start.
+- **AWS errors show account IDs as their last four digits.** The error Keyfit passes on from `aws sts
+  get-caller-identity` (an AccessDenied with an ARN, say) showed them in full.
+- **`vercel --api URL` is refused inside a project**: every request carries the login's token. Vercel's
+  own API may still be named.
 
 ## [0.1.0] - 2026-10-27
 
