@@ -578,7 +578,7 @@ def cmd_add_aws(args) -> int:
         return 1
     conn = {"profile": args.profile}
     if os.environ.get("AWS_CONFIG_FILE"):  # the shims scrub the variable: the project keeps the file the profile is in
-        conn["config_file"] = tilde(os.environ["AWS_CONFIG_FILE"])
+        conn["config_file"] = tilde(config_path(os.environ))
     asked_aws = False
     if args.account:
         if not ACCOUNT_RE.match(args.account):

@@ -251,16 +251,18 @@ def words(args: list[str]) -> list[str]:
 
 
 def firebase_bin(env: dict, start) -> str | None:
-    """The firebase CLI `npx firebase-tools` runs in *start*: the nearest node_modules/.bin/firebase (up to the home
-    folder), else the one on PATH."""
+    """The firebase CLI `npx firebase-tools` runs in *start*: the nearest node_modules/.bin/firebase up to the
+    repository's top or the home folder (outside both: up to the nearest package.json, else in *start* only), else the
+    one on PATH. Never higher: a node_modules another user created in /private/tmp or /Users/Shared would run."""
     home = _home(env)
     folder = Path(os.path.abspath(start))
-    for d in (folder, *folder.parents):
+    up = [folder, *folder.parents]
+    top = next((d for d in up if d == home or (d / ".git").exists()), None) or \
+        next((d for d in up if (d / "package.json").is_file()), folder)
+    for d in up[:up.index(top) + 1]:
         candidate = d / "node_modules" / ".bin" / "firebase"
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
-        if d == home:
-            break
     return find_real("firebase", env, skip_wrappers=True)
 
 

@@ -8,8 +8,9 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
-from keyfit.adapters.aws import AwsAdapter, parse_envrc
+from keyfit.adapters.aws import AwsAdapter, config_path, credentials_path, parse_envrc, profile_names, read_profile
 from keyfit.cli import main
 from keyfit.realbin import find_real
 from keyfit.registry import Registry
@@ -88,16 +89,16 @@ class AwsTests(unittest.TestCase):
         self.aws.inject(conn, env)
         return env
 
-    def write_sso_token(self, expires_in: timedelta, refresh=True):
-        token = {"accessToken": "x", "expiresAt": iso(datetime.now(timezone.utc) + expires_in),
-                 "registrationExpiresAt": iso(datetime.now(timezone.utc) + timedelta(days=60))}
+    def write_sso_token(self, expires_in: timedelta, refresh=True, stamp=iso):
+        token = {"accessToken": "x", "expiresAt": stamp(datetime.now(timezone.utc) + expires_in),
+                 "registrationExpiresAt": stamp(datetime.now(timezone.utc) + timedelta(days=60))}
         if refresh:
             token["refreshToken"] = "r"
         name = hashlib.sha1(b"corp").hexdigest() + ".json"
         (self.home / ".aws" / "sso" / "cache" / name).write_text(json.dumps(token))
 
-    def write_login_token(self, expires_in: timedelta, account="222222222222", refresh=True):
-        token = {"accessToken": {"accountId": account, "expiresAt": iso(datetime.now(timezone.utc) + expires_in)}}
+    def write_login_token(self, expires_in: timedelta, account="222222222222", refresh=True, stamp=iso):
+        token = {"accessToken": {"accountId": account, "expiresAt": stamp(datetime.now(timezone.utc) + expires_in)}}
         if refresh:
             token["refreshToken"] = "r"
         name = hashlib.sha256(b"arn:aws:iam::222222222222:user/dev").hexdigest() + ".json"
@@ -199,6 +200,45 @@ class AwsTests(unittest.TestCase):
     def test_sso_expired_token_without_refresh_fails(self):
         self.write_sso_token(-timedelta(hours=2), refresh=False)
         self.assertTrue(self.aws.local({"profile": "sso", "account": "111111111111"}, self.env).failed)
+
+    def test_cache_times_without_a_zone_are_utc(self):
+        naive = lambda dt: dt.strftime("%Y-%m-%dT%H:%M:%S")  # noqa: E731 — no Z, no offset
+        sso, console = {"profile": "sso", "account": "111111111111"}, {"profile": "console", "account": "222222222222"}
+        self.write_sso_token(timedelta(hours=3), stamp=naive)
+        self.assertIn("valid 2h", self.aws.local(sso, self.env).detail)
+        self.write_sso_token(-timedelta(hours=2), stamp=naive)
+        self.assertEqual(self.aws.local(sso, self.env).detail, "SSO token due for refresh")
+        self.write_login_token(timedelta(minutes=10), stamp=naive)
+        self.assertEqual(self.aws.local(console, self.env).detail, "console sign-in active")
+        self.write_login_token(-timedelta(hours=20), stamp=naive)
+        self.assertEqual(self.aws.local(console, self.env).detail, "console sign-in expired (12 h limit)")
+
+    def test_section_names_are_read_as_botocore_reads_them(self):
+        # botocore splits section names like a shell: extra spaces and quotes still name the profile
+        (self.home / ".aws" / "config").write_text(
+            '[profile  spaced]\nsso_session = corp\nsso_account_id = 111111111111\n\n'
+            '[profile "quoted"]\nsso_session = corp\nsso_account_id = 111111111111\n\n'
+            '[sso-session  "corp"]\nsso_start_url = https://corp.awsapps.com/start\n\n'
+            '[profile two words here]\naws_access_key_id = AKIAEXAMPLE\n')
+        self.write_sso_token(timedelta(hours=3))
+        self.assertEqual(profile_names(self.env), ["spaced", "quoted"])
+        for name in ("spaced", "quoted"):
+            with self.subTest(name):
+                self.assertEqual(read_profile(name, self.env).sso_start_url, "https://corp.awsapps.com/start")
+                self.assertEqual(self.aws.local({"profile": name, "account": "111111111111"}, self.env).status, "ok")
+        check = self.aws.local({"profile": "two", "account": "111111111111"}, self.env)  # three words: no profile
+        self.assertIn("no profile 'two'", check.detail)
+
+    def test_variables_in_the_file_names_are_expanded(self):
+        moved = self.tmp / "moved"
+        moved.mkdir()
+        (moved / "config").write_text("[profile elsewhere]\nsso_session = corp\nsso_account_id = 111111111111\n")
+        (moved / "credentials").write_text("[static]\naws_access_key_id = AKIAEXAMPLE\n")
+        env = dict(self.env, AWS_CONFIG_FILE="$AWS_DIR/config", AWS_SHARED_CREDENTIALS_FILE="${AWS_DIR}/credentials")
+        with mock.patch.dict(os.environ, {"AWS_DIR": str(moved)}):  # as botocore expands them: from the environment
+            self.assertEqual((config_path(env), credentials_path(env)), (moved / "config", moved / "credentials"))
+            self.assertEqual(profile_names(env), ["elsewhere"])
+            self.assertEqual(read_profile("static", env).kind, "static")
 
     def test_console_login_missing_and_expired(self):
         conn = {"profile": "console", "account": "222222222222"}
@@ -345,6 +385,22 @@ class AwsTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(Registry.load(reg).get("demo").connections["aws"],
                          {"profile": "sso", "account": "111111111111"})
+
+    def test_add_aws_keeps_the_expanded_config_file(self):
+        repo = self.tmp / "addrepo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        reg = self.tmp / "add-registry.toml"
+        main(["--registry", str(reg), "init", "--yes", "--root", str(repo), "--name", "demo"])
+        (self.home / ".aws" / "config").rename(self.home / ".aws" / "config-acme")
+        self.write_sso_token(timedelta(hours=1))
+        with mock.patch.dict(os.environ, {"HOME": str(self.home), "PATH": self.env["PATH"],
+                                          "AWS_CONFIG_FILE": "$HOME/.aws/config-acme",
+                                          "FAKE_AWS": json.dumps({"sso": {"account": "111111111111"}})}):
+            code = main(["--registry", str(reg), "add", "aws", "--project", "demo", "--profile", "sso"])
+        self.assertEqual(code, 0)
+        self.assertEqual(Registry.load(reg).get("demo").connections["aws"],
+                         {"profile": "sso", "config_file": "~/.aws/config-acme", "account": "111111111111"})
 
     def test_init_imports_use_aws_from_envrc(self):
         repo = self.tmp / "repo"

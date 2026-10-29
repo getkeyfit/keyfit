@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The AWS check skips Superset's agent wrappers too.** It ran the first `aws` on PATH after
   Keyfit's shims, so an `aws` in `~/.superset/bin` would have answered it; like every other check,
   it now runs the first one after Superset's wrappers as well, as the security page says.
+- A tool started in a folder that no longer exists (a removed worktree) says so and doesn't start, instead
+  of `internal error (FileNotFoundError …)`, or a Python traceback when `.` or `node_modules/.bin` is on
+  PATH. `KEYFIT_DISABLE=1` still starts it.
+- AWS: an SSO or `aws login` cache time without a zone is read as UTC instead of ending in `internal error
+  (TypeError …)`. Sections written `[profile  acme]` or `[profile "acme"]` (and `sso-session` sections
+  written that way) are found, as the AWS CLI reads them, instead of "no profile 'acme'". `$VARIABLES` in
+  `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` are expanded, as the AWS CLI does, and `keyfit add
+  aws` keeps the expanded file.
+- A relative `CLOUDSDK_CONFIG` no longer crashes `keyfit add google`, `keyfit add gcloud`, `keyfit add
+  firebase` and `keyfit init`; it is taken from the current folder, as gcloud does.
+- With Claude Code older than 2.1.268, whose `claude auth status --json` doesn't name its config folder,
+  every check failed ("Claude used config directory None"). The organisation alone decides then.
+
+### Security
+
+- The firebase CLI Keyfit runs to renew a sign-in and at `Sign in now?` is looked for in `node_modules/.bin`
+  no higher than the repository's top (outside a repository, the nearest `package.json`) or your home
+  folder. For a project outside your home folder the search went up to `/`, so a
+  `node_modules/.bin/firebase` another local user created in `/private/tmp` or `/Users/Shared` could run.
 
 ## [0.1.0] - 2026-10-27
 
