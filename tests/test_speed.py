@@ -25,7 +25,7 @@ from keyfit.shim import TOOLS  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 
 # Fake gh: answers `auth token --hostname github.com --user <login>` and logs every call.
-FAKE_GH = """#!/usr/bin/env python3
+FAKE_GH = f"#!{sys.executable}" + """
 import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["GH_CALLS"], "a") as fh: fh.write(json.dumps(args) + "\\n")
@@ -75,7 +75,7 @@ class VerifyTests(unittest.TestCase):
     """One connection is checked without a thread pool; results and errors are the same as with one."""
 
     def setUp(self):
-        os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()
+        self.enterContext(mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": tempfile.mkdtemp()}))  # restored after
         ADAPTERS.update(fine=Fine(), broken=Broken())
         self.addCleanup(lambda: [ADAPTERS.pop(k) for k in ("fine", "broken")])
 
@@ -99,7 +99,7 @@ class SessionTokenTests(unittest.TestCase):
     gh for it again, but only that exact token, only for that project and while gh's sign-ins are unchanged."""
 
     def setUp(self):
-        os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()
+        self.enterContext(mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": tempfile.mkdtemp()}))  # restored after
         self.tmp = Path(tempfile.mkdtemp()).resolve()
         (self.tmp / "bin").mkdir()
         gh = self.tmp / "bin" / "gh"

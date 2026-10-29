@@ -24,7 +24,7 @@ OTHER = "lin_api_" + "Z9" * 20
 
 # Stands in for /usr/bin/security: logs every argv, keeps items in keychain.json next to itself,
 # and parses `security -i` lines with a port of split_line() from Apple's SecurityTool/macOS/security.c.
-FAKE_SECURITY = r'''#!/usr/bin/env python3
+FAKE_SECURITY = f"#!{sys.executable}" + r'''
 import json, os, sys
 here = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(here, "argv.log"), "a") as fh:

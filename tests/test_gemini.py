@@ -35,7 +35,7 @@ LINEAR = {"httpUrl": "https://mcp.linear.app/mcp", "headers": {"Authorization": 
 
 # Fake gemini: prints its argv and the variables that decide its sign-in. Its sign-in (`--prompt-interactive /quit`)
 # signs in as FAKE_SIGN_IN_AS in the home it was given, as Gemini CLI's own dialog would.
-FAKE_GEMINI = """#!/usr/bin/env python3
+FAKE_GEMINI = f"#!{sys.executable}" + """
 import base64, json, os, sys, time
 args = sys.argv[1:]
 home = os.environ.get("GEMINI_CLI_HOME") or os.environ["HOME"]
@@ -594,7 +594,8 @@ class ShimTests(unittest.TestCase):
             folder.mkdir()
         for folder in (self.repo, self.other):
             subprocess.run(["git", "init", "-q"], cwd=folder, check=True)
-        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config)}):
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config), "HOME": str(self.home),
+                                          "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin"}, clear=True):
             with contextlib.redirect_stdout(io.StringIO()):
                 main(["init", "--yes", "--root", str(self.repo), "--name", "demo"])
                 main(["init", "--yes", "--root", str(self.other), "--name", "globex"])

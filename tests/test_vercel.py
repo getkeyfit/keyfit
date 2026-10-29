@@ -32,7 +32,7 @@ TEAMS = {"team_acme": "acme", "team_globex": "globex"}
 MEMBERS = {"octocat": {"team_acme"}, "hubot": {"team_globex"}}
 
 # Stands in for vercel: `whoami` renews an expired access token the way the real CLI does; every call is logged.
-FAKE_VERCEL = """#!/usr/bin/env python3
+FAKE_VERCEL = f"#!{sys.executable}" + """
 import json, os, sys, time
 args = sys.argv[1:]
 with open(os.environ["VERCEL_CALLS"], "a") as fh:
@@ -104,7 +104,7 @@ class VercelCase(unittest.TestCase):
         self.outside.mkdir()
         self.env = {"HOME": str(self.home), "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin",
                     "KEYFIT_CONFIG_DIR": str(self.config), "VERCEL_CALLS": str(self.calls)}
-        for patcher in (mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+        for patcher in (mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch.object(ADAPTERS["vercel"], "fetch", api),
                         mock.patch.dict(os.environ, self.env, clear=True)):
             patcher.start()

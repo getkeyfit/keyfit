@@ -806,7 +806,6 @@ class CliTests(unittest.TestCase):
         self.google = Google()
         env = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config)}
         for patcher in (mock.patch.dict(os.environ, env, clear=True),
-                        mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch.object(ADAPTERS["google-mcp"], "fetch", self.google),
                         mock.patch.object(ADAPTERS["google-mcp"], "renew", self.google.renew),
@@ -970,7 +969,7 @@ class CliTests(unittest.TestCase):
                                          f"{ACME})"])
 
 
-FAKE_CLAUDE = """#!/usr/bin/env python3
+FAKE_CLAUDE = f"#!{sys.executable}" + """
 import json, os, sys
 print(json.dumps({"argv": sys.argv[1:], "env": {k: os.environ.get(k) for k in (
     "GMAIL_CREDENTIALS_PATH", "USER_GOOGLE_EMAIL", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_DRIVE_MCP_REFRESH_TOKEN",
@@ -1001,7 +1000,8 @@ class ShimTests(unittest.TestCase):
             folder.mkdir()
         for folder in (self.repo, self.other):
             subprocess.run(["git", "init", "-q"], cwd=folder, check=True)
-        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config)}):
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config), "HOME": str(self.home),
+                                          "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin"}, clear=True):
             with contextlib.redirect_stdout(io.StringIO()):
                 main(["init", "--yes", "--root", str(self.repo), "--name", "demo"])
                 main(["init", "--yes", "--root", str(self.other), "--name", "globex"])

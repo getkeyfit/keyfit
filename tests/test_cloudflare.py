@@ -179,7 +179,7 @@ class CloudflareCase(unittest.TestCase):
             self.fetched.append(path)
             return api(path, token, timeout)
         adapter = ADAPTERS["cloudflare"]
-        for patcher in (mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+        for patcher in (mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch.object(adapter, "run", self.wrangler), mock.patch.object(adapter, "fetch", fetch),
                         mock.patch.object(secrets, "SECURITY", "/nonexistent/security"),
                         mock.patch.dict(os.environ, self.env, clear=True)):

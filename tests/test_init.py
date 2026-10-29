@@ -27,7 +27,7 @@ os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the re
 KEY = "lin_api_" + "K3" * 20  # fake; never a real key
 
 # Fake gh: read-only `auth status` and `auth token` only; every call is logged with the GH_CONFIG_DIR it saw.
-FAKE_GH = """#!/usr/bin/env python3
+FAKE_GH = f"#!{sys.executable}" + """
 import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["GH_CALLS"], "a") as fh:
@@ -48,7 +48,7 @@ if args[:5] == ["auth", "token", "--hostname", "github.com", "--user"] and token
 sys.exit(97)
 """
 
-FAKE_CLAUDE = """#!/usr/bin/env python3
+FAKE_CLAUDE = f"#!{sys.executable}" + """
 import json, os, sys
 assert sys.argv[1:] == ["auth", "status", "--json"], sys.argv
 folder = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude")
@@ -56,7 +56,7 @@ print(json.dumps({"loggedIn": True, "authMethod": "claude.ai", "email": "me@work
                   "orgName": "Work", "subscriptionType": "team", "configDirectory": folder}))
 """
 
-FAKE_AWS = """#!/usr/bin/env python3
+FAKE_AWS = f"#!{sys.executable}" + """
 import os, sys
 assert sys.argv[1:3] == ["sts", "get-caller-identity"], sys.argv
 with open(os.environ["STS_COUNT"], "a") as fh: fh.write("x")
@@ -138,7 +138,7 @@ class Machine(unittest.TestCase):
                 mock.patch.dict(os.environ, env, clear=True),
                 mock.patch.object(secrets, "SECURITY", str(self.stub / "security")),
                 mock.patch.object(sys, "platform", "darwin"),
-                mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+                mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                 mock.patch.object(ADAPTERS["vercel"], "fetch", vercel_api),
                 mock.patch.object(ADAPTERS["github"], "fetch",
                                   lambda token, timeout: (200, {"login": who[token]}) if token in who else (401, {})),

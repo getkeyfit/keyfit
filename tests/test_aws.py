@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -17,7 +18,7 @@ from keyfit.registry import Registry
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
-FAKE_AWS = """#!/usr/bin/env python3
+FAKE_AWS = f"#!{sys.executable}" + """
 import json, os, sys, time
 args = sys.argv[1:]
 profile = args[args.index("--profile") + 1]
@@ -30,8 +31,15 @@ if "error" in spec:
 # an endpoint override (a variable, or the profile's endpoint_url unless ignored) is another host: it answers anything
 if any(k.startswith("AWS_ENDPOINT_URL") for k in os.environ) or (
         spec.get("profile_endpoint") and os.environ.get("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS") != "true"):
-    print(spec.get("override_account", "000000000000")); sys.exit(0)
-print(spec.get("account", "000000000000"))
+    account = spec.get("override_account", "000000000000")
+else:
+    account = spec.get("account", "000000000000")
+assert args[:2] == ["sts", "get-caller-identity"], args
+value = lambda option: args[args.index(option) + 1] if option in args[:-1] else None
+if (value("--query"), value("--output")) == ("Account", "text"):
+    print(account)
+else:  # like aws: the whole identity, as JSON unless another --output is set
+    print(json.dumps({"UserId": "AIDAEXAMPLE", "Account": account, "Arn": f"arn:aws:iam::{account}:user/dev"}))
 """
 
 CONFIG = """
@@ -354,6 +362,11 @@ class AwsTests(unittest.TestCase):
 
     # helpers ------------------------------------------------------------------
 
+    def in_process(self) -> dict:
+        """The environment for `keyfit` run in-process: the temporary HOME, none of the shell's AWS variables or tokens."""
+        return {"HOME": str(self.home), "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin",
+                "KEYFIT_CONFIG_DIR": str(self.tmp / "keyfit")}
+
     def test_find_real_skips_shim_dir(self):
         shims = self.tmp / "keyfit" / "bin"
         shims.mkdir(parents=True)
@@ -376,6 +389,7 @@ class AwsTests(unittest.TestCase):
         self.assertIsNone(parse_envrc("use node 20\n"))
 
     def test_add_aws_takes_account_from_sso_profile_without_network(self):
+        self.enterContext(mock.patch.dict(os.environ, self.in_process(), clear=True))
         repo = self.tmp / "addrepo"
         repo.mkdir()
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -398,6 +412,7 @@ class AwsTests(unittest.TestCase):
                          {"profile": "sso", "account": "111111111111"})
 
     def test_add_aws_keeps_the_expanded_config_file(self):
+        self.enterContext(mock.patch.dict(os.environ, self.in_process(), clear=True))
         repo = self.tmp / "addrepo"
         repo.mkdir()
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -414,6 +429,7 @@ class AwsTests(unittest.TestCase):
                          {"profile": "sso", "config_file": "~/.aws/config-acme", "account": "111111111111"})
 
     def test_init_imports_use_aws_from_envrc(self):
+        self.enterContext(mock.patch.dict(os.environ, self.in_process(), clear=True))
         repo = self.tmp / "repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
