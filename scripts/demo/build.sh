@@ -30,26 +30,27 @@ ln -s "$CLAUDE_BIN" "$DEMO/bin/claude"
 sed "1s|.*|#!$PY -I|" "$DEMO/stubs/aws.py" > "$DEMO/bin/aws"
 chmod +x "$DEMO/bin/aws"
 
+# Account IDs and portals in the style of AWS's documentation (stubs/aws.py has the same), so none is a company's.
 cat > "$H/.aws/config" <<'EOF'
 [profile lumen-prod]
 sso_session = lumen
-sso_account_id = 210987658023
+sso_account_id = 111122223333
 sso_role_name = Developer
 region = eu-central-1
 
 [sso-session lumen]
-sso_start_url = https://lumen.awsapps.com/start
+sso_start_url = https://my-sso-portal.awsapps.com/start
 sso_region = eu-central-1
 sso_registration_scopes = sso:account:access
 
 [profile harbor]
 sso_session = harbor
-sso_account_id = 384756104417
+sso_account_id = 444455556666
 sso_role_name = Developer
 region = eu-west-1
 
 [sso-session harbor]
-sso_start_url = https://harbor.awsapps.com/start
+sso_start_url = https://my-other-sso-portal.awsapps.com/start
 sso_region = eu-west-1
 sso_registration_scopes = sso:account:access
 EOF
@@ -59,8 +60,8 @@ EOF
 import hashlib, json, sys
 from datetime import datetime, timedelta, timezone
 home, now = sys.argv[1], datetime.now(timezone.utc)
-for session, hours in (("lumen", 7), ("harbor", 6.2)):
-    token = {"startUrl": f"https://{session}.awsapps.com/start", "region": "eu-central-1", "accessToken": "stand-in",
+for session, portal, hours in (("lumen", "my-sso-portal", 7), ("harbor", "my-other-sso-portal", 6.2)):
+    token = {"startUrl": f"https://{portal}.awsapps.com/start", "region": "eu-central-1", "accessToken": "stand-in",
              "refreshToken": "stand-in", "expiresAt": (now + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ"),
              "registrationExpiresAt": (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")}
     path = f"{home}/.aws/sso/cache/{hashlib.sha1(session.encode()).hexdigest()}.json"
@@ -115,8 +116,8 @@ kf "$H" setup --shell zsh > /dev/null
 test -x "$H/.config/keyfit/bin/claude"
 kf "$H/code/lumen-web" init --yes > /dev/null
 kf "$H/code/harbor-api" init --yes > /dev/null
-kf "$H/code/lumen-web" add aws --profile lumen-prod --account 210987658023
-kf "$H/code/harbor-api" add aws --profile harbor --account 384756104417
+kf "$H/code/lumen-web" add aws --profile lumen-prod --account 111122223333
+kf "$H/code/harbor-api" add aws --profile harbor --account 444455556666
 kf "$H/code/lumen-web" add linear --key env:LINEAR_LUMEN_API_KEY --workspace lumen
 kf "$H/code/harbor-api" add linear --key env:LINEAR_HARBOR_API_KEY --workspace harbor
 kf "$H/code/lumen-web" add mcp linear_lumen

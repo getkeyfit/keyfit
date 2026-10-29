@@ -10,7 +10,9 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
-PROFILES = {"lumen-prod": ("lumen", "210987658023"), "harbor": ("harbor", "384756104417")}
+# Account IDs and portal names in the style of AWS's documentation, so none can be a real company's.
+PROFILES = {"lumen-prod": ("lumen", "111122223333"), "harbor": ("harbor", "444455556666")}
+PORTALS = {"lumen": "my-sso-portal", "harbor": "my-other-sso-portal"}
 args = sys.argv[1:]
 
 
@@ -47,14 +49,15 @@ if args[:2] == ["sso", "login"]:
     session = option("--sso-session") or PROFILES.get(option("--profile") or "", ("",))[0]
     print("Attempting to automatically open the SSO authorization page in your default browser.", flush=True)
     time.sleep(1.2)
-    token = {"startUrl": f"https://{session}.awsapps.com/start", "region": "eu-central-1",
+    start_url = f"https://{PORTALS.get(session, session)}.awsapps.com/start"
+    token = {"startUrl": start_url, "region": "eu-central-1",
              "accessToken": "stand-in", "refreshToken": "stand-in",
              "expiresAt": (now + timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%SZ"),
              "registrationExpiresAt": (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")}
     os.makedirs(os.path.dirname(cache(session)), exist_ok=True)
     with open(cache(session), "w") as f:
         json.dump(token, f)
-    print(f"Successfully logged into Start URL: https://{session}.awsapps.com/start")
+    print(f"Successfully logged into Start URL: {start_url}")
     sys.exit(0)
 
 if args == ["--version"]:
