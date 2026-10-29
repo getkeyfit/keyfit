@@ -153,7 +153,8 @@ def signed_in(env: dict) -> list[str] | None:
     if not path.is_file():
         return []
     try:
-        with contextlib.closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=1)) as db:
+        # absolute(): a relative CLOUDSDK_CONFIG is gcloud's folder from the current one, and as_uri() refuses it
+        with contextlib.closing(sqlite3.connect(f"{path.absolute().as_uri()}?mode=ro", uri=True, timeout=1)) as db:
             return [row[0] for row in db.execute("SELECT account_id FROM credentials") if isinstance(row[0], str)]
     except sqlite3.Error:
         return None

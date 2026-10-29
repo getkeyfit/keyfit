@@ -274,6 +274,29 @@ class ShimTests(unittest.TestCase):
         self.assertIn(f"  ✘ project    this folder   git failed in {self.repo} (You have not agreed", doctor.getvalue())
         self.assertNotIn("All good", doctor.getvalue())
 
+    def test_a_deleted_folder_stops_the_tool_with_a_clear_message(self):
+        # a removed worktree: no project can be told from it; `.` and node_modules/.bin on PATH lead nowhere either
+        def run_in_deleted_folder(path, **extra):
+            gone = self.repo / "gone"
+            gone.mkdir()
+            env = {"PATH": path, "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config),
+                   "STS_COUNT": str(self.sts), **extra}
+            return subprocess.run(["/bin/sh", "-c", 'cd "$1" && rmdir "$1" && exec aws s3 ls', "sh", str(gone)],
+                                  env=env, capture_output=True, text=True, timeout=60)
+
+        shims = f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin"
+        for path in (shims, f".{os.pathsep}node_modules/.bin{os.pathsep}{shims}"):
+            with self.subTest(path=path):
+                out = run_in_deleted_folder(path, AWS_PROFILE="other")
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertTrue(out.stderr.endswith(
+                    "keyfit: aws not started: the current folder no longer exists (deleted or moved), so Keyfit "
+                    "cannot tell which project it belongs to.\n  cd into an existing folder, or bypass once: "
+                    "KEYFIT_DISABLE=1 aws …\n"), out.stderr)
+                out = run_in_deleted_folder(path, AWS_PROFILE="other", KEYFIT_DISABLE="1")
+                self.assertEqual(json.loads(out.stdout)["AWS_PROFILE"], "other", out.stderr)
+        self.assertEqual(self.sts.read_text(), "")
+
     def test_unregistered_folder_passes_through(self):
         out = self.run_tool("aws", "s3", "ls", cwd=self.outside, AWS_PROFILE="other")
         self.assertEqual(json.loads(out.stdout)["AWS_PROFILE"], "other")

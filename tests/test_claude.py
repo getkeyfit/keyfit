@@ -121,6 +121,14 @@ class ClaudeTests(unittest.TestCase):
         _, check = self.run_verify(self.work, {str(self.home / ".claude"): dict(WORK, email="you@work.io")})
         self.assertEqual(check.status, "ok", check.detail)
 
+    def test_claude_code_that_does_not_name_its_config_directory(self):
+        (self.bin / "claude").write_text(FAKE_CLAUDE.replace("loggedIn=True, configDirectory=folder", "loggedIn=True"))
+        conn = dict(self.work, config_dir=str(self.other))  # before 2.1.268: no configDirectory in auth status
+        _, check = self.run_verify(conn, {str(self.other): WORK})
+        self.assertEqual((check.status, check.detail), ("ok", "Work (team) confirmed"))
+        _, check = self.run_verify(conn, {str(self.other): dict(WORK, orgId="org-other", orgName="Other")})
+        self.assertEqual(check.detail, "signed in to org 'Other', project expects 'Work'")
+
     def test_a_personal_account_takes_any_claude_login(self):
         personal = {"name": "personal", "config_dir": str(self.home / ".claude"), "email": "me@home.io",
                     "pin_email": True}  # a pin recorded before pinning was dropped no longer counts

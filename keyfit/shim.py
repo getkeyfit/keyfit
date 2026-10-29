@@ -1454,6 +1454,13 @@ def main(argv: list[str]) -> int:
         return 1
     if env.get("KEYFIT_DISABLE") == "1":
         return start(real, tool, args, env, env)
+    try:
+        os.getcwd()
+    except FileNotFoundError:  # a removed worktree, for example: no project can be told from it, so nothing starts
+        print(f"keyfit: {tool} not started: the current folder no longer exists (deleted or moved), so Keyfit cannot "
+              f"tell which project it belongs to.\n  cd into an existing folder, or bypass once: KEYFIT_DISABLE=1 "
+              f"{tool} …", file=sys.stderr)
+        return 1
     # counted on every path, not only where checks run: a wrapper later on PATH that calls the tool by name
     # comes back through here also in folders that are not registered
     env["KEYFIT_SHIM_DEPTH"] = str(depth + 1)

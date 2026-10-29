@@ -303,6 +303,25 @@ class AdapterTests(FirebaseCase):
         self.assertEqual(firebase.firebase_bin(self.env, self.repos["client"]),
                          str(self.repos["client"] / "node_modules" / ".bin" / "firebase"))
 
+    def test_the_projects_own_cli_is_looked_for_up_to_its_top_only(self):
+        # these folders are outside HOME: a node_modules/.bin another user made in a shared folder above never runs
+        shared = self.tmp / "node_modules" / ".bin"
+        shared.mkdir(parents=True)
+        executable(shared / "firebase", FAKE_FIREBASE)
+        package = self.outside / "package"  # no repository: up to the nearest package.json
+        (package / "src").mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        loose = self.outside / "loose" / "deeper"  # no repository and no package.json: that folder only
+        loose.mkdir(parents=True)
+        for start in (self.repos["client"], self.app, package / "src", loose):
+            with self.subTest(start=start):
+                self.assertEqual(firebase.firebase_bin(self.env, start), str(self.bin / "firebase"))
+        (self.app / "package.json").write_text("{}")  # a monorepo's package: the CLI hoisted to the top still counts
+        for top, start in ((self.repos["mono"], self.app), (package, package / "src")):
+            (top / "node_modules" / ".bin").mkdir(parents=True)
+            executable(top / "node_modules" / ".bin" / "firebase", FAKE_FIREBASE)
+            self.assertEqual(firebase.firebase_bin(self.env, start), str(top / "node_modules" / ".bin" / "firebase"))
+
     def test_not_signed_in_or_not_as_the_account(self):
         self.data["additionalAccounts"] = [{"user": user(GLOBEX), "tokens": tokens(GLOBEX)}]
         self.save()

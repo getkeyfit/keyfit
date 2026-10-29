@@ -834,6 +834,18 @@ class AddTests(GcloudCase):
         self.assertEqual(self.registry()["accounts"]["gcloud"]["acme"]["config_dir"], str(moved))
         self.assertEqual(self.gcloud.calls[-1]["env"]["CLOUDSDK_CONFIG"], str(moved))
 
+    def test_a_relative_gcloud_folder_is_taken_from_the_current_one(self):
+        moved = self.tmp / "gcloud-elsewhere"
+        self.store.rename(moved)
+        with mock.patch.dict(os.environ, {"CLOUDSDK_CONFIG": "../gcloud-elsewhere"}):  # from repos/client, as gcloud
+            self.assertEqual(sorted(gcloud.signed_in(dict(os.environ))), sorted([ACME, GLOBEX, PERSONAL, DEPLOYER]))
+            code, out, err = self.keyfit("add", "google")
+            self.assertEqual(code, 1)
+            self.assertIn("keyfit add google --email <work or personal email> (gcloud knows ", err)
+            code, out, err = self.keyfit("add", "gcloud", "--configuration", "acme")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.registry()["accounts"]["gcloud"]["acme"]["config_dir"], str(moved))
+
     def test_guided_init_offers_the_google_account_then_its_configurations(self):
         base = {"registry": None, "project": "client"}
         with mock.patch.object(cli, "_ask", return_value="1"), contextlib.redirect_stdout(io.StringIO()) as out:
