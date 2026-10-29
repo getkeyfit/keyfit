@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The AWS check skips Superset's agent wrappers too.** It ran the first `aws` on PATH after
+  Keyfit's shims, so an `aws` in `~/.superset/bin` would have answered it; like every other check,
+  it now runs the first one after Superset's wrappers as well, as the security page says.
+
 ## [0.1.0] - 2026-10-27
 
 First published version. macOS only; Python 3.11 or newer, no other dependencies.

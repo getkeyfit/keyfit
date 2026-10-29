@@ -104,7 +104,7 @@ keyfit add copilot                          # inside the project: Copilot CLI ru
 
 - **Map it:** `keyfit add gemini`, Gemini CLI's Google sign-in in `~/.gemini`. Another one: `--new`. A Gemini API key: `--key`.
 - **`keyfit init` offers:** whether to use the Google sign-in in `~/.gemini` (when it is the project's [Google account](#google-account)), or else a Gemini CLI folder of the project's own, where you sign in once (asked when `gemini` is installed and the project has a Google account).
-- **The tool gets:** `GEMINI_CLI_HOME`, the account's Gemini CLI folder (left unset for your own `~/.gemini`), and for a key account `GEMINI_API_KEY`. `gemini` starts without `GEMINI_API_KEY` (unless it is the account's), `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT` (the account's `--cloud-project`, if you gave one), `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_GENAI_USE_VERTEXAI`, `CODE_ASSIST_ENDPOINT` (where the sign-in's token goes) and the other variables that would pick another sign-in, endpoint or credential store; Claude and Codex sessions keep them.
+- **The tool gets:** `GEMINI_CLI_HOME`, the account's Gemini CLI folder (left unset for your own `~/.gemini`), and for a key account `GEMINI_API_KEY`. `gemini` starts without `GEMINI_API_KEY` (unless it is the account's), `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT` (the account's `--cloud-project`, if you gave one), `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_GENAI_USE_VERTEXAI`, `CODE_ASSIST_ENDPOINT` (where the sign-in's token goes) and the other variables that would pick another sign-in, endpoint or credential store; Claude and Codex sessions keep them. `gemini` also gets `GEMINI_DEFAULT_AUTH_TYPE` (`oauth-personal`, or `gemini-api-key` for a key account), which preselects the account's method in Gemini CLI's sign-in dialog.
 - **Checked before it starts:**
   - **`.env` files:** Gemini CLI loads one `.env` file for every variable that isn't set: the nearest `.gemini/.env` or `.env` from the folder up, else `~/.gemini/.env` or `~/.env` (for a Gemini CLI folder of the project's own, the ones in that folder). When that file sets a variable Keyfit removed, the check fails. The one exception is the project's own `.env` (in one of its folders or worktrees) setting what its app uses: a key or credentials (`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, …), the Google Cloud project or location, `GOOGLE_GENAI_USE_VERTEXAI` or `GOOGLE_GENAI_USE_GCA`. That gets a warning, as Gemini CLI uses it instead of the account. An endpoint (`CODE_ASSIST_ENDPOINT`, `GOOGLE_GEMINI_BASE_URL`, …), `GEMINI_CLI_HOME` or the credential store fails even there: a repository must never send the sign-in's token elsewhere or move the sign-in. Only the names are read. Names you list in Gemini CLI's `advanced.excludedEnvVars` setting don't count in a `.env` outside a `.gemini` folder, as Gemini CLI skips them there.
   - **Google sign-in:** the folder's sign-in method is Google's (or not chosen yet), it holds a Google sign-in (`oauth_creds.json`), and the email Google wrote into it is the project's Google account. Then, while the sign-in's token is still valid, Google's tokeninfo must name that account.
@@ -165,7 +165,7 @@ shared_aws_profiles = ["ci-worker"]
 - **`keyfit init` offers:** whether to use the login the `vercel` CLI has now, with the team selected in it.
 - **The tool gets:** the login's folder as `--global-config` (nothing for the CLI's default folder) and the team as `--scope`. `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `VERCEL_TEAM_ID` (and their older `NOW_` names) and `VERCEL_TOKEN` are removed.
 - **Checked before it starts:** the folder holds a login, and the repository isn't linked (`.vercel/project.json`, or the entry for the folder in `.vercel/repo.json`) to another team. Then `api.vercel.com` must return the expected username and, with a team, let that login reach the team.
-- **Refused in the project:** `vercel --scope <another team>`, `vercel --global-config <another folder>`, `vercel --token …`, and a folder linked to another team named with `--cwd`, `vercel deploy <path>`, `vercel <path>` or `vercel dev <dir>` (the CLI takes the team from that folder's link, whatever `--scope` says).
+- **Refused in the project:** `vercel --scope <another team>` (also `--team`), `vercel --global-config <another folder>`, `vercel --token …`, and a folder linked to another team named with `--cwd`, `vercel deploy <path>`, `vercel <path>` or `vercel dev <dir>` (the CLI takes the team from that folder's link, whatever `--scope` says).
 - **Sign-in commands:** `vercel login`, `logout`, `switch`, `whoami`, `teams switch` and `teams ls` always run. The other `teams` commands (`invite`, `members`, …) are checked and get the project's team, like any `vercel` command.
 
 Vercel keeps one login per folder. `keyfit add vercel` records the login in the CLI's default folder (`~/Library/Application Support/com.vercel.cli`) with the team selected there (`--team SLUG` for another). For a second login:
@@ -256,7 +256,7 @@ keyfit add convex --copy --name acme      # or keep a copy of that login, then s
 keyfit add convex --cli --team globex     # a login that sees several teams
 ```
 
-When the CLI's own login expires or is signed out, starting `claude`, `codex`, `opencode`, `copilot` or `convex` in a terminal offers `Sign in now?` and runs `npx convex login --force`. Convex's MCP server (`npx convex mcp start`) runs the same CLI, so inside a session it uses the project's account too.
+When the CLI's own login expires or is signed out, starting `claude`, `codex`, `opencode`, `copilot`, `gemini` or `convex` in a terminal offers `Sign in now?` and runs `npx convex login --force`. Convex's MCP server (`npx convex mcp start`) runs the same CLI, so inside a session it uses the project's account too.
 
 **Limits.** Convex is checked by team. A login belongs to a person, who may be in several teams; Keyfit records the project's team and checks that the login sees it and that the folder's deployment belongs to it. The Convex project inside that team is shown, not enforced. Where a project deploy key (`project:…`) is in the folder, the convex CLI accepts no other login, so Keyfit leaves that key in charge and doesn't check it (a warning says so); local and self-hosted deployments aren't checked either. `CONVEX_OVERRIDE_ACCESS_TOKEN` is the CLI's own variable but not documented by Convex; it was verified on convex 1.46.
 
@@ -274,7 +274,7 @@ Google Cloud sign-ins stay with gcloud, which keeps named configurations: each h
 ```bash
 gcloud config configurations create acme --no-activate   # leaves the configuration you use elsewhere active
 keyfit add google --email me@acme.com                    # the project's Google account
-gcloud auth login me@acme.com                            # inside the project: the sign-in lands in configuration acme
+gcloud auth login me@acme.com --configuration acme       # the sign-in lands in configuration acme, not the active one
 gcloud config set project acme-prod --configuration acme
 keyfit add gcloud --configuration acme                   # records the configuration and its project, checks both
 ```
@@ -372,7 +372,7 @@ It reads where each keeps its login from the server's own definition (`env`), el
 
 ### MCP ownership
 
-- **Map it:** `keyfit add mcp 'globex_cloud_*'`: these MCP servers belong to this project, and every other project stops seeing them.
+- **Map it:** `keyfit add mcp 'globex_cloud_*'`: these MCP servers belong to this project, and every other project stops seeing them. It lists the servers each pattern matches in Claude's, Codex's, OpenCode's and Gemini CLI's configs; a server only Copilot CLI's `mcp-config.json` has shows `matches no server configured right now`, and is hidden all the same.
 - **The agents get** the servers to hide, for that session only:
   - Claude gets `--settings` with the servers to hide, merged into your own `--settings` if you give one; servers of `--mcp-config` count too.
   - Codex gets `-c mcp_servers.NAME.enabled=false`; a `-c` of yours that turns one back on is refused.

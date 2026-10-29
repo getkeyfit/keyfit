@@ -294,7 +294,7 @@ class AwsAdapter(Adapter):
 
     def identify(self, profile: str, env: dict) -> tuple[str | None, str, bool]:
         """Return (account, "", False) or (None, reason, transient) from `aws sts get-caller-identity`."""
-        aws = find_real("aws", env)
+        aws = find_real("aws", env, skip_wrappers=True)
         if aws is None:
             return None, NO_CLI, False
         cmd = [aws, "sts", "get-caller-identity", "--profile", profile, "--query", "Account",
