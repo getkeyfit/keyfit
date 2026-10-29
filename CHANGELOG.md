@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where Keyfit writes text (`config_dir = 5`, `token = 5`, `login = 5`) fails that account's check, and stops its
   sign-in commands, instead of an internal error. A check cache of another shape (`[]`, `null`) counts as empty
   instead of stopping every tool until it was deleted.
+- **The tests no longer depend on the Mac that runs them.** They never read your home folder, git
+  identity, Keychain or the tokens of a Keyfit session they run in, and their guard against the
+  network now covers the requests Keyfit actually makes. Their fake tools run on the Python that
+  runs the tests, so a Mac without the Command Line Tools runs them too. New tests cover
+  `keyfit run`, every online check's request, and paths that had none (see KEY-85).
 
 ### Security
 

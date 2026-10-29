@@ -20,7 +20,9 @@ python3 -m unittest discover -s tests -k test_remote_timeout  # tests whose name
 The tests use fake `aws`, `claude`, `gh`, `opencode`, `copilot`, `gemini`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud`, `firebase`, `npx` and `security` binaries and a temporary config
 directory. They never reach the network, your accounts, `~/.config/keyfit`, wrangler's config folder, OpenCode's database, Copilot CLI's `~/.copilot`, Gemini CLI's `~/.gemini`, gcloud's `~/.config/gcloud`, the firebase CLI's `~/.config/configstore`, the Google Workspace MCP servers' logins (`~/.gmail-mcp`, `~/.google_workspace_mcp`, …) or your Keychain.
 Keep it that way: a new test module sets `KEYFIT_CONFIG_DIR` to a temporary directory at the
-top, like the existing ones.
+top, like the existing ones. A test that changes `os.environ` does it with `mock.patch.dict`, so
+nothing leaks into later tests; one that runs Keyfit in-process passes `clear=True` with a
+temporary `HOME`, so it never sees your files or the tokens of a Keyfit session you run it in.
 
 `tests/test_install.py` builds a wheel offline, installs it into a temporary virtualenv and runs
 its `keyfit setup` and shims; it is skipped when this Python has no setuptools 77+ or pip
@@ -67,7 +69,7 @@ bin/keyfit setup         # shims and shell files go into $KEYFIT_CONFIG_DIR; no 
    - MCP configuration refers to variables (`${LINEAR_API_KEY}`), not keys.
    - A test that touches a secret must assert it does not leak: the value is absent from
      stdout and stderr, from the registry and cache files, and from the arguments any fake tool
-     received. See `test_mcp_config_holds_no_secret` in `tests/test_linear.py`.
+     received. See `assert_never_leaked` in `tests/test_secrets.py`.
 
 3. **Never write into users' repositories.** Keyfit's state lives in `~/.config/keyfit` (or
    `KEYFIT_CONFIG_DIR`). Reading a project's `.envrc`, `.mcp.json` or git config is fine.
