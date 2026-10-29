@@ -262,6 +262,16 @@ class AwsTests(unittest.TestCase):
         self.assertEqual(self.aws.verify(conn, env).fix,
                          "KEYFIT_DISABLE=1 aws sts get-caller-identity --profile role   (shows the full error)")
 
+    def test_the_check_skips_superset_wrapper(self):
+        # docs/security.md: the aws Keyfit runs is the first on PATH after its shims and Superset's wrappers
+        wrapper = self.home / ".superset" / "bin"
+        wrapper.mkdir(parents=True)
+        (wrapper / "aws").write_text("#!/bin/sh\necho 999999999999\n")
+        (wrapper / "aws").chmod(0o755)
+        conn = {"profile": "iam", "account": "444444444444"}
+        env = self.env_for(conn, {"iam": {"account": "444444444444"}}, PATH=f"{wrapper}{os.pathsep}{self.env['PATH']}")
+        self.assertEqual(self.aws.remote(conn, env).detail, "account confirmed")
+
     def test_missing_cli_says_how_to_install_it(self):
         conn = {"profile": "iam", "account": "444444444444"}
         c = self.aws.verify(conn, self.env_for(conn, PATH="/usr/bin:/bin"))
