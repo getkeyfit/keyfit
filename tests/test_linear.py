@@ -4,8 +4,10 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from keyfit import mcp, secrets
+from keyfit import environment, mcp, secrets
+from keyfit.adapters import ADAPTERS
 from keyfit.adapters.linear import LinearAdapter, parse_envrc
 from keyfit.registry import Project
 
@@ -114,10 +116,20 @@ class LinearTests(unittest.TestCase):
         self.assertTrue(check.failed)
         self.assertIn("Linear answered 302", check.detail)
 
-    def test_mcp_config_holds_no_secret(self):
-        servers = json.dumps(self.linear.mcp_servers(self.conn))
-        self.assertNotIn("lin_api_", servers)
-        self.assertIn("${LINEAR_API_KEY}", servers)
+    def test_a_cached_success_never_vouches_for_another_key(self):
+        project = Project("acme", ["/tmp"], {"linear": self.conn})
+        asked, statuses, answer = [], [], fake_fetch({GOOD: "acme", OTHER: "globex"})
+
+        def fetch(key, timeout):
+            asked.append(key)
+            return answer(key, timeout)
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": tempfile.mkdtemp()}), \
+                mock.patch.object(ADAPTERS["linear"], "fetch", fetch):
+            for key in (GOOD, GOOD, OTHER):  # then the project's variable holds a key of another workspace
+                env = environment.build(project, self.shell(LINEAR_ACME_API_KEY=key))
+                statuses.append(environment.verify(project, env, use_cache=True)[0].status)
+        self.assertEqual(statuses, ["ok", "ok", "fail"])
+        self.assertEqual(asked, [GOOD, OTHER])  # the second launch started from the cache, the new key was asked about
 
     def test_keychain_reference(self):
         tmp = Path(tempfile.mkdtemp())

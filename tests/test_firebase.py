@@ -134,13 +134,16 @@ class FirebaseCase(unittest.TestCase):
         self.env = {"HOME": str(self.home), "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin",
                     "KEYFIT_CONFIG_DIR": str(self.config)}
         self.firebase = FakeFirebase(self)
-        self.fetched = []
+        self.fetched, self.sent = [], []
 
         def fetch(url, token, timeout):
             self.fetched.append(url)
+            self.sent.append(token)
             return api(url, token, timeout)
+        # whatever a test does, the CLI's refresh tokens stay with the CLI: Keyfit sends access tokens only
+        self.addCleanup(lambda: self.assertEqual([t for t in self.sent if t.startswith("1//")], []))
         adapter = ADAPTERS["firebase"]
-        for patcher in (mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+        for patcher in (mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch.object(adapter, "run", self.firebase), mock.patch.object(adapter, "fetch", fetch),
                         mock.patch.object(secrets, "SECURITY", "/nonexistent/security"),
                         mock.patch.dict(os.environ, self.env, clear=True)):

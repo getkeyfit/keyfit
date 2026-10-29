@@ -41,7 +41,7 @@ SHELL_KEYS = Check("flaky", "warn", "x", "GROQ_API_KEY from your shell", scrub=(
 
 class ResilienceTests(unittest.TestCase):
     def setUp(self):
-        os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()
+        self.enterContext(mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": tempfile.mkdtemp()}))  # restored after
         self.project = Project("demo", ["/tmp"], {"flaky": {"id": "1"}})
 
     def run_with(self, adapter, use_cache=False):

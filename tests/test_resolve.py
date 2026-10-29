@@ -133,6 +133,7 @@ class ResolveTests(unittest.TestCase):
                          {"testing": {"token": "keychain:s/a"}})  # left for the user to remove
 
     def test_init_imports_envrc_and_skips_quietly_without_one(self):
+        self.enterContext(mock.patch.dict(os.environ, self.clean(), clear=True))
         reg_path = self.tmp / "envrc-registry.toml"
         for name, envrc in (("plain", None), ("direnv", "use aws acme 123456789012\n")):
             repo = self.tmp / name
@@ -164,6 +165,10 @@ class ResolveTests(unittest.TestCase):
         admin = self.repo / ".git" / "worktrees" / "feature"
         (admin / "gitdir").write_text(os.path.relpath(self.worktree / ".git", admin) + "\n")
         self.assertEqual(resolve(self.worktree, self.registry).project.name, "demo")
+
+    def clean(self) -> dict:
+        """An environment for `keyfit init` in-process: a temporary HOME and config folder, none of the shell's tokens."""
+        return {"HOME": str(self.tmp / "home"), "PATH": "/usr/bin:/bin", "KEYFIT_CONFIG_DIR": str(self.tmp / "keyfit")}
 
     def broken_git(self, script: str) -> dict:
         """PATH with a git that fails as *script* says, like one broken by a macOS update."""
@@ -257,6 +262,7 @@ class ResolveTests(unittest.TestCase):
             self.assertEqual(run.call_count, 1, folder)
 
     def test_cli_init_and_which(self):
+        self.enterContext(mock.patch.dict(os.environ, self.clean(), clear=True))
         reg_path = self.tmp / "cli-registry.toml"
         other = self.tmp / "cli-repo"
         other.mkdir()

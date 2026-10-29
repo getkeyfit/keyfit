@@ -90,7 +90,7 @@ class SupabaseCase(unittest.TestCase):
         def fetch(path, token, timeout):
             self.fetched.append(path)
             return api(path, token, timeout)
-        for patcher in (mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+        for patcher in (mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch.object(ADAPTERS["supabase"], "fetch", fetch),
                         mock.patch.object(secrets, "SECURITY", str(self.stub / "security")),
                         mock.patch.dict(os.environ, self.env, clear=True)):

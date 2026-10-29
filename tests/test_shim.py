@@ -23,7 +23,7 @@ from keyfit.shim import (Refused, adjust_args, is_login_command, sign_in_command
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
-FAKE_AWS = """#!/usr/bin/env python3
+FAKE_AWS = f"#!{sys.executable}" + """
 import json, os, sys
 args = sys.argv[1:]
 if args[:2] == ["sts", "get-caller-identity"]:
@@ -34,7 +34,7 @@ print(json.dumps({"argv": args, "AWS_PROFILE": os.environ.get("AWS_PROFILE"),
                   "KEYFIT_PROJECT": os.environ.get("KEYFIT_PROJECT")}))
 """
 
-FAKE_CLAUDE = """#!/usr/bin/env python3
+FAKE_CLAUDE = f"#!{sys.executable}" + """
 import json, os, sys
 args = sys.argv[1:]
 if args[:3] == ["auth", "status", "--json"]:
@@ -47,7 +47,7 @@ print(json.dumps({"argv": args, "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_A
 
 
 # Signed out until `claude auth login` has run once (it leaves the file $SIGNED_IN behind).
-FAKE_CLAUDE_SIGNED_OUT = """#!/usr/bin/env python3
+FAKE_CLAUDE_SIGNED_OUT = f"#!{sys.executable}" + """
 import json, os, sys
 args = sys.argv[1:]
 marker = os.environ["SIGNED_IN"]
@@ -93,9 +93,8 @@ class ShimTests(unittest.TestCase):
         self.sts = self.tmp / "sts-count"
         self.sts.write_text("")
 
-        old = os.environ.get("KEYFIT_CONFIG_DIR")
-        os.environ["KEYFIT_CONFIG_DIR"] = str(self.config)
-        try:
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config), "HOME": str(self.home),
+                                          "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin"}, clear=True):
             main(["init", "--yes", "--root", str(self.repo), "--name", "demo"])
             reg = self.config / "registry.toml"
             reg.write_text(reg.read_text() + 'aws = { profile = "iam", account = "444444444444" }\n'
@@ -104,11 +103,6 @@ class ShimTests(unittest.TestCase):
                            '\n[settings]\nshared_aws_profiles = ["ci-worker"]\n')
             with mock.patch.object(sys, "platform", "darwin"):  # setup refuses elsewhere; the shims work anywhere
                 main(["setup"])
-        finally:
-            if old is None:
-                os.environ.pop("KEYFIT_CONFIG_DIR")
-            else:
-                os.environ["KEYFIT_CONFIG_DIR"] = old
 
     def run_tool(self, tool, *args, cwd=None, **extra):
         env = {"PATH": f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin",
@@ -264,7 +258,7 @@ class ShimTests(unittest.TestCase):
         os.chdir(self.repo)
         try:
             with mock.patch.dict(os.environ, {"PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin", "HOME": str(self.home),
-                                              "KEYFIT_CONFIG_DIR": str(self.config)}), \
+                                              "KEYFIT_CONFIG_DIR": str(self.config)}, clear=True), \
                     mock.patch.object(secrets, "keychain_reachable", return_value=""), \
                     contextlib.redirect_stdout(io.StringIO()) as doctor:
                 self.assertEqual(main(["doctor"]), 1)
@@ -505,7 +499,8 @@ class ShimTests(unittest.TestCase):
         plain = self.tmp / "plain"
         plain.mkdir()
         subprocess.run(["git", "init", "-q"], cwd=plain, check=True)
-        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config)}), \
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config), "HOME": str(self.home),
+                                          "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin"}, clear=True), \
                 contextlib.redirect_stdout(io.StringIO()):
             main(["init", "--yes", "--root", str(plain), "--name", "plain"])
         out = self.run_tool("aws", "sso", "login", "--profile", "other", cwd=plain)  # then: keyfit add aws
@@ -708,7 +703,7 @@ class ShimTests(unittest.TestCase):
     CODEX_SHARED = (["agents"], ["queue", "--thread", "t", "--message", "m"], ["remote-control"], ["app-server"])
 
     def fake_codex(self):
-        executable(self.bin / "codex", '#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n')
+        executable(self.bin / "codex", f'#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n')
 
     def test_codex_inside_a_session_outside_projects_runs_without_daemon(self):
         self.fake_codex()

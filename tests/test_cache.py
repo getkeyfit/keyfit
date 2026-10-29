@@ -3,6 +3,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -10,8 +11,8 @@ from keyfit import cache  # noqa: E402
 
 
 class CacheTests(unittest.TestCase):
-    def setUp(self):
-        os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()
+    def setUp(self):  # restored afterwards, with test_unwritable_cache_never_breaks_a_launch's /dev/null/keyfit
+        self.enterContext(mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": tempfile.mkdtemp()}))
 
     def test_parallel_writes_do_not_raise(self):
         errors = []

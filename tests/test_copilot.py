@@ -16,7 +16,7 @@ from unittest import mock
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
-from keyfit import cache, environment, mcp  # noqa: E402
+from keyfit import cache, environment, mcp, secrets  # noqa: E402
 from keyfit.adapters import ADAPTERS  # noqa: E402
 from keyfit.adapters.copilot import CopilotAdapter  # noqa: E402
 from keyfit.cli import main  # noqa: E402
@@ -25,7 +25,7 @@ from keyfit.shim import Refused, adjust_args, copilot_options, sign_in_command  
 from test_vercel import executable  # noqa: E402
 
 # Fake gh: only `auth token --hostname github.com --user <login>` is allowed, as Keyfit only reads gh's tokens.
-FAKE_GH = """#!/usr/bin/env python3
+FAKE_GH = f"#!{sys.executable}" + """
 import json, os, sys
 args = sys.argv[1:]
 with open(os.path.join(os.environ["HOME"], "gh-calls.log"), "a") as fh: fh.write(json.dumps(args) + "\\n")
@@ -37,7 +37,7 @@ print(token)
 """
 
 # Fake copilot: prints its argv and the variables that decide its account, host and provider.
-FAKE_COPILOT = """#!/usr/bin/env python3
+FAKE_COPILOT = f"#!{sys.executable}" + """
 import json, os, sys
 print(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "env": {k: os.environ.get(k) for k in (
     "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "COPILOT_GH_HOST", "COPILOT_PROVIDER_API_KEY",
@@ -340,6 +340,13 @@ class ArgumentTests(unittest.TestCase):
         self.assertIn("--disable-mcp-server=globex_cloud_web", self.args(f"-C{web}", cwd=self.tmp))
         self.assertNotIn("--disable-mcp-server=globex_cloud_web", self.args())
 
+    def test_servers_given_with_additional_mcp_config(self):
+        (self.repo / "extra.json").write_text(json.dumps({"mcpServers": {"globex_cloud_file": {"command": "x"}}}))
+        inline = json.dumps({"mcpServers": {"globex_cloud_json": {"command": "x"}}})
+        started = self.args("--additional-mcp-config", inline, "--additional-mcp-config=@extra.json")
+        self.assertIn("--disable-mcp-server=globex_cloud_json", started)
+        self.assertIn("--disable-mcp-server=globex_cloud_file", started)
+
     def test_a_file_copilot_loads_that_cannot_be_parsed_stops_the_start(self):
         (self.repo / ".github").mkdir()
         (self.repo / ".github" / "mcp.json").write_text("{not json")
@@ -407,7 +414,8 @@ class ShimTests(unittest.TestCase):
             folder.mkdir()
         for folder in (self.repo, self.other):
             subprocess.run(["git", "init", "-q"], cwd=folder, check=True)
-        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config)}):
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config), "HOME": str(self.home),
+                                          "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin"}, clear=True):
             with contextlib.redirect_stdout(io.StringIO()):
                 main(["init", "--yes", "--root", str(self.repo), "--name", "demo"])
                 main(["init", "--yes", "--root", str(self.other), "--name", "globex"])
@@ -421,13 +429,39 @@ class ShimTests(unittest.TestCase):
                             '[projects.globex]\nroots = ["' + str(self.other) + '"]\nmcp_servers = ["globex_cloud_*"]\n')
         reg.write_text(text + '\n[accounts.copilot.octocat]\nlogin = "octocat"\n')
 
+    def tool_env(self, tokens=None, **extra):
+        return {"PATH": f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin",
+                "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config),
+                "FAKE_GH_TOKENS": json.dumps(TOKENS if tokens is None else tokens),
+                "HTTPS_PROXY": "http://127.0.0.1:9", **extra}  # should a check ever go online: a closed port
+
     def run_tool(self, *args, cwd=None, tokens=None, **extra):
-        env = {"PATH": f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin",
-               "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config),
-               "FAKE_GH_TOKENS": json.dumps(TOKENS if tokens is None else tokens),
-               "HTTPS_PROXY": "http://127.0.0.1:9", **extra}  # should a check ever go online: a closed port
-        return subprocess.run(["copilot", *args], cwd=cwd or self.repo, env=env, capture_output=True, text=True,
-                              timeout=60)
+        return subprocess.run(["copilot", *args], cwd=cwd or self.repo, env=self.tool_env(tokens, **extra),
+                              capture_output=True, text=True, timeout=60)
+
+    def in_terminal(self, *args, tokens=None) -> str:
+        """What the shim writes to a terminal on stdin and stderr, the only place it asks "Sign in now?" (answered no)."""
+        import pty
+        import select
+
+        master, slave = pty.openpty()
+        proc = subprocess.Popen(["copilot", *args], cwd=self.repo, env=self.tool_env(tokens), stdin=slave,
+                                stdout=subprocess.DEVNULL, stderr=slave)
+        os.close(slave)
+        seen = b""
+        while select.select([master], [], [], 30)[0]:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:  # the shim has exited
+                break
+            if not chunk:
+                break
+            seen += chunk
+            if seen.endswith(b"[Y/n] "):
+                os.write(master, b"n\n")
+        proc.wait(timeout=30)
+        os.close(master)
+        return seen.decode()
 
     def started(self, out):
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -453,7 +487,10 @@ class ShimTests(unittest.TestCase):
                       "  ✘ copilot    octocat   gh has no stored login for octocat\n"
                       "    → gh auth login --hostname github.com --git-protocol ssh --web   (sign in as octocat), "
                       "then switch back: gh auth switch --user <your usual account>\n", out.stderr)
-        self.assertNotIn("Sign in now?", out.stderr)
+        # gh's fix switches gh's active account: in a terminal too, it is printed and never offered as a sign-in
+        terminal = self.in_terminal("-p", "hi", tokens={})
+        self.assertIn("→ gh auth login --hostname github.com", terminal)
+        self.assertNotIn("Sign in now?", terminal)
         out = self.run_tool(tokens={"octocat": "ghp_classic"})
         self.assertEqual(out.returncode, 1)
         self.assertIn("is a classic personal access token, which Copilot CLI refuses", out.stderr)
@@ -520,7 +557,8 @@ class AddTests(unittest.TestCase):
                                                      "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin",
                                                      "FAKE_GH_TOKENS": json.dumps(TOKENS)}, clear=True),
                         mock.patch.object(Path, "home", return_value=self.home),
-                        mock.patch.object(ADAPTERS["copilot"], "fetch", fetch)):
+                        mock.patch.object(ADAPTERS["copilot"], "fetch", fetch),
+                        mock.patch.object(secrets, "SECURITY", "/nonexistent/security")):  # never the real Keychain
             patcher.start()
             self.addCleanup(patcher.stop)
         cwd = os.getcwd()
