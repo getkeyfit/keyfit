@@ -368,6 +368,6 @@ def parse_envrc(text: str) -> dict | None:
     """Read a `use aws PROFILE ACCOUNT` line (a direnv helper) from an .envrc, if present."""
     for line in text.splitlines():
         m = re.match(r"^\s*use\s+aws\s+(\S+)\s+(\d{12})\s*(?:#.*)?$", line)
-        if m:
+        if m and m.group(1).isprintable():  # never an escape sequence from a repository into the registry
             return {"profile": m.group(1), "account": m.group(2)}
     return None

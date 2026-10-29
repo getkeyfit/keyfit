@@ -6,7 +6,9 @@ import argparse
 import fnmatch
 import os
 import re
+import shlex
 import sys
+import threading
 from pathlib import Path
 
 from . import __version__, environment, mcp, secrets
@@ -102,6 +104,10 @@ def cmd_init(args) -> int:
               "  Go to a project's repository first (cd ~/code/acme-api), or pass --root PATH", file=sys.stderr)
         return 1
     name = args.name or root.name
+    if not name.isprintable():  # it is shown in every message and the Claude status line
+        print(f"a project name can't hold control characters ({printable(name)}): name it with --name NAME",
+              file=sys.stderr)
+        return 1
     existing = reg.project_for_root(root)
     if existing is not None and existing.name != name:
         print(f"{tilde(root)} is already registered as project '{existing.name}'", file=sys.stderr)
@@ -124,7 +130,7 @@ def cmd_init(args) -> int:
     else:
         print(f"Registered project '{name}' → {tilde(root)}")
     for line in imported:
-        print(f"  imported {line}")
+        print(f"  imported {printable(line)}")
     if git is None:
         print(f"  {tilde(root)} is not a git repository: every folder under it belongs to {name}")
     worktrees = "Worktrees of this repository resolve to it automatically." if git else ""
@@ -401,12 +407,13 @@ def _offer_firebase(name: str, base: dict) -> None:
         print("Firebase: no firebase.json with a Firebase project here — later, in the project's Firebase folder: "
               "keyfit add firebase")
         return
+    shown = printable(picked)  # from the repository's .firebaserc
     if not firebase_adapter.emails(store):
-        print(f"Firebase: {tilde(folder)} works on {picked}, but the firebase CLI is not signed in — later: firebase "
+        print(f"Firebase: {tilde(folder)} works on {shown}, but the firebase CLI is not signed in — later: firebase "
               f"login, then: keyfit add firebase")
         return
-    print(f"Firebase: {tilde(folder)} works on Firebase project {picked}")
-    if _yes(f"Use Firebase project {picked} for {name}?"):
+    print(f"Firebase: {tilde(folder)} works on Firebase project {shown}")
+    if _yes(f"Use Firebase project {shown} for {name}?"):
         cmd_add_firebase(argparse.Namespace(**base, project_id=picked, name=None, guided=True))
 
 
@@ -468,7 +475,7 @@ def _offer_linear(name: str, base: dict) -> None:
     print("Linear: a personal API key (Linear → Settings → Security & access) is checked with Linear, "
           "then kept in the macOS Keychain.")
     if _yes(f"Add a Linear API key for {name}?"):
-        cmd_add_linear(argparse.Namespace(**base, key=None, workspace=None, readonly=False))
+        cmd_add_linear(argparse.Namespace(**base, key=None, workspace=None))
 
 
 GUIDED = (("aws", "AWS", _offer_aws), ("github", "GitHub", _offer_github), ("claude", "Claude", _offer_claude),
@@ -676,10 +683,7 @@ def cmd_add_linear(args) -> int:
             return 1
         reg.add_stored_secret(account)
         ref = f"keychain:{secrets.SERVICE}/{account}"
-    conn = {"workspace": workspace, "key": ref}
-    if args.readonly:
-        conn["readonly"] = True
-    reg.set_connection(project.name, "linear", conn)
+    reg.set_connection(project.name, "linear", {"workspace": workspace, "key": ref})
     reg.save()
     print(f"{project.name}: linear {workspace} via {secrets.describe(ref)}")
     return 0
@@ -1071,10 +1075,11 @@ def _supabase_org(token: str, wanted: str | None, start: Path | None) -> tuple[t
         return None, reason
     if not orgs:
         return None, "this login belongs to no Supabase organization"
-    listing = ", ".join(f"{title} ({slug})" for slug, title in orgs.items())
+    listing = ", ".join(f"{printable(title)} ({printable(slug)})" for slug, title in orgs.items())
     if wanted:
         found = [(s, t) for s, t in orgs.items() if wanted == s or wanted.lower() == t.lower()]
-        return (found[0], "") if found else (None, f"this login has no organization {wanted} (it has {listing})")
+        return (found[0], "") if found else \
+            (None, f"this login has no organization {printable(wanted)} (it has {listing})")
     ref, source = supabase_adapter.linked_ref(start, os.environ) if start else (None, "")
     if ref and supabase_adapter.REF.fullmatch(ref):
         project, reason, _ = adapter.project(token, ref)
@@ -1086,7 +1091,7 @@ def _supabase_org(token: str, wanted: str | None, start: Path | None) -> tuple[t
         return next(iter(orgs.items())), ""
     if sys.stdin.isatty():
         print("This login belongs to several Supabase organizations:")
-        options = [f"{title} ({slug})" for slug, title in orgs.items()]
+        options = [f"{printable(title)} ({printable(slug)})" for slug, title in orgs.items()]
         picked = _choose("Organization of this project", options)
         if picked:
             return list(orgs.items())[options.index(picked)], ""
@@ -1175,12 +1180,12 @@ def cmd_add_supabase(args) -> int:
     reg.set_account("supabase", name, {"token": ref, "org": slug, "org_name": title})
     reg.set_connection(project.name, "supabase", name)
     reg.save()
-    print(f"{project.name}: supabase account '{name}' → organization {title} ({slug}) via {secrets.describe(ref)}"
-          f"{copied}")
+    print(f"{project.name}: supabase account '{name}' → organization {printable(title)} ({printable(slug)}) via "
+          f"{secrets.describe(ref)}{copied}")
     others = sorted(p for p, body in reg.data["projects"].items() if p != project.name and body.get("supabase") == name)
     if before and others and before.get("org") != slug:
-        print(f"  account '{name}' was organization {before.get('org_name') or before.get('org')}; it changed for "
-              f"{', '.join(others)} too")
+        was = printable(before.get("org_name") or before.get("org"))
+        print(f"  account '{name}' was organization {was}; it changed for {', '.join(others)} too")
     return 0
 
 
@@ -1504,7 +1509,7 @@ def cmd_add_google(args) -> int:
         if isinstance(conn, dict) and not conn.get("key") and not getattr(args, "guided", False):
             check = ADAPTERS[kind].local(conn, environment.build(reg.get(project.name), kinds=(kind,)))
             if check.failed:
-                print(f"  next: {check.detail}\n  → {check.fix}")
+                print(f"  next: {printable(check.detail)}\n  → {printable(check.fix)}")
     return 0
 
 
@@ -1625,7 +1630,7 @@ def _add_gemini_key(reg: Registry, project: Project, args, env: dict, extra: dic
         return 1
     check = ADAPTERS["gemini"].remote({"key": ref or "pasted", "name": args.name or project.name}, {"GEMINI_API_KEY": key})
     if check.failed:
-        print(f"{check.detail}\n  → {check.fix}", file=sys.stderr)
+        print(f"{printable(check.detail)}\n  → {printable(check.fix)}", file=sys.stderr)
         return 1
     name = args.name or _account_name(project.name, "gemini")
     path = config_dir() / "gemini" / name
@@ -1651,7 +1656,8 @@ def _google_mcp_line(name: str, rows: list) -> str:
     """One server as found in the agents' configs: its type, its login and who that login is signed in as."""
     _, kind, login = rows[0]
     where = tilde(login) if login else "its own login"
-    return f"{name} ({google_mcp_adapter.TYPES[kind].title}, {where}: {google_mcp_adapter.who(kind, login)})"
+    # names from the agents' MCP configs (a repository's .mcp.json too), emails from token files and their names
+    return printable(f"{name} ({google_mcp_adapter.TYPES[kind].title}, {where}: {google_mcp_adapter.who(kind, login)})")
 
 
 def cmd_add_google_mcp(args) -> int:
@@ -1682,7 +1688,7 @@ def cmd_add_google_mcp(args) -> int:
             picked = _choose(f"Google Workspace server for {project.name}", options)
             name = names[options.index(picked)] if picked else None
         if not name:
-            known = f" (your agents have {', '.join(names)})" if names else ""
+            known = f" (your agents have {printable(', '.join(names))})" if names else ""
             print(f"name the server: keyfit add google-mcp --server <its name in your agents' MCP config>{known}",
                   file=sys.stderr)
             return 1
@@ -1729,7 +1735,7 @@ def cmd_add_google_mcp(args) -> int:
     if not check.failed and check.pending:  # Google confirms it while the saved token is valid; an expired one stays
         check = check.merge(adapter.remote(conn, env))
     if check.failed:
-        print(f"{check.detail}\n  → {check.fix}", file=sys.stderr)
+        print(f"{printable(check.detail)}\n  → {printable(check.fix)}", file=sys.stderr)
         return 1
     body = reg.data["projects"][project.name]
     google, current = body.get("google"), body.get("google-mcp")
@@ -1747,7 +1753,7 @@ def cmd_add_google_mcp(args) -> int:
     if others:
         print(f"  account '{account}' is shared: {', '.join(others)} take{'s' if len(others) == 1 else ''} {name} too")
     if check.status == "warn":
-        print(f"  note: {check.detail}\n  → {check.fix}")
+        print(f"  note: {printable(check.detail)}\n  → {printable(check.fix)}")
     rest = sorted(n for n in found if n not in table)
     if rest:
         print(f"  {project.name}'s sessions no longer see the other Google Workspace servers: {', '.join(rest)}")
@@ -1855,7 +1861,7 @@ def cmd_add_gcloud(args) -> int:
     check_env = environment.build(current, env, kinds=("gcloud",))
     check = ADAPTERS["gcloud"].local(current.connections["gcloud"], check_env)
     if check.failed:
-        print(f"  next: {check.detail}\n  → {check.fix}")
+        print(f"  next: {printable(check.detail)}\n  → {printable(check.fix)}")
         return 0
     if getattr(args, "guided", False):
         return 0  # `keyfit init` checks every connection once at the end
@@ -1913,7 +1919,7 @@ def cmd_add_firebase(args) -> int:
     check_env = environment.build(current, env, kinds=("firebase",))
     check = ADAPTERS["firebase"].local(current.connections["firebase"], check_env)
     if check.failed:
-        print(f"  next: {check.detail}\n  → {check.fix}")
+        print(f"  next: {printable(check.detail)}\n  → {printable(check.fix)}")
         return 0
     if getattr(args, "guided", False):
         return 0  # `keyfit init` checks every connection once at the end
@@ -1967,7 +1973,7 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/copilot/gemini/aws/gh/ver
 # shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
 () {
-  local kf="@SHIMS@" ss="$HOME/.superset/bin"
+  local kf=@SHIMS@ ss="$HOME/.superset/bin"
   if (( ${path[(Ie)$ss]} )); then path=($ss $kf ${${path:#$kf}:#$ss}); else path=($kf ${path:#$kf}); fi
 }
 """
@@ -1977,7 +1983,7 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/copilot/gemini/aws/gh/ver
 SHELL_SH = """# Keyfit: put the claude/codex/opencode/copilot/gemini/aws/gh/vercel/supabase/wrangler/convex/gcloud/firebase
 # shims on PATH (written by `keyfit setup`).
 # Superset's agent wrapper first when present, then Keyfit, then everything else.
-_kf="@SHIMS@"; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
+_kf=@SHIMS@; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
 while [ -n "$_kf_rest" ]; do
   _kf_p="${_kf_rest%%:*}"; _kf_rest="${_kf_rest#*:}"
   if [ -z "$_kf_p" ] || [ "$_kf_p" = "$_kf" ]; then continue; fi
@@ -1992,17 +1998,43 @@ unset _kf _kf_ss _kf_rest _kf_out _kf_has _kf_p
 SHELLS = {"zsh": ("shell.zsh", SHELL_ZSH, "source"), "bash": ("shell.sh", SHELL_SH, ".")}
 
 # One shim per tool. When the Python or the package it names is gone (Keyfit uninstalled before `keyfit setup
-# --remove`, or moved), it says so instead of sh's "No such file or directory", and the tool still doesn't start.
+# --remove`, or moved, or its Python removed under it), it says so instead of sh's "No such file or directory", and
+# the tool still doesn't start, except with KEYFIT_DISABLE=1: that bypass runs the real tool, found on PATH as the
+# Python shim finds it (never a folder of shims or Superset's wrapper, which would come back here).
 # -I: no PYTHONPATH, user site or current folder; -S: no site-packages and their .pth files (Keyfit needs only
 # the standard library), which also saves ~5 ms per launch.
 SHIM = """#!/bin/sh
-[ -x "@PYTHON@" ] && [ -f "@ENTRY@" ] || { printf '%s\\n' \\
-  "keyfit: @TOOL@ not started: Keyfit is not installed where its shims expect it (@ENTRY@)." \\
-  "  Upgraded or reinstalled Keyfit? Run: keyfit setup" \\
-  "  Uninstalled it? Remove the line ending in '# keyfit: tool shims on PATH' (or, from an earlier version, \\
-'# keyfit: claude/codex/aws/gh shims on PATH') from your shell startup file, then open a new terminal." >&2; exit 127; }
-exec "@PYTHON@" -I -S "@ENTRY@" @TOOL@ "$@"
+[ -x @PYTHON@ ] && [ -f @ENTRY@ ] || {
+  if [ "$KEYFIT_DISABLE" = 1 ]; then
+    _kf_rest="${PATH:+$PATH:}"
+    while [ -n "$_kf_rest" ]; do
+      _kf_p="${_kf_rest%%:*}"; _kf_rest="${_kf_rest#*:}"
+      case "$_kf_p" in ""|"$HOME/.superset/bin"|"$HOME"/.superset-*/bin) continue;; esac
+      [ -f "$_kf_p/.keyfit-shims" ] || [ ! -f "$_kf_p/@TOOL@" ] || [ ! -x "$_kf_p/@TOOL@" ] || exec "$_kf_p/@TOOL@" "$@"
+    done
+    printf '%s\\n' "keyfit: @TOOL@ is not installed (no @TOOL@ on PATH besides Keyfit's shim)." >&2; exit 127
+  fi
+  if [ -f @ENTRY@ ]; then
+    printf 'keyfit: @TOOL@ not started: the Python Keyfit was set up with is gone (%s).\\n' @PYTHON@ >&2
+    printf '%s\\n' "  Reinstall Keyfit (pipx reinstall keyfit, or brew reinstall keyfit), then run: keyfit setup" \\
+      "  Bypass once: KEYFIT_DISABLE=1 @TOOL@ …" >&2; exit 127
+  fi
+  printf 'keyfit: @TOOL@ not started: Keyfit is not installed where its shims expect it (%s).\\n' @ENTRY@ >&2
+  printf '%s\\n' "  Upgraded or reinstalled Keyfit? Run: keyfit setup" \\
+    "  Uninstalled it? Remove the line ending in '# keyfit: tool shims on PATH' (or, from an earlier version, \\
+'# keyfit: claude/codex/aws/gh shims on PATH') from your shell startup file, then open a new terminal." \\
+    "  Bypass once: KEYFIT_DISABLE=1 @TOOL@ …" >&2; exit 127
+}
+exec @PYTHON@ -I -S @ENTRY@ @TOOL@ "$@"
 """
+
+
+def _word(path) -> str:
+    """A path as one shell word for the generated files: in double quotes, as earlier versions wrote every path (Keyfit
+    finds its startup-file line by its text), unless the path holds a character double quotes leave active ($, `, "
+    or \\): then in single quotes, so a folder name can neither run a command nor end the word early."""
+    text = str(path)
+    return shlex.quote(text) if re.search(r'[$`"\\]', text) else f'"{text}"'
 
 
 def _rc_files(shell: str) -> list[Path]:
@@ -2018,7 +2050,7 @@ def _rc_files(shell: str) -> list[Path]:
         return [Path(os.environ.get("ZDOTDIR") or home) / ".zshrc"]
     profile = next((p for p in (home / ".bash_profile", home / ".bash_login", home / ".profile") if p.exists()),
                    home / ".bash_profile")
-    text = profile.read_text() if profile.exists() else ""
+    text = profile.read_text(errors="replace") if profile.exists() else ""
     return [profile, home / ".bashrc"] if re.search(r"(?:source|\.)\s+\S*\.bashrc\b", text) else [profile]
 
 
@@ -2026,7 +2058,7 @@ def _setup_line(shell: str, comment: str = COMMENT) -> str:
     """The line `keyfit setup --rc` writes into a startup file of this shell. Its text is how Keyfit finds the line
     again (setup, --remove, doctor), so the line with the earlier comment (OLD_COMMENT) still counts as Keyfit's."""
     filename, _, load = SHELLS[shell]
-    return f'{load} "{config_dir() / filename}"  {comment}'
+    return f"{load} {_word(config_dir() / filename)}  {comment}"
 
 
 def _startup_files() -> list[Path]:
@@ -2047,18 +2079,28 @@ def _loads_keyfit(rc: Path) -> bool:
     return any(line.strip() in lines for line in rc.read_text(errors="replace").splitlines())
 
 
-def _add_line(rc: Path, line: str, earlier: tuple[str, ...]) -> None:
-    text = rc.read_text() if rc.exists() else ""
-    old = next((old for old in earlier if old in text), None)
-    if line in text:
-        print(f"{tilde(rc)} already loads them")
-    elif old:
-        rc.write_text(text.replace(old, line))
-        print(f"Updated the Keyfit line in {tilde(rc)}:\n  {line}")
-    else:
-        with rc.open("a") as fh:
-            fh.write(f"\n{line}\n")
-        print(f"Added to the end of {tilde(rc)} (new terminals pick it up):\n  {line}")
+def _add_line(rc: Path, line: str, earlier: tuple[str, ...]) -> bool:
+    """Add Keyfit's line to a startup file, or rewrite an earlier one in place. Only a whole line counts (a
+    commented-out copy loads nothing), and bytes that are not UTF-8 stay as they were. False, with the line to add by
+    hand, when the file can't be changed (a folder, or a ZDOTDIR that doesn't exist)."""
+    try:
+        lines = rc.read_text(errors="surrogateescape").splitlines(keepends=True) if rc.exists() else []
+        found = {text.strip() for text in lines}
+        if line in found:
+            print(f"{tilde(rc)} already loads them")
+        elif found & set(earlier):
+            new = [text.replace(text.strip(), line) if text.strip() in earlier else text for text in lines]
+            rc.write_text("".join(new), errors="surrogateescape")
+            print(f"Updated the Keyfit line in {tilde(rc)}:\n  {line}")
+        else:
+            with rc.open("a", errors="surrogateescape") as fh:
+                fh.write(f"\n{line}\n")
+            print(f"Added to the end of {tilde(rc)} (new terminals pick it up):\n  {line}")
+    except OSError as err:
+        print(f"keyfit setup: cannot change {tilde(rc)} ({err.strerror}); add this as its last line yourself:\n"
+              f"  {line}", file=sys.stderr)
+        return False
+    return True
 
 
 # Login switchers that work alongside Keyfit (README FAQ). The first `keyfit setup` in a terminal offers each one
@@ -2143,10 +2185,11 @@ def cmd_setup(args) -> int:
     (folder / MARKER).write_text("Keyfit shims live here; Keyfit never resolves a real binary from this folder.\n")
     for tool in TOOLS:
         script = folder / tool
-        script.write_text(SHIM.replace("@PYTHON@", python).replace("@ENTRY@", entry).replace("@TOOL@", tool))
+        script.write_text(SHIM.replace("@PYTHON@", _word(python)).replace("@ENTRY@", _word(entry))
+                          .replace("@TOOL@", tool))
         script.chmod(0o755)
     for filename, template, _ in SHELLS.values():
-        (config_dir() / filename).write_text(template.replace("@SHIMS@", str(folder)))
+        (config_dir() / filename).write_text(template.replace("@SHIMS@", _word(folder)))
     print(f"Shims written to {tilde(folder)}: {', '.join(TOOLS)}")
     if shell not in SHELLS:
         if offer:
@@ -2156,11 +2199,11 @@ def cmd_setup(args) -> int:
         return 0
     line, old = _setup_line(shell), _setup_line(shell, OLD_COMMENT)
     candidates = dict.fromkeys(_rc_files(shell) + ([Path.home() / ".zshrc"] if shell == "zsh" else []))
-    active = [path for path in candidates
-              if path.is_file() and any(known in path.read_text(errors="replace") for known in (line, old))]
-    if rc is not None:
-        for path in [Path(rc).expanduser()] if rc else _rc_files(shell):
-            _add_line(path, line, (old, OLD_PATH_LINE))
+    active = [path for path in candidates  # whole lines only: a commented-out copy loads nothing
+              if path.is_file() and {text.strip() for text in path.read_text(errors="replace").splitlines()}
+              & {line, old}]
+    targets = ([Path(rc).expanduser()] if rc else _rc_files(shell)) if rc is not None else []
+    added = [_add_line(path, line, (old, OLD_PATH_LINE)) for path in targets]
     if offer:  # after the startup file and before what to do next, which installers' output would bury
         _offer_switchers()
     if rc is not None:
@@ -2173,7 +2216,7 @@ def cmd_setup(args) -> int:
         print(f"To activate, add this as the LAST line of {files} (or run: {again}):\n  {line}")
     undo = "keyfit setup --remove" + (f" --rc {tilde(Path(rc).expanduser())}" if rc else "")
     print(f"Undo any time: {undo}; run a tool once without checks: KEYFIT_DISABLE=1 claude")
-    return 0
+    return 0 if all(added) else 1
 
 
 # What Keyfit itself keeps in its config dir; --purge deletes the folder only when it holds nothing else.
@@ -2183,9 +2226,9 @@ KEYFIT_FILES = {"registry.toml", "registry.toml.tmp", "cache", "bin", "shell.zsh
 
 def _drop_lines(rc: Path, lines: set[str]) -> bool:
     """Remove these exact lines from a startup file, with the blank line `keyfit setup` put before each."""
-    try:
-        old = rc.read_text().splitlines(keepends=True)
-    except (OSError, UnicodeDecodeError):
+    try:  # bytes that are not UTF-8 stay as they were
+        old = rc.read_text(errors="surrogateescape").splitlines(keepends=True)
+    except OSError:
         return False
     keep = []
     for i, line in enumerate(old):
@@ -2195,12 +2238,16 @@ def _drop_lines(rc: Path, lines: set[str]) -> bool:
             keep.pop()
     if len(keep) == len(old):
         return False
-    rc.write_text("".join(keep))
+    rc.write_text("".join(keep), errors="surrogateescape")
     return True
 
 
 def _purge_confirmed(folder: Path, args) -> bool:
     home, target = Path.home().resolve(), folder.resolve()
+    if folder.is_symlink():  # shutil.rmtree refuses a link: stop before anything changed, not half-way through
+        print(f"{_short(str(folder))} is a link to {tilde(target)}, which --purge does not delete — nothing changed; "
+              "run keyfit setup --remove, then delete both yourself if you are sure", file=sys.stderr)
+        return False
     foreign = sorted(p.name for p in folder.iterdir() if p.name not in KEYFIT_FILES)
     if target == home or target in home.parents or foreign:
         print(f"{tilde(folder)} also holds {', '.join(foreign) or 'your home folder'}, which Keyfit did not write — "
@@ -2295,8 +2342,13 @@ def _check_shims(folder: Path) -> Check:
     if missing:
         return Check("shims", "fail", label, f"missing: {', '.join(missing)}", "keyfit setup")
     for tool in TOOLS:  # each shim runs the Python and the checkout `keyfit setup` was run with
-        m = re.search(r'exec "([^"]+)" -I (?:-S )?"([^"]+)"', (folder / tool).read_text(errors="replace"))
-        gone = [p for p in (m.groups() if m else ()) if not Path(p).exists()]
+        lines = (folder / tool).read_text(errors="replace").splitlines()
+        line = next((text for text in lines if text.startswith("exec ")), "")
+        try:  # exec PYTHON -I [-S] ENTRY TOOL "$@", each path in double or single quotes (_word)
+            words = [w for w in shlex.split(line) if w != "-S"]
+        except ValueError:
+            words = []
+        gone = [p for p in (words[1:4:2] if words[2:3] == ["-I"] else ()) if not Path(p).exists()]
         if gone:
             return Check("shims", "fail", label, f"{tool} runs {gone[0]}, which no longer exists",
                          "keyfit setup   (rewrites them for this Python and this checkout)")
@@ -2682,7 +2734,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--key", help="env:VAR, keychain:service/account, or a bare variable name "
                                  "(default: paste the key; it is verified, then stored in the Keychain)")
     p.add_argument("--workspace", help="expected workspace slug (default: ask Linear once and record it)")
-    p.add_argument("--readonly", action="store_true", help="expose Linear's read-only MCP endpoint")
     p.add_argument("--project", **project)
     p.set_defaults(func=cmd_add_linear)
     p = command(kinds, "mcp", "MCP servers that belong to this project (hidden in all others)")
@@ -2730,10 +2781,21 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     try:
         return args.func(args)
+    except KeyboardInterrupt:  # Ctrl-C, also while online checks run: no traceback, no wait for the slowest check
+        print("\nkeyfit: stopped", file=sys.stderr)
+        if any(t.name.startswith(environment.CHECKS) for t in threading.enumerate()):
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(130)  # Python would wait for a check still waiting on the network before it exits
+        return 130
     except RegistryError as err:  # a hand edit: say where and how to fix it, not a traceback
         print(f"keyfit: cannot use {tilde(err.path)}: {err}\n  → {err.fix}", file=sys.stderr)
         return 1
     except GitError as err:  # inside a repository git cannot read, the folder may be a project's: nothing is assumed
         print(f"keyfit: {printable(err)}, so Keyfit cannot tell which project that folder belongs to.\n"
               f"  → fix git (keyfit doctor shows how)", file=sys.stderr)
+        return 1
+    except OSError as err:  # a file or folder Keyfit can't read or write (an unwritable config folder): which one
+        where = f": {printable(err.filename)}" if err.filename else ""
+        print(f"keyfit: {printable(err.strerror or err)}{where}", file=sys.stderr)
         return 1

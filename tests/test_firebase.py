@@ -852,6 +852,18 @@ class AddTests(FirebaseCase):
         self.assertIn(f"  next: the firebase CLI's folder {self.repos['client']} is bound to {PERSONAL}, the project's "
                       f"Google account is {ACME}\n  → firebase login:use {ACME}\n", out)
 
+    def test_guided_init_never_sends_the_repositorys_firebaserc_to_the_terminal(self):
+        # KEY-82: the project ID offered comes from the repository's .firebaserc
+        self.firebase_folder(self.repos["client"], {"default": "acme\x1b]0;owned\x07"})
+        base = {"registry": None, "project": "client"}
+        with mock.patch.object(cli, "_ask", side_effect=["y"]) as ask, contextlib.redirect_stdout(io.StringIO()) as out, \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            cli._offer_firebase("client", base)
+        self.assertIn(r"works on Firebase project acme\x1b]0;owned\x07", out.getvalue())
+        self.assertEqual(ask.call_args[0][0], r"Use Firebase project acme\x1b]0;owned\x07 for client? [y/N] ")
+        self.assertIn("is not a Firebase project ID", err.getvalue())  # and so it is not recorded
+        self.assertNotIn("\x1b", out.getvalue() + err.getvalue())
+
     def test_guided_init_offers_the_google_account_then_the_firebase_project(self):
         base = {"registry": None, "project": "client"}
         with mock.patch.object(cli, "_ask", side_effect=["2", "y"]), contextlib.redirect_stdout(io.StringIO()) as out:

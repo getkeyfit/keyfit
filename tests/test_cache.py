@@ -42,6 +42,19 @@ class CacheTests(unittest.TestCase):
         cache.drop("a")
         self.assertIsNone(cache.get("a"))
 
+    def test_a_file_of_another_shape_counts_as_empty(self):
+        # KEY-82: a hand-edited cache (`[]`, `null`) stopped every tool with "internal error" until it was deleted
+        path = Path(os.environ["KEYFIT_CONFIG_DIR"]) / "cache" / "checks.json"
+        path.parent.mkdir()
+        for text in ("[]", "null", '"x"', '{"a": 5}', '{"a": {"at": "soon", "status": "ok", "detail": "x"}}',
+                     '{"a": {"at": 1e12, "status": "great", "detail": "x"}}', '{"a": {"at": 1e12, "status": "ok"}}'):
+            with self.subTest(text=text):
+                path.write_text(text)
+                self.assertIsNone(cache.get("a", now=1e12))
+                cache.drop("a")
+                cache.put("b", "ok", "y")
+                self.assertEqual(cache.get("b")["detail"], "y")
+
     def test_drop_forgets_one_entry(self):
         cache.put("a", "ok", "x")
         cache.put("b", "ok", "y")

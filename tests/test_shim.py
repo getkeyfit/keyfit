@@ -5,10 +5,12 @@ import io
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -419,6 +421,48 @@ class ShimTests(unittest.TestCase):
         self.assertRegex(out.stderr, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, opencode, copilot, "
                                      r"gemini, github, vercel, supabase, cloudflare, convex, google, gcloud, firebase, google-mcp\)\n    → rename or remove asw in ")
 
+    def test_number_where_text_belongs_fails_only_that_check(self):
+        # KEY-82: config_dir = 5 (a hand edit) stopped claude with "internal error (TypeError …)"
+        reg = self.config / "registry.toml"
+        reg.write_text(reg.read_text().replace(f'config_dir = "{self.home / ".claude"}"', "config_dir = 5"))
+        for args in (["-p", "hi"], ["auth", "login"]):  # a sign-in too: never to an account Keyfit had to guess
+            out = self.run_tool("claude", *args)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), args)
+            self.assertIn("✘ claude     work   config_dir = 5 is not text (a hand edit?)\n    → write it in quotes",
+                          out.stderr)
+            self.assertNotIn("internal error", out.stderr)
+        self.assertEqual(self.run_tool("aws", "s3", "ls").returncode, 0)  # the project's aws has its own account
+
+    def test_ctrl_c_during_online_checks_stops_at_once(self):
+        # KEY-82: `keyfit status` waited for the slowest check (aws's runs up to 40 s), then printed a traceback
+        slow, started = self.tmp / "slow", self.tmp / "started"
+        slow.mkdir()
+        for tool in ("aws", "claude"):  # checks that hang and ignore the Ctrl-C the terminal sends them too
+            executable(slow / tool, f'#!/bin/sh\ntrap "" INT\ntouch "{started}"\nsleep 15\n')
+        keyfit = [sys.executable, "-I", "-c", "import sys; sys.path.insert(0, sys.argv.pop(1)); from keyfit.cli import "
+                  "main; sys.exit(main(sys.argv[1:]))", str(Path(__file__).resolve().parent.parent), "status"]
+        proc = subprocess.Popen(keyfit, cwd=self.repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                start_new_session=True, env={"PATH": f"{slow}:/usr/bin:/bin", "HOME": str(self.home),
+                                                             "KEYFIT_CONFIG_DIR": str(self.config)})
+        self.addCleanup(lambda: proc.poll() is not None or proc.kill())
+
+        def kill_checks():
+            with contextlib.suppress(ProcessLookupError, PermissionError):  # macOS: EPERM once only zombies are left
+                os.killpg(proc.pid, signal.SIGKILL)  # the hanging fakes, left in the process group
+        self.addCleanup(kill_checks)
+        deadline = time.monotonic() + 20
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.3)  # both checks are waiting
+        os.killpg(proc.pid, signal.SIGINT)  # what Ctrl-C in a terminal does
+        sent = time.monotonic()
+        code = proc.wait(timeout=30)
+        took = time.monotonic() - sent
+        kill_checks()
+        out, err = proc.communicate(timeout=10)
+        self.assertLess(took, 5)
+        self.assertEqual((code, err), (130, "\nkeyfit: stopped\n"))
+
     def test_missing_tool_says_how_to_install_it(self):
         out = self.run_tool("gh", "pr", "list")
         self.assertEqual(out.returncode, 127)
@@ -495,6 +539,9 @@ class ShimTests(unittest.TestCase):
         line = subprocess.run(["/bin/sh", "-c", command], input="{}", capture_output=True, text=True,
                               env={"KEYFIT_SUMMARY": "demo · aws iam → …4444"}).stdout
         self.assertEqual(line, "keyfit · demo · aws iam → …4444\n")
+        line = subprocess.run(["/bin/sh", "-c", command], input="{}", capture_output=True, text=True,  # KEY-82
+                              env={"KEYFIT_SUMMARY": "demo · aws iam\x1b]0;owned\x07"}).stdout
+        self.assertEqual(line, "keyfit · demo · aws iam\\x1b]0;owned\\x07\n")
         self.assertEqual(seen["argv"][2:], ["-p", "hello"])
 
     def test_claude_management_commands_are_untouched(self):

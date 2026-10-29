@@ -42,7 +42,7 @@ SHELL_KEYS = Check("flaky", "warn", "x", "GROQ_API_KEY from your shell", scrub=(
 class ResilienceTests(unittest.TestCase):
     def setUp(self):
         os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()
-        self.project = Project("demo", ["/tmp"], {"flaky": {"id": 1}})
+        self.project = Project("demo", ["/tmp"], {"flaky": {"id": "1"}})
 
     def run_with(self, adapter, use_cache=False):
         ADAPTERS["flaky"] = adapter
@@ -80,7 +80,7 @@ class ResilienceTests(unittest.TestCase):
         self.assertNotIn("SECRETVALUE", "\n".join(check.lines()))  # the table itself is never printed
 
     def test_success_older_than_a_day_is_not_trusted(self):
-        k = cache.key("demo", "flaky", {"id": 1}, "")
+        k = cache.key("demo", "flaky", {"id": "1"}, "")
         cache.put(k, "ok", "account confirmed")
         self.assertIsNone(cache.get(k, now=time.time() + cache.STALE + 1, max_age=cache.STALE))
 

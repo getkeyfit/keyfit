@@ -80,8 +80,8 @@ class VerifyTests(unittest.TestCase):
         self.addCleanup(lambda: [ADAPTERS.pop(k) for k in ("fine", "broken")])
 
     def test_one_and_several_connections(self):
-        one = Project("demo", ["/tmp"], {"fine": {"id": 1}})
-        two = Project("demo", ["/tmp"], {"fine": {"id": 1}, "other": {}})
+        one = Project("demo", ["/tmp"], {"fine": {"id": "1"}})
+        two = Project("demo", ["/tmp"], {"fine": {"id": "1"}, "other": {}})
         ADAPTERS["other"] = Fine()
         self.addCleanup(ADAPTERS.pop, "other")
         self.assertEqual([c.status for c in environment.verify(one, {})], ["ok"])

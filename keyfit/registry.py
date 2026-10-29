@@ -57,8 +57,8 @@ GOOGLE_TOOLS = ("gcloud", "firebase", "gemini", "google-mcp")
 
 
 class RegistryError(ValueError):
-    """registry.toml cannot be used as it is: unreadable, not TOML, or not shaped like a registry (a hand edit).
-    The message says where; `fix` is the next step. Callers print both instead of a traceback."""
+    """registry.toml cannot be used as it is: unreadable, unwritable, not TOML, or not shaped like a registry (a hand
+    edit). The message says where; `fix` is the next step. Callers print both instead of a traceback."""
 
     def __init__(self, path: Path, reason: str, fix: str = ""):
         super().__init__(reason)
@@ -88,6 +88,9 @@ def _check_shape(data: dict, path: Path) -> None:
         if not isinstance(roots, list) or not roots or not all(isinstance(r, str) and r.strip() for r in roots):
             bad(f'{where}: roots must be a list of folders, like roots = ["~/code/{name}"]')
         for root in roots:
+            if not Path(root).expanduser().is_absolute():  # "." would be the folder each command runs in: every one
+                bad(f'{where}: roots holds "{root}", a relative path, which would put whatever folder Keyfit runs in '
+                    f"in {name}", f'write the full path (like "~/code/{name}") in {tilde(path)}')
             if canonical(root) == home or canonical(root) in home.parents:
                 bad(f'{where}: roots holds "{root}", which would put every folder under it in {name}',
                     f"remove that root from {tilde(path)}; register repositories with: keyfit init")
@@ -165,10 +168,14 @@ class Registry:
         return cls(p, data)
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".toml.tmp")
-        write_private(tmp, tomlwrite.dumps(self.data))
-        os.replace(tmp, self.path)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".toml.tmp")
+            write_private(tmp, tomlwrite.dumps(self.data))
+            os.replace(tmp, self.path)
+        except OSError as err:  # an unwritable config folder: said where, like a registry Keyfit can't read
+            raise RegistryError(self.path, f"cannot write it ({err.strerror})",
+                                f"make {tilde(self.path.parent)} writable for you") from None
 
     # projects ---------------------------------------------------------------
 
