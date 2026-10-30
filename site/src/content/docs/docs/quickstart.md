@@ -72,7 +72,7 @@ acme-api
   ✔ opencode   default   anthropic, openai signed in · confirmed by OpenCode
   ✔ copilot    octocat   login confirmed
   ✔ gemini     me@acme.com   Google sign-in in ~/.config/keyfit/gemini/acme · confirmed by Google
-  ✔ google-mcp gmail_acme, gcal_acme   me@acme.com · confirmed by Google
+  ✔ google-mcp gmail_acme, gcal_acme   confirmed by Google
 ```
 
 If something seems off, run `keyfit doctor`. It checks the installation and prints the fix under every ✘. See also the [troubleshooting guide](/docs/troubleshooting/).
