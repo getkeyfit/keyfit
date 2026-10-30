@@ -30,6 +30,11 @@ def looks_like_key(text: str) -> bool:
     return bool(_KEY_LIKE.search(text or ""))
 
 
+def redact(text: str) -> str:
+    """Text that may quote a command line (argparse's `unrecognized arguments: lin_api_…`), with its keys not shown."""
+    return _KEY_LIKE.sub("<a key, not shown>", text)
+
+
 def normalise(ref: str) -> str:
     """Accept a bare variable name as shorthand for env:NAME."""
     if ":" not in ref:

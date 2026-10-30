@@ -179,7 +179,7 @@ class CloudflareCase(unittest.TestCase):
             self.fetched.append(path)
             return api(path, token, timeout)
         adapter = ADAPTERS["cloudflare"]
-        for patcher in (mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+        for patcher in (mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch.object(adapter, "run", self.wrangler), mock.patch.object(adapter, "fetch", fetch),
                         mock.patch.object(secrets, "SECURITY", "/nonexistent/security"),
                         mock.patch.dict(os.environ, self.env, clear=True)):
@@ -635,6 +635,27 @@ class AdapterTests(CloudflareCase):
         self.assertEqual(check.detail, f"bound at {client} · could not tell which wrangler {script} is · profile and "
                                        f"account confirmed")
         self.assertEqual(check.fix, f"{script} --version must be 4.106 or newer (older ones ignore profiles)")
+
+    def test_the_projects_own_wrangler_is_looked_for_up_to_its_top_only(self):
+        # these folders are outside HOME: a node_modules/.bin another user made in a shared folder above never runs
+        shared = self.tmp / "node_modules" / ".bin"
+        shared.mkdir(parents=True)
+        executable(shared / "wrangler", FAKE_WRANGLER)
+        package = self.outside / "package"  # no repository: up to the nearest package.json
+        (package / "src").mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        loose = self.outside / "loose" / "deeper"  # no repository and no package.json: that folder only
+        loose.mkdir(parents=True)
+        for start in (self.repos["client"], package / "src", loose):
+            with self.subTest(start=start):
+                self.assertEqual(cloudflare.wrangler_bin(self.env, start), str(self.bin / "wrangler"))
+        app = self.repos["client"] / "app"
+        app.mkdir()
+        (app / "package.json").write_text("{}")  # a monorepo's package: the wrangler hoisted to the top still counts
+        for top, start in ((self.repos["client"], app), (package, package / "src")):
+            (top / "node_modules" / ".bin").mkdir(parents=True)
+            executable(top / "node_modules" / ".bin" / "wrangler", FAKE_WRANGLER)
+            self.assertEqual(cloudflare.wrangler_bin(self.env, start), str(top / "node_modules" / ".bin" / "wrangler"))
 
     def test_the_online_check_gets_none_of_the_projects_other_tokens(self):
         """At an agent start the environment holds every account of the project. The repository's own wrangler, which

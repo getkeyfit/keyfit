@@ -54,7 +54,8 @@ def own_folder(project: Project, registry: Registry, env: dict) -> Path | None:
     supervisor per config folder, so only there do background sessions keep to the project's accounts."""
     def folder(p: Project) -> Path | None:
         conn = p.connections.get("claude")
-        return canonical(conn.get("config_dir") or "~/.claude") if isinstance(conn, dict) else None
+        given = (conn.get("config_dir") or "~/.claude") if isinstance(conn, dict) else None
+        return canonical(given) if isinstance(given, str) else None  # not text (a hand edit): its check fails
     mine = folder(project)
     shell = None if env.get("KEYFIT_PROJECT") else env.get("CLAUDE_CONFIG_DIR")  # inside a session: the session's
     if mine is None or mine == default_dir(env) or (shell and canonical(shell) == mine):
@@ -207,9 +208,9 @@ class ClaudeAdapter(Adapter):
                          f"signed in with {status.get('authMethod')} instead of a Claude subscription "
                          "(an API key or helper would change billing)",
                          "remove ANTHROPIC_API_KEY / apiKeyHelper from Claude settings, or: " + fix)
-        if canonical(status.get("configDirectory", "")) != canonical(config_dir):
-            return Check(self.kind, "fail", label,
-                         f"Claude used config directory {status.get('configDirectory')}", fix)
+        used = status.get("configDirectory")  # Claude Code before 2.1.268 does not say: the org still has to match
+        if used and canonical(used) != canonical(config_dir):
+            return Check(self.kind, "fail", label, f"Claude used config directory {used}", fix)
         if conn.get("org_id") and status.get("orgId") != conn["org_id"]:
             return Check(self.kind, "fail", label,
                          f"signed in to org '{status.get('orgName')}', project expects '{conn.get('org_name')}'", fix)

@@ -5,10 +5,12 @@ import io
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -21,7 +23,7 @@ from keyfit.shim import (Refused, adjust_args, is_login_command, sign_in_command
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
-FAKE_AWS = """#!/usr/bin/env python3
+FAKE_AWS = f"#!{sys.executable}" + """
 import json, os, sys
 args = sys.argv[1:]
 if args[:2] == ["sts", "get-caller-identity"]:
@@ -32,7 +34,7 @@ print(json.dumps({"argv": args, "AWS_PROFILE": os.environ.get("AWS_PROFILE"),
                   "KEYFIT_PROJECT": os.environ.get("KEYFIT_PROJECT")}))
 """
 
-FAKE_CLAUDE = """#!/usr/bin/env python3
+FAKE_CLAUDE = f"#!{sys.executable}" + """
 import json, os, sys
 args = sys.argv[1:]
 if args[:3] == ["auth", "status", "--json"]:
@@ -45,7 +47,7 @@ print(json.dumps({"argv": args, "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_A
 
 
 # Signed out until `claude auth login` has run once (it leaves the file $SIGNED_IN behind).
-FAKE_CLAUDE_SIGNED_OUT = """#!/usr/bin/env python3
+FAKE_CLAUDE_SIGNED_OUT = f"#!{sys.executable}" + """
 import json, os, sys
 args = sys.argv[1:]
 marker = os.environ["SIGNED_IN"]
@@ -91,9 +93,8 @@ class ShimTests(unittest.TestCase):
         self.sts = self.tmp / "sts-count"
         self.sts.write_text("")
 
-        old = os.environ.get("KEYFIT_CONFIG_DIR")
-        os.environ["KEYFIT_CONFIG_DIR"] = str(self.config)
-        try:
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config), "HOME": str(self.home),
+                                          "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin"}, clear=True):
             main(["init", "--yes", "--root", str(self.repo), "--name", "demo"])
             reg = self.config / "registry.toml"
             reg.write_text(reg.read_text() + 'aws = { profile = "iam", account = "444444444444" }\n'
@@ -102,11 +103,6 @@ class ShimTests(unittest.TestCase):
                            '\n[settings]\nshared_aws_profiles = ["ci-worker"]\n')
             with mock.patch.object(sys, "platform", "darwin"):  # setup refuses elsewhere; the shims work anywhere
                 main(["setup"])
-        finally:
-            if old is None:
-                os.environ.pop("KEYFIT_CONFIG_DIR")
-            else:
-                os.environ["KEYFIT_CONFIG_DIR"] = old
 
     def run_tool(self, tool, *args, cwd=None, **extra):
         env = {"PATH": f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin",
@@ -262,7 +258,7 @@ class ShimTests(unittest.TestCase):
         os.chdir(self.repo)
         try:
             with mock.patch.dict(os.environ, {"PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin", "HOME": str(self.home),
-                                              "KEYFIT_CONFIG_DIR": str(self.config)}), \
+                                              "KEYFIT_CONFIG_DIR": str(self.config)}, clear=True), \
                     mock.patch.object(secrets, "keychain_reachable", return_value=""), \
                     contextlib.redirect_stdout(io.StringIO()) as doctor:
                 self.assertEqual(main(["doctor"]), 1)
@@ -273,6 +269,29 @@ class ShimTests(unittest.TestCase):
                       doctor.getvalue())
         self.assertIn(f"  ✘ project    this folder   git failed in {self.repo} (You have not agreed", doctor.getvalue())
         self.assertNotIn("All good", doctor.getvalue())
+
+    def test_a_deleted_folder_stops_the_tool_with_a_clear_message(self):
+        # a removed worktree: no project can be told from it; `.` and node_modules/.bin on PATH lead nowhere either
+        def run_in_deleted_folder(path, **extra):
+            gone = self.repo / "gone"
+            gone.mkdir()
+            env = {"PATH": path, "HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config),
+                   "STS_COUNT": str(self.sts), **extra}
+            return subprocess.run(["/bin/sh", "-c", 'cd "$1" && rmdir "$1" && exec aws s3 ls', "sh", str(gone)],
+                                  env=env, capture_output=True, text=True, timeout=60)
+
+        shims = f"{self.config / 'bin'}{os.pathsep}{self.bin}{os.pathsep}/usr/bin:/bin"
+        for path in (shims, f".{os.pathsep}node_modules/.bin{os.pathsep}{shims}"):
+            with self.subTest(path=path):
+                out = run_in_deleted_folder(path, AWS_PROFILE="other")
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertTrue(out.stderr.endswith(
+                    "keyfit: aws not started: the current folder no longer exists (deleted or moved), so Keyfit "
+                    "cannot tell which project it belongs to.\n  cd into an existing folder, or bypass once: "
+                    "KEYFIT_DISABLE=1 aws …\n"), out.stderr)
+                out = run_in_deleted_folder(path, AWS_PROFILE="other", KEYFIT_DISABLE="1")
+                self.assertEqual(json.loads(out.stdout)["AWS_PROFILE"], "other", out.stderr)
+        self.assertEqual(self.sts.read_text(), "")
 
     def test_unregistered_folder_passes_through(self):
         out = self.run_tool("aws", "s3", "ls", cwd=self.outside, AWS_PROFILE="other")
@@ -396,6 +415,48 @@ class ShimTests(unittest.TestCase):
         self.assertRegex(out.stderr, r"✘ asw\s+unknown connection \(a typo\? Keyfit knows aws, linear, claude, codex, opencode, copilot, "
                                      r"gemini, github, vercel, supabase, cloudflare, convex, google, gcloud, firebase, google-mcp\)\n    → rename or remove asw in ")
 
+    def test_number_where_text_belongs_fails_only_that_check(self):
+        # KEY-82: config_dir = 5 (a hand edit) stopped claude with "internal error (TypeError …)"
+        reg = self.config / "registry.toml"
+        reg.write_text(reg.read_text().replace(f'config_dir = "{self.home / ".claude"}"', "config_dir = 5"))
+        for args in (["-p", "hi"], ["auth", "login"]):  # a sign-in too: never to an account Keyfit had to guess
+            out = self.run_tool("claude", *args)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), args)
+            self.assertIn("✘ claude     work   config_dir = 5 is not text (a hand edit?)\n    → write it in quotes",
+                          out.stderr)
+            self.assertNotIn("internal error", out.stderr)
+        self.assertEqual(self.run_tool("aws", "s3", "ls").returncode, 0)  # the project's aws has its own account
+
+    def test_ctrl_c_during_online_checks_stops_at_once(self):
+        # KEY-82: `keyfit status` waited for the slowest check (aws's runs up to 40 s), then printed a traceback
+        slow, started = self.tmp / "slow", self.tmp / "started"
+        slow.mkdir()
+        for tool in ("aws", "claude"):  # checks that hang and ignore the Ctrl-C the terminal sends them too
+            executable(slow / tool, f'#!/bin/sh\ntrap "" INT\ntouch "{started}"\nsleep 15\n')
+        keyfit = [sys.executable, "-I", "-c", "import sys; sys.path.insert(0, sys.argv.pop(1)); from keyfit.cli import "
+                  "main; sys.exit(main(sys.argv[1:]))", str(Path(__file__).resolve().parent.parent), "status"]
+        proc = subprocess.Popen(keyfit, cwd=self.repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                start_new_session=True, env={"PATH": f"{slow}:/usr/bin:/bin", "HOME": str(self.home),
+                                                             "KEYFIT_CONFIG_DIR": str(self.config)})
+        self.addCleanup(lambda: proc.poll() is not None or proc.kill())
+
+        def kill_checks():
+            with contextlib.suppress(ProcessLookupError, PermissionError):  # macOS: EPERM once only zombies are left
+                os.killpg(proc.pid, signal.SIGKILL)  # the hanging fakes, left in the process group
+        self.addCleanup(kill_checks)
+        deadline = time.monotonic() + 20
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.3)  # both checks are waiting
+        os.killpg(proc.pid, signal.SIGINT)  # what Ctrl-C in a terminal does
+        sent = time.monotonic()
+        code = proc.wait(timeout=30)
+        took = time.monotonic() - sent
+        kill_checks()
+        out, err = proc.communicate(timeout=10)
+        self.assertLess(took, 5)
+        self.assertEqual((code, err), (130, "\nkeyfit: stopped\n"))
+
     def test_missing_tool_says_how_to_install_it(self):
         out = self.run_tool("gh", "pr", "list")
         self.assertEqual(out.returncode, 127)
@@ -438,7 +499,8 @@ class ShimTests(unittest.TestCase):
         plain = self.tmp / "plain"
         plain.mkdir()
         subprocess.run(["git", "init", "-q"], cwd=plain, check=True)
-        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config)}), \
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config), "HOME": str(self.home),
+                                          "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin"}, clear=True), \
                 contextlib.redirect_stdout(io.StringIO()):
             main(["init", "--yes", "--root", str(plain), "--name", "plain"])
         out = self.run_tool("aws", "sso", "login", "--profile", "other", cwd=plain)  # then: keyfit add aws
@@ -472,6 +534,9 @@ class ShimTests(unittest.TestCase):
         line = subprocess.run(["/bin/sh", "-c", command], input="{}", capture_output=True, text=True,
                               env={"KEYFIT_SUMMARY": "demo · aws iam → …4444"}).stdout
         self.assertEqual(line, "keyfit · demo · aws iam → …4444\n")
+        line = subprocess.run(["/bin/sh", "-c", command], input="{}", capture_output=True, text=True,  # KEY-82
+                              env={"KEYFIT_SUMMARY": "demo · aws iam\x1b]0;owned\x07"}).stdout
+        self.assertEqual(line, "keyfit · demo · aws iam\\x1b]0;owned\\x07\n")
         self.assertEqual(seen["argv"][2:], ["-p", "hello"])
 
     def test_claude_management_commands_are_untouched(self):
@@ -638,7 +703,7 @@ class ShimTests(unittest.TestCase):
     CODEX_SHARED = (["agents"], ["queue", "--thread", "t", "--message", "m"], ["remote-control"], ["app-server"])
 
     def fake_codex(self):
-        executable(self.bin / "codex", '#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n')
+        executable(self.bin / "codex", f'#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n')
 
     def test_codex_inside_a_session_outside_projects_runs_without_daemon(self):
         self.fake_codex()

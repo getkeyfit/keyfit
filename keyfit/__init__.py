@@ -2,7 +2,7 @@
 
 import sys
 
-__version__ = "0.1.0"  # the only place the version lives: pyproject.toml reads it, `keyfit --version` prints it
+__version__ = "0.1.1"  # the only place the version lives: pyproject.toml reads it, `keyfit --version` prints it
 
 # Checked before any module that needs 3.11 (tomllib) loads: macOS's own python3 is 3.9, and `bin/keyfit` from a
 # checkout runs whatever python3 comes first on PATH. Kept to syntax old Pythons still parse.

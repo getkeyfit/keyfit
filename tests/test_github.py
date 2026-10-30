@@ -18,7 +18,7 @@ from keyfit.shim import is_login_command, positionals
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
 # Fake gh: only `auth token --hostname github.com --user <login>` is allowed; anything else fails the test.
-FAKE_GH = """#!/usr/bin/env python3
+FAKE_GH = f"#!{sys.executable}" + """
 import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["GH_CALLS"], "a") as fh: fh.write(json.dumps(args) + "\\n")
@@ -68,11 +68,12 @@ class GithubTests(unittest.TestCase):
         return env, self.github.verify(conn, env)
 
     def test_inject_uses_the_accounts_own_token_and_scrubs_inherited_ones(self):
-        env = self.env({"hubot": "tok-hubot"}, GH_TOKEN="inherited", GITHUB_TOKEN="x", GH_CONFIG_DIR="/x", GH_HOST="ghe")
+        # docs/accounts.md: "Other GitHub token variables, GH_HOST and GH_CONFIG_DIR are removed."
+        documented = ("GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST", "GH_CONFIG_DIR")
+        env = self.env({"hubot": "tok-hubot"}, GH_TOKEN="inherited", **{var: "inherited" for var in documented})
         self.github.inject({"login": "hubot"}, env)
         self.assertEqual(env["GH_TOKEN"], "tok-hubot")
-        for var in ("GITHUB_TOKEN", "GH_CONFIG_DIR", "GH_HOST"):
-            self.assertNotIn(var, env)
+        self.assertEqual([var for var in documented if var in env], [])
 
     def test_only_reads_never_writes_gh_state(self):
         self.check({"login": "hubot"}, {"hubot": "tok-hubot"})
@@ -130,7 +131,7 @@ class GithubTests(unittest.TestCase):
 
 # Fake gh for the shim: it answers `gh auth token` like gh, with GH_TOKEN first, else the token of its active account
 # (octocat); it logs only its arguments.
-FAKE_GH_SHIM = """#!/usr/bin/env python3
+FAKE_GH_SHIM = f"#!{sys.executable}" + """
 import json, os, sys
 args = sys.argv[1:]
 stored = json.loads(os.environ["FAKE_GH_TOKENS"])
@@ -165,7 +166,8 @@ class ShimTests(unittest.TestCase):
         self.repo = self.tmp / "repo"
         self.repo.mkdir()
         subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
-        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config)}):
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config), "HOME": str(self.home),
+                                          "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin"}, clear=True):
             with contextlib.redirect_stdout(io.StringIO()):
                 from keyfit.cli import main
                 main(["init", "--yes", "--root", str(self.repo), "--name", "demo"])
@@ -237,7 +239,8 @@ class ShimTests(unittest.TestCase):
         plain = self.tmp / "plain"
         plain.mkdir()
         subprocess.run(["git", "init", "-q"], cwd=plain, check=True)
-        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config)}), \
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config), "HOME": str(self.home),
+                                          "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin"}, clear=True), \
                 contextlib.redirect_stdout(io.StringIO()):
             from keyfit.cli import main
             main(["init", "--yes", "--root", str(plain), "--name", "plain"])
@@ -269,6 +272,9 @@ class AddGithubMergeTests(unittest.TestCase):
         from keyfit.registry import Registry
         import keyfit.cli as cli
         tmp = Path(tempfile.mkdtemp()).resolve()
+        self.enterContext(mock.patch.dict(os.environ, {"HOME": str(tmp), "PATH": "/usr/bin:/bin",
+                                                       "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+                                                       "KEYFIT_CONFIG_DIR": str(tmp / "keyfit")}, clear=True))
         repos = []
         for name, remote in (("a", "git@github.com:org/a.git"), ("b", "https://github.com/org/b")):
             repo = tmp / name
@@ -312,7 +318,9 @@ class AddGithubMergeTests(unittest.TestCase):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 code = main(["--registry", str(reg), *argv])
             return code, out.getvalue(), err.getvalue()
-        with mock.patch.dict(os.environ, {"HOME": str(tmp), "GIT_CONFIG_NOSYSTEM": "1"}), \
+        with mock.patch.dict(os.environ, {"HOME": str(tmp), "PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1",
+                                          "GIT_CONFIG_GLOBAL": "/dev/null", "KEYFIT_CONFIG_DIR": str(tmp / "keyfit")},
+                             clear=True), \
                 mock.patch.object(gh, "read_token", lambda login, env, timeout=15: (f"tok-{login}", "")), \
                 mock.patch.object(cli.ADAPTERS["github"], "whoami", lambda token: WHO[token]):
             for name in ("acme", "globex"):

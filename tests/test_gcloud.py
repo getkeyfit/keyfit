@@ -135,7 +135,7 @@ class GcloudCase(unittest.TestCase):
             self.fetched.append(url)
             return api(url, token, timeout)
         adapter = ADAPTERS["gcloud"]
-        for patcher in (mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+        for patcher in (mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch.object(adapter, "run", self.gcloud), mock.patch.object(adapter, "fetch", fetch),
                         mock.patch.object(secrets, "SECURITY", "/nonexistent/security"),
                         mock.patch.dict(os.environ, self.env, clear=True)):
@@ -395,6 +395,22 @@ class AdapterTests(GcloudCase):
         files = sorted(p.name for p in self.store.iterdir())
         gcloud.signed_in(self.env)
         self.assertEqual(sorted(p.name for p in self.store.iterdir()), files)  # read-only: no journal, nothing new
+
+    def test_credentials_db_gives_up_the_account_column_only(self):
+        read, connect = [], sqlite3.connect
+
+        def authorizer(action, table, column, *_):
+            if action == sqlite3.SQLITE_READ:
+                read.append((table, column))
+            return sqlite3.SQLITE_OK
+
+        def watched(*args, **kwargs):
+            db = connect(*args, **kwargs)
+            db.set_authorizer(authorizer)
+            return db
+        with mock.patch("sqlite3.connect", watched):
+            self.assertEqual(sorted(gcloud.signed_in(self.env)), sorted([ACME, GLOBEX, PERSONAL, DEPLOYER]))
+        self.assertEqual(set(read), {("credentials", "account_id")})  # never the value column, the credential
 
     def test_options_and_words_are_read_like_gcloud(self):
         args = ["--project", "p", "compute", "--account=a@b.io", "instances", "list", "--configuration", "c", "--",
@@ -833,6 +849,18 @@ class AddTests(GcloudCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(self.registry()["accounts"]["gcloud"]["acme"]["config_dir"], str(moved))
         self.assertEqual(self.gcloud.calls[-1]["env"]["CLOUDSDK_CONFIG"], str(moved))
+
+    def test_a_relative_gcloud_folder_is_taken_from_the_current_one(self):
+        moved = self.tmp / "gcloud-elsewhere"
+        self.store.rename(moved)
+        with mock.patch.dict(os.environ, {"CLOUDSDK_CONFIG": "../gcloud-elsewhere"}):  # from repos/client, as gcloud
+            self.assertEqual(sorted(gcloud.signed_in(dict(os.environ))), sorted([ACME, GLOBEX, PERSONAL, DEPLOYER]))
+            code, out, err = self.keyfit("add", "google")
+            self.assertEqual(code, 1)
+            self.assertIn("keyfit add google --email <work or personal email> (gcloud knows ", err)
+            code, out, err = self.keyfit("add", "gcloud", "--configuration", "acme")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.registry()["accounts"]["gcloud"]["acme"]["config_dir"], str(moved))
 
     def test_guided_init_offers_the_google_account_then_its_configurations(self):
         base = {"registry": None, "project": "client"}

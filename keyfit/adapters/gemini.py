@@ -40,6 +40,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shlex
 import time
 from pathlib import Path
@@ -53,6 +54,7 @@ from .google import EMAIL, same
 
 HOME_VAR = "GEMINI_CLI_HOME"
 KEY_VAR = "GEMINI_API_KEY"
+KEY_SHAPE = re.compile(r"AIza[0-9A-Za-z_-]{35}")  # a Google API key: nothing else is sent to Google
 MARK = "KEYFIT_GEMINI"  # set next to the GEMINI_CLI_HOME Keyfit injected: the account's name
 KEY_MARK = "KEYFIT_GEMINI_KEY"  # set when the GEMINI_API_KEY is one Keyfit injected
 GOOGLE, API_KEY = "oauth-personal", "gemini-api-key"  # Gemini CLI's names of the two methods
@@ -462,6 +464,9 @@ class GeminiAdapter(Adapter):
         if is_key(conn):
             if not env.get(KEY_VAR):
                 return fail(f"the API key ({secrets.describe(conn['key'])}) is missing", "keyfit add gemini --key")
+            if not KEY_SHAPE.fullmatch(env[KEY_VAR]):  # `env:VAR` can name any variable, such as a GitHub token
+                return fail(f"{secrets.describe(conn['key'])} does not hold a Gemini API key (AIza…), so it was not sent "
+                            "to Google", "keyfit add gemini --key")
             return ok("")
         account = conn.get("account")
         if not isinstance(account, str) or not EMAIL.fullmatch(account):

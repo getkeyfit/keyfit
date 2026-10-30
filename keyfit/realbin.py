@@ -44,7 +44,11 @@ def find_real(name: str, env: dict, skip: tuple[Path, ...] = (), skip_wrappers: 
     for entry in env.get("PATH", "").split(os.pathsep):
         if not entry:
             continue
-        if canonical(entry) in skipped or is_shim_dir(Path(entry)):
+        try:
+            here = canonical(entry)
+        except OSError:  # a relative entry (`.`, node_modules/.bin) in a deleted folder: nothing runs from there
+            continue
+        if here in skipped or is_shim_dir(Path(entry)):
             continue
         candidate = Path(entry) / name
         if candidate.is_file() and os.access(candidate, os.X_OK):

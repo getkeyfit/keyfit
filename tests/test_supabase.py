@@ -90,7 +90,7 @@ class SupabaseCase(unittest.TestCase):
         def fetch(path, token, timeout):
             self.fetched.append(path)
             return api(path, token, timeout)
-        for patcher in (mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+        for patcher in (mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch.object(ADAPTERS["supabase"], "fetch", fetch),
                         mock.patch.object(secrets, "SECURITY", str(self.stub / "security")),
                         mock.patch.dict(os.environ, self.env, clear=True)):
@@ -624,6 +624,18 @@ class AddSupabaseTests(SupabaseCase):
         code, out, err = self.add("--token", "BOTH_TOKEN", "--org", "globex")
         self.assertEqual(code, 0, err)
         self.assertEqual(self.registry()["accounts"]["supabase"]["globex"]["org"], "globex-org")
+
+    def test_organization_names_never_drive_the_terminal(self):
+        # KEY-82: an organization's name is whatever its owner typed, escape sequences included
+        os.environ["BOTH_TOKEN"] = BOTH
+        with mock.patch.dict(ORG_NAMES, {"acme-org": "Acme\x1b]0;owned\x07", "globex-org": "Globex\x1b[2J"}):
+            code, out, err = self.add("--token", "BOTH_TOKEN")
+            self.assertIn(r"(Acme\x1b]0;owned\x07 (acme-org), Globex\x1b[2J (globex-org))", err)
+            code, out, err = self.add("--token", "BOTH_TOKEN", "--org", "globex-org")
+        self.assertEqual(code, 0, err)
+        self.assertIn(r"→ organization Globex\x1b[2J (globex-org) via $BOTH_TOKEN", out)
+        self.assertNotIn("\x1b", out + err)
+        self.assertEqual(self.registry()["accounts"]["supabase"]["globex-2j"]["org_name"], "Globex\x1b[2J")  # readable
 
     def test_linked_folder_decides_the_organization(self):
         os.environ["BOTH_TOKEN"] = BOTH

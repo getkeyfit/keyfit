@@ -47,13 +47,14 @@ SCRUB = ("VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "NOW_ORG_ID", "NO
 API = "https://api.vercel.com"
 APP = "com.vercel.cli"
 LINKS = (".vercel/project.json", ".vercel/repo.json", ".now/project.json")
-# The CLI's global options that choose the login, the team or the folder it works on. Its parser (arg) reads
-# `--name value`, `--name=value` and `-x value`, also as the last letter of a group (`-dS acme`); `--` ends options.
+# The CLI's global options that choose the login, the team, the folder it works on or the host its token goes to
+# (--api). Its parser (arg) reads `--name value`, `--name=value` and `-x value`, also as the last letter of a group
+# (`-dS acme`); `--` ends options.
 SHORT = {"Q": "--global-config", "S": "--scope", "T": "--team", "t": "--token"}
-LONG = {"--global-config", "--scope", "--team", "--token", "--cwd"}
+LONG = {"--global-config", "--scope", "--team", "--token", "--cwd", "--api"}
 # Its other global options, with a value, then without. Any other option before the first word belongs to deploy,
 # the default command: `vercel --prod app` deploys app.
-VALUED, SHORT_VALUED = LONG | {"--local-config", "--api"}, {*SHORT, "A"}
+VALUED, SHORT_VALUED = LONG | {"--local-config"}, {*SHORT, "A"}
 GLOBAL = VALUED | {"--help", "--version", "--debug", "--no-color", "--non-interactive", "--changelog"}
 SHORT_GLOBAL = SHORT_VALUED | {"h", "v", "d"}
 
@@ -138,7 +139,8 @@ def refresh(folder: Path, env: dict, timeout: float = 30) -> str:
 
 
 def options(args: list[str]) -> list[tuple[str, str | None]]:
-    """(long name, value) of each --global-config, --scope, --team, --token and --cwd option, read like the CLI."""
+    """(long name, value) of each --global-config, --scope, --team, --token, --cwd and --api option, read like the
+    CLI."""
     found, i = [], 0
     while i < len(args):
         arg = args[i]

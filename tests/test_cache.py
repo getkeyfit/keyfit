@@ -3,6 +3,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
@@ -10,8 +11,8 @@ from keyfit import cache  # noqa: E402
 
 
 class CacheTests(unittest.TestCase):
-    def setUp(self):
-        os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()
+    def setUp(self):  # restored afterwards, with test_unwritable_cache_never_breaks_a_launch's /dev/null/keyfit
+        self.enterContext(mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": tempfile.mkdtemp()}))
 
     def test_parallel_writes_do_not_raise(self):
         errors = []
@@ -41,6 +42,19 @@ class CacheTests(unittest.TestCase):
         cache.put("a", "ok", "x")  # must not raise
         cache.drop("a")
         self.assertIsNone(cache.get("a"))
+
+    def test_a_file_of_another_shape_counts_as_empty(self):
+        # KEY-82: a hand-edited cache (`[]`, `null`) stopped every tool with "internal error" until it was deleted
+        path = Path(os.environ["KEYFIT_CONFIG_DIR"]) / "cache" / "checks.json"
+        path.parent.mkdir()
+        for text in ("[]", "null", '"x"', '{"a": 5}', '{"a": {"at": "soon", "status": "ok", "detail": "x"}}',
+                     '{"a": {"at": 1e12, "status": "great", "detail": "x"}}', '{"a": {"at": 1e12, "status": "ok"}}'):
+            with self.subTest(text=text):
+                path.write_text(text)
+                self.assertIsNone(cache.get("a", now=1e12))
+                cache.drop("a")
+                cache.put("b", "ok", "y")
+                self.assertEqual(cache.get("b")["detail"], "y")
 
     def test_drop_forgets_one_entry(self):
         cache.put("a", "ok", "x")
