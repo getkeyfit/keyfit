@@ -16,7 +16,7 @@ from unittest import mock
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
-from keyfit import mcp  # noqa: E402
+from keyfit import mcp, secrets  # noqa: E402
 from keyfit import environment  # noqa: E402
 from keyfit.adapters.opencode import OpenCodeAdapter, default_db, scrub, signed_in  # noqa: E402
 from keyfit.cli import main  # noqa: E402
@@ -54,7 +54,7 @@ def add_login(path: Path, provider: str, label: str) -> None:
 # Fake opencode. `auth list --standalone --format json` lists the sign-ins of the database OPENCODE_DB names (else the
 # default one), and provider keys from the environment, as OpenCode 2.0.25 does; it logs what it was started with.
 # `auth login PROVIDER --standalone` adds a sign-in to that database. Anything else prints its argv and environment.
-FAKE_OPENCODE = """#!/usr/bin/env python3
+FAKE_OPENCODE = f"#!{sys.executable}" + """
 import json, os, sqlite3, sys
 args = sys.argv[1:]
 home = os.environ["HOME"]
@@ -417,7 +417,8 @@ class ShimTests(unittest.TestCase):
         for folder in (self.repo, self.other):
             subprocess.run(["git", "init", "-q"], cwd=folder, check=True)
         self.db = self.config / "opencode" / "work" / "opencode.db"
-        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config)}):
+        with mock.patch.dict(os.environ, {"KEYFIT_CONFIG_DIR": str(self.config), "HOME": str(self.home),
+                                          "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin"}, clear=True):
             with contextlib.redirect_stdout(io.StringIO()):
                 main(["init", "--yes", "--root", str(self.repo), "--name", "demo"])
                 main(["init", "--yes", "--root", str(self.other), "--name", "globex"])
@@ -488,6 +489,20 @@ class ShimTests(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout, "fake sign-in done\n")
         self.assertEqual(signed_in(self.db)[0], {"openai": ["Fresh"]})
+
+    def test_a_sign_in_starts_without_the_shells_keys_and_other_projects_servers(self):
+        # its private server takes provider keys from the environment and starts the configuration's MCP servers
+        from keyfit.shim import login_environment
+
+        shell = {"HOME": str(self.home), "PATH": "/usr/bin:/bin", "KEYFIT_CONFIG_DIR": str(self.config),
+                 "ANTHROPIC_API_KEY": "sk-inherited", "GITHUB_TOKEN": "gho_inherited"}
+        cwd = os.getcwd()
+        os.chdir(self.repo)
+        self.addCleanup(os.chdir, cwd)
+        with mock.patch.dict(os.environ, shell, clear=True):
+            env = login_environment("opencode", Registry.load().get("demo"), dict(shell))
+        self.assertEqual([var for var in ("ANTHROPIC_API_KEY", "GITHUB_TOKEN") if var in env], [])
+        self.assertEqual(sorted(json.loads(env["OPENCODE_CONFIG_CONTENT"])["mcp"]), ["globex_cloud_eu"])
 
     def test_expired_sign_in_is_offered_in_a_terminal(self):
         import pty
@@ -675,7 +690,8 @@ class AddTests(unittest.TestCase):
         self.config = self.tmp / "keyfit"
         for patcher in (mock.patch.dict(os.environ, {"HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config),
                                                      "PATH": "/usr/bin:/bin"}, clear=True),
-                        mock.patch.object(Path, "home", return_value=self.home)):
+                        mock.patch.object(Path, "home", return_value=self.home),
+                        mock.patch.object(secrets, "SECURITY", "/nonexistent/security")):  # never the real Keychain
             patcher.start()
             self.addCleanup(patcher.stop)
         cwd = os.getcwd()

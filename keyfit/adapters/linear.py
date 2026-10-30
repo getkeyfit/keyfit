@@ -1,7 +1,7 @@
 """Linear: one workspace per project, reached with that workspace's API key.
 
 Connection:  linear = { workspace = "acme", key = "env:LINEAR_ACME_API_KEY" }
-             key may also be keychain:<service>/<account>; optional readonly = true
+             key may also be keychain:<service>/<account>
 
 inject  — read the project's key, remove every other Linear key variable from
           the environment (the shell carries one per workspace), and expose the
@@ -134,10 +134,10 @@ class LinearAdapter(Adapter):
         return org["urlKey"], ""
 
     def mcp_servers(self, conn) -> dict:
-        url = MCP_URL + ("/readonly" if conn.get("readonly") else "")
         return {
-            "claude": {"linear": {"type": "http", "url": url, "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}},
-            "codex": {"linear": {"url": url, "bearer_token_env_var": "LINEAR_API_KEY"}},
+            "claude": {"linear": {"type": "http", "url": MCP_URL,
+                                  "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}},
+            "codex": {"linear": {"url": MCP_URL, "bearer_token_env_var": "LINEAR_API_KEY"}},
         }
 
 

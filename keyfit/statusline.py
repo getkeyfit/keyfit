@@ -12,8 +12,8 @@ import sys
 def main() -> int:
     sys.stdin.read()
     summary = os.environ.get("KEYFIT_SUMMARY")
-    if summary:
-        print(f"keyfit · {summary}")
+    if summary:  # control characters shown escaped, as checks.printable does: never an escape sequence to the terminal
+        print("keyfit · " + "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in summary))
     return 0
 
 

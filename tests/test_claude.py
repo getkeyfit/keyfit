@@ -22,7 +22,7 @@ from keyfit.shim import Refused, adjust_args
 
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
-FAKE_CLAUDE = """#!/usr/bin/env python3
+FAKE_CLAUDE = f"#!{sys.executable}" + """
 import json, os, sys
 assert sys.argv[1:] == ["auth", "status", "--json"], sys.argv
 folder = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude")
@@ -32,7 +32,7 @@ logins = json.loads(os.environ.get("FAKE_CLAUDE", "{}"))
 login = logins.get(os.path.realpath(folder))
 if not login:
     print(json.dumps({"loggedIn": False, "authMethod": "none", "configDirectory": folder})); sys.exit(1)
-print(json.dumps(dict(login, loggedIn=True, configDirectory=folder)))
+print(json.dumps({"loggedIn": True, "configDirectory": folder, **login}))  # a login may name another folder
 """
 
 WORK = {"authMethod": "claude.ai", "email": "me@work.io", "orgId": "org-work", "orgName": "Work", "subscriptionType": "team"}
@@ -112,6 +112,21 @@ class ClaudeTests(unittest.TestCase):
         self.assertTrue(check.failed)
         self.assertEqual(check.fix, f"CLAUDE_CONFIG_DIR={self.other} claude auth login")
 
+    def test_claude_reporting_another_config_directory_fails(self):
+        login = dict(WORK, configDirectory=str(self.other))  # e.g. a wrapper that moved Claude to another login
+        _, check = self.run_verify(self.work, {str(self.home / ".claude"): login})
+        self.assertTrue(check.failed)
+        self.assertEqual(check.detail, f"Claude used config directory {self.other}")
+
+    def test_fingerprint_follows_the_org_the_folder_is_signed_in_to(self):
+        # a cached success never vouches for a folder signed in to another org since
+        for conn, state in ((self.work, self.home / ".claude.json"),
+                            (dict(self.work, config_dir=str(self.other)), self.other / ".claude.json")):
+            state.write_text(json.dumps({"oauthAccount": {"organizationUuid": "org-work"}}))
+            before = self.claude.fingerprint(conn, self.env())
+            state.write_text(json.dumps({"oauthAccount": {"organizationUuid": "org-other"}}))
+            self.assertNotEqual(self.claude.fingerprint(conn, self.env()), before, state)
+
     def test_wrong_org_fails(self):
         _, check = self.run_verify(self.work, {str(self.home / ".claude"): dict(WORK, orgId="org-other", orgName="Other")})
         self.assertTrue(check.failed)
@@ -120,6 +135,16 @@ class ClaudeTests(unittest.TestCase):
     def test_any_login_of_the_org_passes(self):  # account switchers such as claude-swap move between them
         _, check = self.run_verify(self.work, {str(self.home / ".claude"): dict(WORK, email="you@work.io")})
         self.assertEqual(check.status, "ok", check.detail)
+
+    def test_claude_code_that_does_not_name_its_config_directory(self):
+        older = FAKE_CLAUDE.replace('"loggedIn": True, "configDirectory": folder, **login', '"loggedIn": True, **login')
+        self.assertNotEqual(older, FAKE_CLAUDE)  # the fake's answer really lost its configDirectory
+        (self.bin / "claude").write_text(older)
+        conn = dict(self.work, config_dir=str(self.other))  # before 2.1.268: no configDirectory in auth status
+        _, check = self.run_verify(conn, {str(self.other): WORK})
+        self.assertEqual((check.status, check.detail), ("ok", "Work (team) confirmed"))
+        _, check = self.run_verify(conn, {str(self.other): dict(WORK, orgId="org-other", orgName="Other")})
+        self.assertEqual(check.detail, "signed in to org 'Other', project expects 'Work'")
 
     def test_a_personal_account_takes_any_claude_login(self):
         personal = {"name": "personal", "config_dir": str(self.home / ".claude"), "email": "me@home.io",

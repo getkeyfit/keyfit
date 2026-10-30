@@ -45,7 +45,7 @@ echo "convex ran" >&2
 exit 0
 """
 # Fake npx: `npx convex login --force` writes the login it is given in NEW_CONVEX_LOGIN, as the real one does.
-FAKE_NPX = """#!/usr/bin/env python3
+FAKE_NPX = f"#!{sys.executable}" + """
 import json, os, sys
 home = os.environ["HOME"]
 with open(os.path.join(home, "npx-calls.log"), "a") as fh:
@@ -111,7 +111,7 @@ class ConvexCase(unittest.TestCase):
         def fetch(path, tok, timeout):
             self.fetched.append(path)
             return api(path, tok, timeout)
-        for patcher in (mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+        for patcher in (mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch.object(ADAPTERS["convex"], "fetch", fetch),
                         mock.patch.object(secrets, "SECURITY", str(self.stub / "security")),
                         mock.patch.dict(os.environ, self.env, clear=True)):
@@ -573,6 +573,17 @@ class ShimTests(ConvexCase):
         code, argv, env = self.run_shim("deploy", "--deployment-name", "brave-otter-456")
         self.assertEqual(argv, ["convex", "deploy", "--deployment-name", "brave-otter-456"], self.stderr)
         self.assertNotIn("CONVEX_OVERRIDE_ACCESS_TOKEN", env)  # the project key stays the CLI's login
+
+    def test_a_deployment_convex_cannot_be_asked_about_is_refused(self):
+        def down(path, tok, timeout):  # the teams answer (the check passes); the deployment lookup does not
+            if path.startswith("/api/deployment/"):
+                raise urllib.error.URLError("Network is unreachable")
+            return api(path, tok, timeout)
+        with mock.patch.object(ADAPTERS["convex"], "fetch", down):
+            code, argv, _ = self.run_shim("deploy", "--deployment-name", "happy-animal-123")
+        self.assertEqual((code, argv), (1, None))
+        self.assertIn("refusing --deployment-name happy-animal-123: Convex did not answer (Network is unreachable) "
+                      "(check the network and retry).", self.stderr)
 
     def test_confirmed_deployments_are_cached(self):
         self.run_shim("deploy", "--deployment-name", "happy-animal-123")

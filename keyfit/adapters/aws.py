@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -68,14 +69,14 @@ def _home(env: dict) -> Path:
 
 
 def config_path(env: dict) -> Path:
-    if env.get("AWS_CONFIG_FILE"):
-        return Path(env["AWS_CONFIG_FILE"]).expanduser()
+    if env.get("AWS_CONFIG_FILE"):  # botocore expands $VARIABLES and ~ in both file names
+        return Path(os.path.expandvars(env["AWS_CONFIG_FILE"])).expanduser()
     return _home(env) / ".aws" / "config"
 
 
 def credentials_path(env: dict) -> Path:
     if env.get("AWS_SHARED_CREDENTIALS_FILE"):
-        return Path(env["AWS_SHARED_CREDENTIALS_FILE"]).expanduser()
+        return Path(os.path.expandvars(env["AWS_SHARED_CREDENTIALS_FILE"])).expanduser()
     return _home(env) / ".aws" / "credentials"
 
 
@@ -101,19 +102,36 @@ def _parse(path: Path) -> configparser.RawConfigParser | None:
     return cfg
 
 
+def _name(section: str, kind: str) -> str | None:
+    """The profile or sso-session a section names, read as botocore reads it: split like a shell, so `[profile  acme]`
+    and `[profile "acme"]` are profile acme."""
+    if not section.startswith(kind):
+        return None
+    try:
+        parts = shlex.split(section)
+    except ValueError:
+        return None
+    return parts[1] if len(parts) == 2 else None
+
+
+def _section(cfg: configparser.RawConfigParser, kind: str, name: str) -> str | None:
+    """The section of profile or sso-session *name*; of several, the last, as in botocore."""
+    return next((s for s in reversed(cfg.sections()) if _name(s, kind) == name), None)
+
+
 def profile_names(env: dict) -> list[str]:
     """The named profiles in the AWS config file, in file order (never `default`)."""
     cfg = _parse(config_path(env))
     if cfg is None:
         return []
-    return [section[8:].strip() for section in cfg.sections() if section.startswith("profile ")]
+    return list(dict.fromkeys(n for n in (_name(s, "profile") for s in cfg.sections()) if n is not None))
 
 
 def read_profile(name: str, env: dict) -> Profile:
     cfg = _parse(config_path(env))
     if cfg is None:
         return Profile(name, "unreadable")
-    section = "default" if name == "default" else f"profile {name}"
+    section = "default" if name == "default" else _section(cfg, "profile", name)
 
     def get(key: str) -> str | None:
         return cfg.get(section, key).strip() if cfg.has_option(section, key) else None
@@ -129,8 +147,8 @@ def read_profile(name: str, env: dict) -> Profile:
         return Profile(name, from_credentials_file() or "missing")
     if get("sso_session") or get("sso_start_url"):
         session, url = get("sso_session"), get("sso_start_url")
-        session_section = f"sso-session {session}"
-        if session and not url and cfg.has_option(session_section, "sso_start_url"):
+        session_section = _section(cfg, "sso-session", session) if session else None
+        if session_section and not url and cfg.has_option(session_section, "sso_start_url"):
             url = cfg.get(session_section, "sso_start_url").strip()
         return Profile(name, "sso", account_hint=get("sso_account_id"), sso_session=session, sso_start_url=url)
     if get("login_session"):
@@ -150,9 +168,10 @@ def _parse_time(value) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("UTC", "+00:00").replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("UTC", "+00:00").replace("Z", "+00:00"))
     except ValueError:
         return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)  # without a zone: UTC, as AWS writes them
 
 
 def _now() -> datetime:
@@ -294,7 +313,7 @@ class AwsAdapter(Adapter):
 
     def identify(self, profile: str, env: dict) -> tuple[str | None, str, bool]:
         """Return (account, "", False) or (None, reason, transient) from `aws sts get-caller-identity`."""
-        aws = find_real("aws", env)
+        aws = find_real("aws", env, skip_wrappers=True)
         if aws is None:
             return None, NO_CLI, False
         cmd = [aws, "sts", "get-caller-identity", "--profile", profile, "--query", "Account",
@@ -309,7 +328,8 @@ class AwsAdapter(Adapter):
             return None, f"AWS did not answer within {self.timeout:g} s", True
         if out.returncode != 0:
             lines = [line.strip() for line in out.stderr.splitlines() if line.strip()]
-            reason = (lines[-1] if lines else f"aws exited with {out.returncode}")[:200]
+            reason = (lines[-1] if lines else f"aws exited with {out.returncode}")
+            reason = re.sub(r"(?<!\d)\d{8}(\d{4})(?!\d)", r"…\1", reason)[:200]  # account IDs (in ARNs) as mask_account
             network = any(s in reason for s in ("Could not connect", "EndpointConnectionError", "Connect timeout",
                                                   "Read timeout", "Temporary failure in name resolution"))
             return None, reason, network
@@ -348,6 +368,6 @@ def parse_envrc(text: str) -> dict | None:
     """Read a `use aws PROFILE ACCOUNT` line (a direnv helper) from an .envrc, if present."""
     for line in text.splitlines():
         m = re.match(r"^\s*use\s+aws\s+(\S+)\s+(\d{12})\s*(?:#.*)?$", line)
-        if m:
+        if m and m.group(1).isprintable():  # never an escape sequence from a repository into the registry
             return {"profile": m.group(1), "account": m.group(2)}
     return None

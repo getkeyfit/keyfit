@@ -134,13 +134,16 @@ class FirebaseCase(unittest.TestCase):
         self.env = {"HOME": str(self.home), "PATH": f"{self.bin}{os.pathsep}/usr/bin:/bin",
                     "KEYFIT_CONFIG_DIR": str(self.config)}
         self.firebase = FakeFirebase(self)
-        self.fetched = []
+        self.fetched, self.sent = [], []
 
         def fetch(url, token, timeout):
             self.fetched.append(url)
+            self.sent.append(token)
             return api(url, token, timeout)
+        # whatever a test does, the CLI's refresh tokens stay with the CLI: Keyfit sends access tokens only
+        self.addCleanup(lambda: self.assertEqual([t for t in self.sent if t.startswith("1//")], []))
         adapter = ADAPTERS["firebase"]
-        for patcher in (mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network in tests")),
+        for patcher in (mock.patch("keyfit.http.urlopen", side_effect=AssertionError("no network in tests")),
                         mock.patch.object(adapter, "run", self.firebase), mock.patch.object(adapter, "fetch", fetch),
                         mock.patch.object(secrets, "SECURITY", "/nonexistent/security"),
                         mock.patch.dict(os.environ, self.env, clear=True)):
@@ -302,6 +305,25 @@ class AdapterTests(FirebaseCase):
         self.assertEqual(self.check().status, "ok")
         self.assertEqual(firebase.firebase_bin(self.env, self.repos["client"]),
                          str(self.repos["client"] / "node_modules" / ".bin" / "firebase"))
+
+    def test_the_projects_own_cli_is_looked_for_up_to_its_top_only(self):
+        # these folders are outside HOME: a node_modules/.bin another user made in a shared folder above never runs
+        shared = self.tmp / "node_modules" / ".bin"
+        shared.mkdir(parents=True)
+        executable(shared / "firebase", FAKE_FIREBASE)
+        package = self.outside / "package"  # no repository: up to the nearest package.json
+        (package / "src").mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        loose = self.outside / "loose" / "deeper"  # no repository and no package.json: that folder only
+        loose.mkdir(parents=True)
+        for start in (self.repos["client"], self.app, package / "src", loose):
+            with self.subTest(start=start):
+                self.assertEqual(firebase.firebase_bin(self.env, start), str(self.bin / "firebase"))
+        (self.app / "package.json").write_text("{}")  # a monorepo's package: the CLI hoisted to the top still counts
+        for top, start in ((self.repos["mono"], self.app), (package, package / "src")):
+            (top / "node_modules" / ".bin").mkdir(parents=True)
+            executable(top / "node_modules" / ".bin" / "firebase", FAKE_FIREBASE)
+            self.assertEqual(firebase.firebase_bin(self.env, start), str(top / "node_modules" / ".bin" / "firebase"))
 
     def test_not_signed_in_or_not_as_the_account(self):
         self.data["additionalAccounts"] = [{"user": user(GLOBEX), "tokens": tokens(GLOBEX)}]
@@ -832,6 +854,18 @@ class AddTests(FirebaseCase):
         code, out, err = self.keyfit("add", "google", "--email", ACME)
         self.assertIn(f"  next: the firebase CLI's folder {self.repos['client']} is bound to {PERSONAL}, the project's "
                       f"Google account is {ACME}\n  → firebase login:use {ACME}\n", out)
+
+    def test_guided_init_never_sends_the_repositorys_firebaserc_to_the_terminal(self):
+        # KEY-82: the project ID offered comes from the repository's .firebaserc
+        self.firebase_folder(self.repos["client"], {"default": "acme\x1b]0;owned\x07"})
+        base = {"registry": None, "project": "client"}
+        with mock.patch.object(cli, "_ask", side_effect=["y"]) as ask, contextlib.redirect_stdout(io.StringIO()) as out, \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            cli._offer_firebase("client", base)
+        self.assertIn(r"works on Firebase project acme\x1b]0;owned\x07", out.getvalue())
+        self.assertEqual(ask.call_args[0][0], r"Use Firebase project acme\x1b]0;owned\x07 for client? [y/N] ")
+        self.assertIn("is not a Firebase project ID", err.getvalue())  # and so it is not recorded
+        self.assertNotIn("\x1b", out.getvalue() + err.getvalue())
 
     def test_guided_init_offers_the_google_account_then_the_firebase_project(self):
         base = {"registry": None, "project": "client"}

@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-30
+
+Fixes from a review of 0.1.0. After upgrading, run `keyfit setup` once to rewrite your shims.
+
+### Removed
+
+- **`keyfit add linear --readonly`.** It was recorded in the registry, but nothing read it: no MCP server Keyfit
+  sets up uses Linear's read-only endpoint, and the docs never offered it. A `readonly = true` already in the
+  registry is ignored.
+
+### Fixed
+
+- **The AWS check skips Superset's agent wrappers too.** It ran the first `aws` on PATH after
+  Keyfit's shims, so an `aws` in `~/.superset/bin` would have answered it; like every other check,
+  it now runs the first one after Superset's wrappers as well, as the security page says.
+- A tool started in a folder that no longer exists (a removed worktree) says so and doesn't start, instead
+  of `internal error (FileNotFoundError …)`, or a Python traceback when `.` or `node_modules/.bin` is on
+  PATH. `KEYFIT_DISABLE=1` still starts it.
+- AWS: an SSO or `aws login` cache time without a zone is read as UTC instead of ending in `internal error
+  (TypeError …)`. Sections written `[profile  acme]` or `[profile "acme"]` (and `sso-session` sections
+  written that way) are found, as the AWS CLI reads them, instead of "no profile 'acme'". `$VARIABLES` in
+  `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` are expanded, as the AWS CLI does, and `keyfit add
+  aws` keeps the expanded file.
+- A relative `CLOUDSDK_CONFIG` no longer crashes `keyfit add google`, `keyfit add gcloud`, `keyfit add
+  firebase` and `keyfit init`; it is taken from the current folder, as gcloud does.
+- With Claude Code older than 2.1.268, whose `claude auth status --json` doesn't name its config folder,
+  every check failed ("Claude used config directory None"). The organisation alone decides then.
+- **A shim whose Python is gone** (for example, Homebrew removed the Python that pipx's Keyfit ran on) says so and
+  names the fix, `pipx reinstall keyfit` (or `brew reinstall keyfit`), then `keyfit setup`, instead of only
+  `keyfit setup`, which can't run either. `KEYFIT_DISABLE=1` now runs the tool when Keyfit can't start, too. Run
+  `keyfit setup` once to rewrite your shims.
+- **Setup edge cases.** `keyfit setup --rc` on a startup file that isn't UTF-8, on a folder or with a `ZDOTDIR`
+  that doesn't exist printed a traceback after writing the shims; it now keeps every byte of such a file, or says
+  which line to add by hand. `--remove` said "No Keyfit line" in a file that isn't UTF-8 and deleted the PATH file
+  that line loads, so every new zsh printed an error; it now takes the line out. A commented-out Keyfit line no
+  longer counts as active. `--remove --purge` with `~/.config/keyfit` a symbolic link stops before changing
+  anything instead of half-way. An unwritable config folder is said in one line instead of a traceback.
+- **Ctrl-C during online checks** (`keyfit status`, the end of `keyfit init`) stops at once with exit status 130,
+  instead of waiting for the slowest check (up to 40 seconds) and then printing a traceback.
+- **Hand edits.** `roots = ["."]` is refused: a relative root made every folder the project. A number or a date
+  where Keyfit writes text (`config_dir = 5`, `token = 5`, `login = 5`) fails that account's check, and stops its
+  sign-in commands, instead of an internal error. A check cache of another shape (`[]`, `null`) counts as empty
+  instead of stopping every tool until it was deleted.
+- **The tests no longer depend on the Mac that runs them.** They never read your home folder, git
+  identity, Keychain or the tokens of a Keyfit session they run in, and their guard against the
+  network now covers the requests Keyfit actually makes. Their fake tools run on the Python that
+  runs the tests, so a Mac without the Command Line Tools runs them too. New tests cover
+  `keyfit run`, every online check's request, and paths that had none.
+
+### Security
+
+- The firebase CLI Keyfit runs to renew a sign-in and at `Sign in now?` is looked for in `node_modules/.bin`
+  no higher than the repository's top (outside a repository, the nearest `package.json`) or your home
+  folder. For a project outside your home folder the search went up to `/`, so a
+  `node_modules/.bin/firebase` another local user created in `/private/tmp` or `/Users/Shared` could run.
+- The project's own wrangler, which Keyfit runs for its Cloudflare check, `keyfit add cloudflare`, `Sign in
+  now?` and `Bind this folder now?`, is looked for the same way: for a project outside your home folder the
+  search for `node_modules/.bin/wrangler` went up to `/` too.
+- **Only a Google API key goes to Google.** `keyfit add gemini --key` sent any printable value to the
+  Gemini API and stored it, so a typo such as `--key env:GITHUB_TOKEN` shipped a GitHub token to Google.
+  Now only a value shaped like a Google API key (`AIza…`) is sent, there and in the Gemini check.
+- **A key typed where a name belongs is never repeated.** argparse echoed it (`keyfit add linear
+  lin_api_…` without `--key`: `unrecognized arguments: lin_api_…`), and so did the messages about
+  `--profile`, `--login`, `--email` and `--workspace`. It is now shown as `<a key, not shown>`, and those
+  options refuse a key before anything runs.
+- **A key written into the registry by hand** (`linear = "lin_api_…"`) is named, not shown, in
+  `keyfit status`, `keyfit which -v` and every failed start.
+- **AWS errors show account IDs as their last four digits.** The error Keyfit passes on from `aws sts
+  get-caller-identity` (an AccessDenied with an ARN, say) showed them in full.
+- **`vercel --api URL` is refused inside a project**: every request carries the login's token. Vercel's
+  own API may still be named.
+- **Control characters can't lock the registry or drive the terminal.** Written as they were, a control character
+  in a project name, or in an AWS profile imported from a repository's `.envrc` on `keyfit init`, made
+  `registry.toml` unreadable, so every `keyfit` command and all thirteen tools stopped, in every folder. The registry
+  now escapes them, project names refuse them and `.envrc` profiles with them are not imported. Supabase
+  organization names, `.firebaserc` project IDs, Google Workspace server names and the emails in their login files,
+  and the Claude status line show them escaped.
+- **Folder names can't run commands through the generated shell code.** The shims, the PATH files and the
+  startup-file line put paths in double quotes, so a `$`, backtick or quote in the install or config folder's name
+  made every tool exit 127, and a backtick ran its command at every launch. Such paths are now single-quoted;
+  others are written as before. Run `keyfit setup` once to rewrite them.
+
 ## [0.1.0] - 2026-10-27
 
 First published version. macOS only; Python 3.11 or newer, no other dependencies.
@@ -677,5 +759,6 @@ From the third pre-launch review:
   Any name with `LINEAR` and `KEY` or `TOKEN`, in any case, now goes (LinearB's `LINEARB_…` stays); the
   project's own variable is set again.
 
-[Unreleased]: https://github.com/getkeyfit/keyfit/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/getkeyfit/keyfit/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/getkeyfit/keyfit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/getkeyfit/keyfit/releases/tag/v0.1.0
