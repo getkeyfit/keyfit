@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-30
+
+Fixes from a review of 0.1.0. After upgrading, run `keyfit setup` once to rewrite your shims.
+
 ### Removed
 
 - **`keyfit add linear --readonly`.** It was recorded in the registry, but nothing read it: no MCP server Keyfit
@@ -50,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity, Keychain or the tokens of a Keyfit session they run in, and their guard against the
   network now covers the requests Keyfit actually makes. Their fake tools run on the Python that
   runs the tests, so a Mac without the Command Line Tools runs them too. New tests cover
-  `keyfit run`, every online check's request, and paths that had none (see KEY-85).
+  `keyfit run`, every online check's request, and paths that had none.
 
 ### Security
 
@@ -755,5 +759,6 @@ From the third pre-launch review:
   Any name with `LINEAR` and `KEY` or `TOKEN`, in any case, now goes (LinearB's `LINEARB_…` stays); the
   project's own variable is set again.
 
-[Unreleased]: https://github.com/getkeyfit/keyfit/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/getkeyfit/keyfit/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/getkeyfit/keyfit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/getkeyfit/keyfit/releases/tag/v0.1.0
