@@ -149,7 +149,7 @@ If something seems off, run `keyfit doctor`. It checks the installation and prin
 
 ## How it works
 
-1. **Resolve.** The shim asks git for the folder's common git directory. That way the main checkout and every worktree of a registered repository resolve to the same project, wherever the worktrees live (Superset's included). A submodule or a repository nested in a checkout belongs to the checkout around it, in worktrees too. Outside a registered repository, the nearest registered parent folder counts. If nothing matches, the real tool runs unchanged. If git can't answer inside a repository (after a macOS update broke the Command Line Tools, say), the tool doesn't start; `keyfit doctor` shows why.
+1. **Resolve.** The shim asks git for the folder's common git directory. That way the main checkout and every worktree of a registered repository resolve to the same project, wherever the worktrees live (Paradev's included). A submodule or a repository nested in a checkout belongs to the checkout around it, in worktrees too. Outside a registered repository, the nearest registered parent folder counts. If nothing matches, the real tool runs unchanged. If git can't answer inside a repository (after a macOS update broke the Command Line Tools, say), the tool doesn't start; `keyfit doctor` shows why.
 2. **Verify.** Keyfit builds the project's environment and checks each account you mapped. Fast local checks run on every launch: does the profile exist, has the sign-in expired, is the key well-formed. Then come the online checks: who does each service say you are? A successful online check is reused for 30 minutes. If any check fails, the tool does not start.
 3. **Inject.** The real tool starts with that environment: the project's credentials are set, and conflicting ones inherited from your shell are removed. MCP servers that belong to other projects are hidden for that session. Nothing is written into your repository or into the tools' config files.
 
@@ -160,7 +160,7 @@ Along the way:
 - **Other accounts are refused.** Inside a project, `aws --profile <another profile>`, `vercel --scope <another team>` and similar options that point a tool at another account don't run, and neither does an agent pointed at another project's folder (`codex -C ~/code/globex`, `opencode ~/code/globex`). [docs/accounts.md][accounts] lists them per tool.
 - **Agent sessions stay on their project.** The `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` commands an agent runs stay on that session's project, even after a `cd` elsewhere.
 - **Claude Code's status line** shows the project and its accounts, unless you configured a status line of your own.
-- **Superset:** when Superset's agent wrapper (`~/.superset/bin`) is on PATH, it goes first and the shims right behind it, ahead of everything else. The chain is Superset wrapper → Keyfit → real tool, and Superset's hooks keep working (for OpenCode too: Keyfit leaves the `OPENCODE_CONFIG_DIR` the wrapper sets). Without Superset, the shims go first.
+- **Paradev (formerly Superset):** when Paradev's agent wrapper (`~/.paradev/bin`) is on PATH, it goes first and the shims right behind it, ahead of everything else. The chain is Paradev wrapper → Keyfit → real tool, and Paradev's hooks keep working (for OpenCode too: Keyfit leaves the `OPENCODE_CONFIG_DIR` the wrapper sets). Superset's `~/.superset/bin`, from before the rename, still works the same way; with both on PATH, Paradev's goes first. Without either, the shims go first.
 
 ## Everyday commands
 
@@ -233,7 +233,7 @@ Measured on a MacBook Pro with an Apple M4 (16 GB, macOS 26.6, Python 3.13.3), w
 ## Limits
 
 - **macOS only, for now.** Keys live in the macOS Keychain, and `keyfit setup` stops on other systems.
-- **zsh and bash.** In another shell, put `~/.config/keyfit/bin` first on PATH yourself (after `~/.superset/bin` if you use Superset).
+- **zsh and bash.** In another shell, put `~/.config/keyfit/bin` first on PATH yourself (after `~/.paradev/bin` if you use Paradev, formerly Superset; `~/.superset/bin` on its older versions).
 - **Thirteen tools.** Only `claude`, `codex`, `opencode`, `copilot`, `gemini`, `aws`, `gh`, `vercel`, `supabase`, `wrangler`, `convex`, `gcloud` and `firebase` go through Keyfit, when they are found through PATH (typed in a terminal, or run by an agent Keyfit started). These don't go through Keyfit:
   - other commands (terraform, npm, git over SSH), including `vc`, the Vercel CLI's short name, `npx supabase`, `npx wrangler`, `npx convex`, `npx firebase-tools`, `npx @google/gemini-cli`, `bq` and `gsutil` (inside a Claude, Codex, OpenCode, Copilot CLI or Gemini CLI session they get the project's token or account, but no checks of their own; outside one, `npx wrangler` and `npx firebase-tools` follow only the CLI's own folder binding, `npx convex` uses the CLI's own login and `bq` and `gsutil` gcloud's active configuration)
   - tools called by their full path
@@ -296,9 +296,9 @@ Each of them picks an account, but none checks whose it is before the tool start
 
 No. Each project has one login of each kind, and Keyfit never moves it to another account. It keeps clients' accounts, or work and personal ones, apart; it doesn't spread usage across them.
 
-### Does it work with git worktrees and Superset?
+### Does it work with git worktrees and Paradev (formerly Superset)?
 
-Yes. Every worktree of a registered repository belongs to its project, wherever it lives: Keyfit asks git for the repository's common git directory. Superset's agent wrapper stays first on PATH with Keyfit's shims right behind it, so Superset's hooks keep working. wrangler and the firebase CLI bind sign-ins to folders, so a new worktree may need a binding of its own; started in a terminal, Keyfit offers it (`Bind this folder now? [Y/n]`).
+Yes. Every worktree of a registered repository belongs to its project, wherever it lives: Keyfit asks git for the repository's common git directory. Paradev's agent wrapper (`~/.paradev/bin`, or `~/.superset/bin` from before the rename) stays first on PATH with Keyfit's shims right behind it, so Paradev's hooks keep working. wrangler and the firebase CLI bind sign-ins to folders, so a new worktree may need a binding of its own; started in a terminal, Keyfit offers it (`Bind this folder now? [Y/n]`).
 
 ### Does it work with Claude Desktop, IDE extensions or on Linux?
 

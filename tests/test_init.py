@@ -642,6 +642,45 @@ class DoctorTests(Machine):
         self.assertIn("comes before Superset's agent wrapper (~/.superset/bin)", out)
         self.assertEqual(out.splitlines()[-1], "1 problem — the fix is under each ✘")
 
+    def test_right_after_paradev(self):
+        # Paradev, as Superset is now called, keeps its agent wrapper in ~/.paradev/bin
+        self.setup_shims()
+        paradev, superset = self.home / ".paradev" / "bin", self.home / ".superset" / "bin"
+        for folder in (paradev, superset):
+            folder.mkdir(parents=True)
+            executable(folder / "claude", "#!/bin/sh\n")
+        code, out = self.doctor(paradev, self.shims, self.bin)
+        self.assertEqual(code, 0, out)
+        self.assertIn("right after Paradev's agent wrapper, before every real tool", out)
+        self.assertIn(f"✔ claude     {self.bin / 'claude'}\n", out)  # the wrapper is not the real tool
+        code, out = self.doctor(paradev, superset, self.shims, self.bin)  # both, as Keyfit's line places them
+        self.assertEqual(code, 0, out)
+        self.assertIn("right after Paradev's and Superset's agent wrappers, before every real tool", out)
+        code, out = self.doctor(self.shims, paradev, self.bin)
+        self.assertEqual(code, 1)
+        self.assertIn("comes before Paradev's agent wrapper (~/.paradev/bin)", out)
+        code, out = self.doctor(paradev, self.shims, superset, self.bin)
+        self.assertEqual(code, 1)
+        self.assertIn("comes before Superset's agent wrapper (~/.superset/bin)", out)
+
+    def test_superset_folder_linked_to_paradev_is_paradevs(self):
+        # Paradev moved ~/.superset to ~/.paradev and left a link: a terminal's ~/.superset/bin is Paradev's folder
+        self.setup_shims()
+        (self.home / ".paradev" / "bin").mkdir(parents=True)
+        (self.home / ".superset").symlink_to(".paradev")
+        code, out = self.doctor(self.home / ".superset" / "bin", self.shims, self.bin)
+        self.assertEqual(code, 0, out)
+        self.assertIn("right after Paradev's agent wrapper, before every real tool", out)
+
+    def test_wrappers_of_other_builds_are_not_real_tools(self):
+        self.setup_shims()
+        canary = self.home / ".paradev-canary" / "bin"
+        canary.mkdir(parents=True)
+        executable(canary / "claude", "#!/bin/sh\n")
+        code, out = self.doctor(canary, self.shims, self.bin)
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"✔ claude     {self.bin / 'claude'}\n", out)
+
     def test_not_on_path(self):
         self.setup_shims()
         code, out = self.doctor(self.bin)
