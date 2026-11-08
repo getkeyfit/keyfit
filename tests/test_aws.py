@@ -320,6 +320,16 @@ class AwsTests(unittest.TestCase):
         env = self.env_for(conn, {"iam": {"account": "444444444444"}}, PATH=f"{wrapper}{os.pathsep}{self.env['PATH']}")
         self.assertEqual(self.aws.remote(conn, env).detail, "account confirmed")
 
+    def test_the_check_skips_paradev_wrapper(self):
+        # Paradev, as Superset is now called, keeps its wrappers in ~/.paradev/bin
+        wrapper = self.home / ".paradev" / "bin"
+        wrapper.mkdir(parents=True)
+        (wrapper / "aws").write_text("#!/bin/sh\necho 999999999999\n")
+        (wrapper / "aws").chmod(0o755)
+        conn = {"profile": "iam", "account": "444444444444"}
+        env = self.env_for(conn, {"iam": {"account": "444444444444"}}, PATH=f"{wrapper}{os.pathsep}{self.env['PATH']}")
+        self.assertEqual(self.aws.remote(conn, env).detail, "account confirmed")
+
     def test_account_ids_in_aws_errors_show_only_their_last_four_digits(self):
         conn = {"profile": "role", "account": "333333333333"}
         error = ("An error occurred (AccessDenied) when calling the AssumeRole operation: arn:aws:sts::444455556666:"

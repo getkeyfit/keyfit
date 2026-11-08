@@ -20,12 +20,12 @@ Signs that the tool started without Keyfit:
 
 1. **Run `keyfit doctor` and read the `shims` and `PATH` lines.**
    - `✘ PATH … not on PATH`: this terminal was opened before setup. Open a new one. If doctor says no startup file loads Keyfit, run `keyfit setup --rc` first.
-   - `✘ PATH … <folder> comes first: …` or `✘ PATH … comes before Superset's agent wrapper`: something put another folder ahead of the shims after Keyfit's line ran. Fix it in three steps:
+   - `✘ PATH … <folder> comes first: …` or `✘ PATH … comes before Paradev's agent wrapper` (Paradev was called Superset before; older versions say `Superset's`): something put another folder ahead of the shims after Keyfit's line ran. Fix it in three steps:
      1. Make Keyfit's line (it ends in `# keyfit: tool shims on PATH`, or `# keyfit: claude/codex/aws/gh shims on PATH` from an earlier version) the last line of the startup file doctor names.
      2. Run `keyfit setup` again. This rewrites the PATH files in `~/.config/keyfit`, and earlier versions placed the shims differently.
      3. Open a new terminal.
    - `✘ shims … runs <path>, which no longer exists`: the Python or the checkout that ran `keyfit setup` has moved, for example after a Python upgrade. Run `keyfit setup` again.
-2. **Run `type -a claude`.** The first line should be `~/.config/keyfit/bin/claude`. In Superset terminals, it should be `~/.superset/bin/claude` with the Keyfit shim right after it (see [below](#superset-terminals)). If it says `claude is an alias for …` or `claude is a shell function`, that alias or function runs before PATH is searched. Remove it from your startup file; some installers add one.
+2. **Run `type -a claude`.** The first line should be `~/.config/keyfit/bin/claude`. In Paradev terminals, it should be `~/.paradev/bin/claude` (`~/.superset/bin/claude` on versions from before the rename) with the Keyfit shim right after it (see [below](#paradev-terminals)). If it says `claude is an alias for …` or `claude is a shell function`, that alias or function runs before PATH is searched. Remove it from your startup file; some installers add one.
 3. **The shell may remember an old location.** Run `hash -r` (bash) or `rehash` (zsh), or open a new terminal.
 4. **Check which file got the line.** `keyfit setup --rc` prints the file it changed.
    - zsh uses `$ZDOTDIR/.zshrc` when `ZDOTDIR` is set. If your terminal app sets `ZDOTDIR`, that may not be the file you expect. Pass the file yourself: `keyfit setup --rc ~/.zshrc`.
@@ -34,33 +34,36 @@ Signs that the tool started without Keyfit:
    A worktree counts for its repository's project only when the repository lists it (`git worktree list`). If you moved a worktree's folder by hand, run `git worktree repair` inside it.
 6. **The tool may not be found through PATH.** IDE extensions, desktop apps and tools started by their full path bypass the shims. For any other command, use `keyfit run -- <command>`.
 
-## Superset terminals
+## Paradev terminals
 
-In a Superset terminal the chain is **Superset's agent wrapper → Keyfit → the real tool**.
+Paradev was called Superset before. In a Paradev terminal the chain is **Paradev's agent wrapper → Keyfit → the real tool**.
 
-- **Order on PATH.** When `~/.superset/bin` is on PATH, Keyfit's line moves it to the very front and puts the shims right behind it, ahead of everything else. That includes folders a login profile adds after Superset set PATH, such as `eval "$(brew shellenv)"` in `~/.zprofile`.
-- **No loops.** Superset's wrapper finds the next `claude` on PATH, which is Keyfit's shim. When Keyfit looks for the real tool, it skips its own shims and Superset's wrapper folders (`~/.superset/bin`, `~/.superset-*/bin`).
-- **Hooks.** Superset's wrapper still runs first, so its hooks keep working.
+- **Order on PATH.** When `~/.paradev/bin` is on PATH, Keyfit's line moves it to the very front and puts the shims right behind it, ahead of everything else. That includes folders a login profile adds after Paradev set PATH, such as `eval "$(brew shellenv)"` in `~/.zprofile`.
+- **Superset's folder still works.** Versions from before the rename keep the wrapper in `~/.superset/bin`, and Keyfit's line moves it the same way. With both on PATH, Paradev's goes first, then Superset's, then the shims; Paradev's wrapper skips Superset's folder, so only Paradev's runs.
+- **No loops.** Paradev's wrapper finds the next `claude` on PATH, which is Keyfit's shim. When Keyfit looks for the real tool, it skips its own shims and the wrapper folders of Paradev and Superset (`~/.paradev/bin`, `~/.paradev-*/bin`, `~/.superset/bin`, `~/.superset-*/bin`).
+- **Hooks.** Paradev's wrapper still runs first, so its hooks keep working.
 
-To check, run this in a Superset terminal:
+To check, run this in a Paradev terminal:
 
 ```
 $ type -a codex
-codex is /Users/you/.superset/bin/codex
+codex is /Users/you/.paradev/bin/codex
 codex is /Users/you/.config/keyfit/bin/codex
 codex is /opt/homebrew/bin/codex
 $ keyfit doctor
   …
-  ✔ PATH       ~/.config/keyfit/bin   right after Superset's agent wrapper, before every real tool
+  ✔ PATH       ~/.config/keyfit/bin   right after Paradev's agent wrapper, before every real tool
 ```
+
+On a version from before the rename, `type -a codex` starts with `~/.superset/bin/codex` and doctor says `right after Superset's agent wrapper`.
 
 If the `PATH` line fails:
 
-1. Open a new Superset terminal.
-2. If it still fails, run `keyfit setup` again. The PATH files of earlier versions put the shims only right after the wrapper, which left them behind folders a login profile had put in front.
+1. Open a new Paradev terminal.
+2. If it still fails, run `keyfit setup` again. The PATH files of earlier versions put the shims only right after the wrapper, which left them behind folders a login profile had put in front, or knew only `~/.superset/bin`, not `~/.paradev/bin`.
 3. Make sure Keyfit's line is the last line of your startup file.
 
-Superset workspaces are git worktrees of your repository, so they resolve to the same project wherever Superset keeps them, and so do the submodules and repositories nested in them. Run `keyfit which` in a workspace terminal to confirm. It shows `git common-dir of <workspace> → <your main checkout>`.
+Paradev workspaces are git worktrees of your repository, so they resolve to the same project wherever Paradev keeps them (`~/.paradev/worktrees/<repository>`, or `~/.superset/worktrees/<repository>` before the rename), and so do the submodules and repositories nested in them. Run `keyfit which` in a workspace terminal to confirm. It shows `git common-dir of <workspace> → <your main checkout>`.
 
 ## A check fails
 
@@ -138,7 +141,7 @@ When you started the tool yourself in a terminal and the fix is only a sign-in (
 | `this folder belongs to acme-api, whose Supabase token Keyfit keeps …; supabase login would change only the supabase CLI's own login` (also `logout`) | inside a project with a Supabase account, the CLI's own login isn't used. To change the project's token: `keyfit add supabase --name …`. To change the CLI's own login, run `supabase login` outside the project |
 | `this folder belongs to acme-api (Supabase organization Acme); refusing --project-ref REF: it belongs to another organization` (also `link REF`, `projects delete REF` or any other word shaped like a project ref, `gen types --project-id`, `--workdir`, `--org-id`, `--profile`) | inside a project, `supabase` works only with projects of the project's organization. Leave the option out to use the folder's linked project |
 | **Cloudflare** `wrangler has no profile NAME on this Mac`, `wrangler profile NAME: not signed in`, `… the sign-in expired and wrangler could not renew it` | `wrangler auth create NAME` signs that profile in again (in the browser); in a terminal, Keyfit offers to run it. For the default profile it is `wrangler login` |
-| **Cloudflare** `FOLDER is not bound to wrangler profile NAME (wrangler would use its default login)` | `wrangler auth activate NAME FOLDER`, as printed: it binds the folder and everything under it. Started in a terminal, Keyfit asks `Bind this folder now? [Y/n]` and runs it for you (in a Superset worktree, for the folder that holds the repository's worktrees). It never binds another project's folder, a folder outside every project, or your home folder or one above it; there it only prints the command. Worktrees outside the repository's folder (Superset's) need their own binding; bind the folder that holds them once (`wrangler auth activate NAME ~/.superset/worktrees/<repository>`). A folder you moved needs its binding again: wrangler matches bound folders by path |
+| **Cloudflare** `FOLDER is not bound to wrangler profile NAME (wrangler would use its default login)` | `wrangler auth activate NAME FOLDER`, as printed: it binds the folder and everything under it. Started in a terminal, Keyfit asks `Bind this folder now? [Y/n]` and runs it for you (in a Paradev worktree, for the folder that holds the repository's worktrees). It never binds another project's folder, a folder outside every project, or your home folder or one above it; there it only prints the command. Worktrees outside the repository's folder (Paradev's) need their own binding; bind the folder that holds them once (`wrangler auth activate NAME ~/.paradev/worktrees/<repository>`, or `~/.superset/worktrees/<repository>` from before Paradev was renamed from Superset). A folder you moved needs its binding again: wrangler matches bound folders by path |
 | **Cloudflare** `FOLDER uses wrangler profile OTHER (bound at SUBFOLDER), project expects NAME` | a subfolder has a binding of its own, and the nearest binding wins. Run the printed `wrangler auth activate NAME SUBFOLDER` (started in a terminal, Keyfit asks `Bind this folder now?` and runs it), or remove that binding: `wrangler auth deactivate SUBFOLDER`. `wrangler auth list` shows every binding |
 | **Cloudflare** `wrangler profile NAME has no access to account A (…); it reaches …` | the profile is signed in as someone who isn't a member of the project's account. `wrangler auth create NAME` and sign in as a member, or, if the project moved accounts, `keyfit add cloudflare --account <the new one>` |
 | **Cloudflare** `wrangler.toml sets account_id X, project expects A (…)` (also `wrangler.json`, `wrangler.jsonc`, `[env.NAME]`) | the repository's wrangler config targets another account. Set `account_id` to the project's account, or, if the project moved, map it: `keyfit add cloudflare --profile NAME --account X` |
@@ -278,7 +281,7 @@ When Keyfit itself fails, it stops the tool instead of starting it unchecked. Th
 
 ## Other messages
 
-- **`keyfit: claude is not installed (no claude on PATH besides Keyfit's shim)`.** The tool isn't installed, or its folder isn't on PATH. Keyfit skips its own shims and Superset's wrappers when looking for the real tool. Install it with the command printed below the message; `keyfit doctor` shows where it found each tool. For `wrangler`, a project that has it in `node_modules` runs its own copy with `npx wrangler`.
+- **`keyfit: claude is not installed (no claude on PATH besides Keyfit's shim)`.** The tool isn't installed, or its folder isn't on PATH. Keyfit skips its own shims and Paradev's (formerly Superset's) wrappers when looking for the real tool. Install it with the command printed below the message; `keyfit doctor` shows where it found each tool. For `wrangler`, a project that has it in `node_modules` runs its own copy with `npx wrangler`.
 - **`keyfit: claude not started: Keyfit is not installed where its shims expect it`.** The Python or the package that ran `keyfit setup` is gone. After an upgrade, a reinstall or a move to another Python, run `keyfit setup` again. If you uninstalled Keyfit before running `keyfit setup --remove`, remove its line from your shell startup file (see [Uninstall](#uninstall)) and open a new terminal. Until then, `KEYFIT_DISABLE=1 claude …` runs the tool without Keyfit.
 - **`keyfit: claude not started: the Python Keyfit was set up with is gone`.** Keyfit is still installed, but the Python it runs on was removed under it (for example, Homebrew removed an older Python after pipx moved to a newer one), so `keyfit` itself can't start either. Reinstall it with `pipx reinstall keyfit` (or `brew reinstall keyfit`), then run `keyfit setup`. Until then, `KEYFIT_DISABLE=1 claude …` runs the tool without Keyfit.
 - **`keyfit needs Python 3.11 or newer`.** The `python3` that comes with macOS is 3.9. Install a newer one (`brew install python@3.13`, or `brew install pipx`, which brings one) and install Keyfit with it.

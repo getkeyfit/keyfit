@@ -31,10 +31,19 @@ def is_shim_dir(folder: Path) -> bool:
     return (folder / MARKER).exists()
 
 
+BUILDS = re.compile(r"\.(?:paradev|superset)-.*")  # the home of another Paradev or Superset build: ~/.paradev-canary
+
+
 def wrapper_dirs(env: dict) -> tuple[Path, ...]:
-    """Other tools' agent wrappers (Superset's) — skipped when Keyfit runs a check itself."""
+    """Other tools' agent wrappers, skipped when Keyfit runs a check itself: Paradev's (~/.paradev/bin) and Superset's,
+    as Paradev was called before (~/.superset/bin), and those of their other builds (~/.paradev-*/bin,
+    ~/.superset-*/bin). Every launch asks, so one listing of the home folder finds the builds of both."""
     home = Path(env.get("HOME") or Path.home())
-    return (home / ".superset" / "bin", *sorted(home.glob(".superset-*/bin")))
+    try:
+        builds = sorted(name for name in os.listdir(home) if BUILDS.fullmatch(name))
+    except OSError:
+        builds = []
+    return (home / ".paradev" / "bin", home / ".superset" / "bin", *(home / name / "bin" for name in builds))
 
 
 def find_real(name: str, env: dict, skip: tuple[Path, ...] = (), skip_wrappers: bool = False) -> str | None:

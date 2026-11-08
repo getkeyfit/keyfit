@@ -237,6 +237,16 @@ class ClaudeTests(unittest.TestCase):
         self.assertEqual(find_real("claude", env, skip_wrappers=True), str(self.bin / "claude"))
         self.assertEqual(find_real("claude", env), str(wrapper / "claude"))
 
+    def test_checks_skip_paradev_wrapper(self):
+        # Paradev, as Superset is now called, keeps its wrappers in ~/.paradev/bin
+        wrapper = self.home / ".paradev" / "bin"
+        wrapper.mkdir(parents=True)
+        (wrapper / "claude").write_text("#!/bin/sh\n")
+        (wrapper / "claude").chmod(0o755)
+        env = {"HOME": str(self.home), "PATH": f"{wrapper}{os.pathsep}{self.bin}"}
+        self.assertEqual(find_real("claude", env, skip_wrappers=True), str(self.bin / "claude"))
+        self.assertEqual(find_real("claude", env), str(wrapper / "claude"))
+
 
 class AddClaudeTests(unittest.TestCase):
     """`keyfit add claude` from two projects, with a fake claude that has a personal login in ~/.claude and another

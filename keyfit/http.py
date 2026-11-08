@@ -1,9 +1,10 @@
 """TLS for Keyfit's own HTTPS checks.
 
 The python.org build of Python ships without a CA bundle of its own, so in a clean
-terminal every HTTPS check would fail with CERTIFICATE_VERIFY_FAILED. Superset
-terminals happen to set SSL_CERT_FILE, which hid this. When the default context
-has no CA certificates, use the bundle macOS maintains at /etc/ssl/cert.pem.
+terminal every HTTPS check would fail with CERTIFICATE_VERIFY_FAILED. Paradev
+(formerly Superset) terminals happen to set SSL_CERT_FILE, which hid this. When the
+default context has no CA certificates, use the bundle macOS maintains at
+/etc/ssl/cert.pem.
 
 Every request carries a key or token, and urllib copies the Authorization header
 to wherever a redirect points; so redirects are never followed (urlopen below).

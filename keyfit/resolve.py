@@ -9,7 +9,7 @@
    a linked worktree.
 2. Otherwise: the nearest registered root that is an ancestor of the folder or of
    its main checkout — so a repository nested inside a project folder resolves to
-   that project from its own linked worktrees too (e.g. Superset's).
+   that project from its own linked worktrees too (e.g. Paradev's).
 3. Otherwise: not registered — callers must pass through, never guess.
 
 When git fails where a `.git` exists at or above the folder, the folder may belong

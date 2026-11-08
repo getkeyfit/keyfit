@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Paradev, as Superset is now called.** Keyfit treats Paradev's folders as it treated Superset's: the PATH line
+  puts Paradev's agent wrapper (`~/.paradev/bin`) first and the shims right behind it; Keyfit's checks and
+  `KEYFIT_DISABLE=1` skip `~/.paradev/bin` and `~/.paradev-*/bin`; `keyfit doctor` names Paradev's wrapper; and in a
+  Paradev worktree, `Bind … now?` offers `~/.paradev/worktrees/<repository>`. Superset's folders keep working. With
+  both wrappers on PATH, Paradev's goes first, then Superset's, then the shims. Run `keyfit setup` once to rewrite
+  the PATH files and shims.
+
 ## [0.1.1] - 2026-10-30
 
 Fixes from a review of 0.1.0. After upgrading, run `keyfit setup` once to rewrite your shims.

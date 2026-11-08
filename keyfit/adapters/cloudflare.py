@@ -317,11 +317,12 @@ def shell_path(path) -> str:
 
 
 def superset_parent(folder, env: dict) -> str | None:
-    """The folder that holds *folder* when it is a Superset worktree (~/.superset/worktrees/<repository>/<name>, or
-    ~/.superset-*/… of another Superset build): binding it once covers every worktree of the repository."""
+    """The folder that holds *folder* when it is a Paradev worktree (~/.paradev/worktrees/<repository>/<name>, or
+    ~/.paradev-*/… of another Paradev build), or one of Superset, as Paradev was called before (~/.superset/…,
+    ~/.superset-*/…): binding it once covers every worktree of the repository."""
     parent = os.path.dirname(os.path.abspath(folder))
     worktrees = Path(parent).parent
-    if worktrees.name != "worktrees" or not re.fullmatch(r"\.superset(-.+)?", worktrees.parent.name):
+    if worktrees.name != "worktrees" or not re.fullmatch(r"\.(paradev|superset)(-.+)?", worktrees.parent.name):
         return None
     return parent if os.path.realpath(worktrees.parent.parent) == os.path.realpath(_home(env)) else None
 

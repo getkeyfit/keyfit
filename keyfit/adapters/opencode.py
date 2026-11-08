@@ -7,7 +7,7 @@ Project:  opencode = "work"
 
 OpenCode 2 keeps every sign-in (`opencode auth login`, API keys too) in its SQLite database next to the sessions:
 ~/.local/share/opencode/opencode.db (under $XDG_DATA_HOME when set), or the file OPENCODE_DB names. Its configuration
-(~/.config/opencode, or OPENCODE_CONFIG_DIR, which Superset's wrapper sets) stays shared. A sign-in is labelled with
+(~/.config/opencode, or OPENCODE_CONFIG_DIR, which Paradev's wrapper sets) stays shared. A sign-in is labelled with
 the provider's name ("OpenAI", "OpenAI 2"), not the person, so an account is checked by the providers signed in,
 not down to the person. Sessions normally run in OpenCode's background server, which serves every folder and keeps
 the environment of the start that launched it, so the shim starts them with --standalone (a private server with the

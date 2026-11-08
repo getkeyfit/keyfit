@@ -13,7 +13,7 @@ body:
     id: tried
     attributes:
       label: What did you try?
-      description: What you set up and what you used it for (which tools, how many projects, Superset or plain terminals, …).
+      description: What you set up and what you used it for (which tools, how many projects, Paradev (formerly Superset) or plain terminals, …).
     validations:
       required: true
 

@@ -93,6 +93,22 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(r.project.name, "demo")
         self.assertIn("main checkout", r.how)
 
+    def test_paradev_worktrees_resolve_to_their_project(self):
+        # Paradev, as Superset is now called, keeps worktrees in ~/.paradev/worktrees/<repository>/<name>
+        holder = self.tmp / "home" / ".paradev" / "worktrees" / "repo"
+        git("worktree", "add", "-q", str(holder / "ws1"), "-b", "ws1", cwd=self.repo)
+        nested = self.repo / "platform"
+        nested.mkdir()
+        git("init", "-q", "-b", "main", cwd=nested)
+        (nested / "README").write_text("x")
+        git("add", ".", cwd=nested)
+        git("commit", "-q", "-m", "init", cwd=nested)
+        git("worktree", "add", "-q", str(holder.parent / "platform" / "ws2"), "-b", "ws2", cwd=nested)
+        for folder, how in ((holder / "ws1", "git common-dir of"), (holder.parent / "platform" / "ws2", "main checkout")):
+            r = resolve(folder, self.registry)
+            self.assertEqual(r.project and r.project.name, "demo", f"{folder}: {r.how}")
+            self.assertIn(how, r.how)
+
     def test_symlinked_path_resolves(self):
         link = self.tmp / "link"
         link.symlink_to(self.repo)

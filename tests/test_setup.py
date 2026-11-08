@@ -29,6 +29,7 @@ class SetupTests(unittest.TestCase):
         self.config = self.tmp / "keyfit"
         self.shims = str(self.config / "bin")
         self.ss = str(self.home / ".superset" / "bin")
+        self.pd = str(self.home / ".paradev" / "bin")  # Paradev, as Superset is now called; the folder needn't exist
 
     def setup(self, *args, shell="/bin/zsh", platform="darwin", **extra):
         env = {"HOME": str(self.home), "KEYFIT_CONFIG_DIR": str(self.config), "SHELL": shell}
@@ -49,7 +50,7 @@ class SetupTests(unittest.TestCase):
         return out.stdout
 
     def cases(self):
-        kf, ss = self.shims, self.ss
+        kf, ss, pd = self.shims, self.ss, self.pd
         return [
             ("/usr/bin:/bin", f"{kf}:/usr/bin:/bin"),
             # a login profile prepended /x after Superset set PATH: wrapper and shims both go to the front
@@ -58,6 +59,14 @@ class SetupTests(unittest.TestCase):
             (f"{ss}:/x:{ss}:/bin", f"{ss}:{kf}:/x:/bin"),
             ("/usr/bin::/bin", f"{kf}:/usr/bin:/bin"),
             ("", kf),
+            # Paradev's wrapper goes to the front the same way
+            (f"/x:{pd}:/usr/bin:/bin", f"{pd}:{kf}:/x:/usr/bin:/bin"),
+            (f"{kf}:/x:{pd}:/usr/bin:{kf}:{pd}:/bin", f"{pd}:{kf}:/x:/usr/bin:/bin"),
+            # both: Paradev's first (its wrapper skips Superset's folder, an older Superset one may not skip Paradev's)
+            (f"/x:{ss}:/y:{pd}:/bin", f"{pd}:{ss}:{kf}:/x:/y:/bin"),
+            (f"{ss}:{kf}:{pd}:{ss}::/bin", f"{pd}:{ss}:{kf}:/bin"),
+            # another build's folder is only skipped by Keyfit's checks, never moved
+            (f"/x:{self.home}/.paradev-canary/bin:/bin", f"{kf}:/x:{self.home}/.paradev-canary/bin:/bin"),
         ]
 
     def test_plain_setup_writes_only_into_the_config_dir(self):
@@ -145,6 +154,23 @@ class SetupTests(unittest.TestCase):
         self.assertEqual((out.returncode, out.stderr), (127, "keyfit: claude is not installed (no claude on PATH "
                                                             "besides Keyfit's shim).\n"))
 
+    def test_bypass_with_keyfit_gone_skips_paradev_wrappers(self):
+        # Paradev, as Superset is now called: its wrappers (~/.paradev/bin, ~/.paradev-*/bin for other builds) would
+        # call the shim again, so KEYFIT_DISABLE=1 skips them like Superset's
+        self.setup()
+        shim = self.config / "bin" / "claude"
+        shim.write_text(shim.read_text().replace(sys.executable, str(self.tmp / "gone" / "python3")))
+        real = self.tmp / "real"
+        wrappers = [Path(self.pd), self.home / ".paradev-canary" / "bin", self.home / ".superset-dev" / "bin"]
+        for folder, text in ((real, 'echo "real claude $*"'), *((w, "echo wrapper") for w in wrappers)):
+            folder.mkdir(parents=True)
+            (folder / "claude").write_text(f"#!/bin/sh\n{text}\n")
+            (folder / "claude").chmod(0o755)
+        path = ":".join(map(str, (*wrappers, self.shims, real, "/usr/bin", "/bin")))
+        out = subprocess.run([str(shim), "-p", "hi"], capture_output=True, text=True, timeout=30,
+                             env={"HOME": str(self.home), "PATH": path, "KEYFIT_DISABLE": "1"})
+        self.assertEqual((out.returncode, out.stdout, out.stderr), (0, "real claude -p hi\n", ""))
+
     @unittest.skipUnless(ZSH, "zsh not installed")
     def test_folders_with_shell_characters_stay_one_word(self):
         # KEY-82: paths went into double quotes, so $HOME, ` or " in a folder name made every tool exit 127, and a
@@ -221,7 +247,8 @@ class SetupTests(unittest.TestCase):
     def test_unknown_shell(self):
         code, out, _ = self.setup(shell="/usr/local/bin/fish")
         self.assertEqual(code, 0)  # shims and PATH files are written; the user wires up fish
-        self.assertIn("put " + self.shims + " first on PATH", out)
+        self.assertIn("put " + self.shims + " first on PATH (after Paradev's agent wrapper, ~/.paradev/bin, or "
+                      "Superset's, ~/.superset/bin, if you use one).", out)
         code, _, err = self.setup("--rc", shell="/usr/local/bin/fish")
         self.assertEqual(code, 1)
         self.assertIn("--shell zsh or --shell bash", err)

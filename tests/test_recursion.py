@@ -11,7 +11,7 @@ from unittest import mock
 os.environ["KEYFIT_CONFIG_DIR"] = tempfile.mkdtemp()  # tests never touch the real ~/.config/keyfit
 
 from keyfit import shim  # noqa: E402
-from keyfit.realbin import MARKER, find_real  # noqa: E402
+from keyfit.realbin import MARKER, find_real, wrapper_dirs  # noqa: E402
 
 
 class RecursionTests(unittest.TestCase):
@@ -34,6 +34,24 @@ class RecursionTests(unittest.TestCase):
         os.environ["KEYFIT_CONFIG_DIR"] = str(self.tmp / "other-config")
         found = find_real("aws", {"PATH": f"{self.shims}{os.pathsep}{self.bin}"})
         self.assertEqual(found, str(self.bin / "aws"))
+
+    def test_paradev_and_superset_wrappers_are_skipped(self):
+        # Paradev, as Superset is now called: ~/.paradev/bin, other builds' ~/.paradev-*/bin, and Superset's folders
+        home = self.tmp / "home"
+        names = (".paradev", ".paradev-canary", ".superset", ".superset-dev")
+        wrappers = [home / name / "bin" for name in names]
+        lookalike = home / ".paradevish" / "bin"  # not Paradev's
+        for folder in (*wrappers, lookalike):
+            folder.mkdir(parents=True)
+            exe = folder / "aws"
+            exe.write_text("#!/bin/sh\n")
+            exe.chmod(0o755)
+        self.assertEqual(sorted(wrapper_dirs({"HOME": str(home)})), sorted(wrappers))
+        env = {"HOME": str(home), "PATH": os.pathsep.join(map(str, (*wrappers, self.bin)))}
+        self.assertEqual(find_real("aws", env, skip_wrappers=True), str(self.bin / "aws"))
+        self.assertEqual(find_real("aws", env), str(wrappers[0] / "aws"))
+        env["PATH"] = os.pathsep.join(map(str, (*wrappers, lookalike, self.bin)))
+        self.assertEqual(find_real("aws", env, skip_wrappers=True), str(lookalike / "aws"))
 
     def test_every_call_site_skips_the_superset_wrappers(self):
         # a check, sign-in or launch that found Superset's agent wrapper would run it instead of the tool

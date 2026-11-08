@@ -983,7 +983,7 @@ def wrangler_login_check(project: Project | None, args: list[str], registry: Reg
                           f"wrangler profile {theirs['profile']} there.{bypass}")
     if action == "activate" and not name:
         return  # wrangler stops: no profile named
-    table = cloudflare.bindings(env)  # a folder that holds a project's folders: ~/code, /, ~/.superset/worktrees/<repo>
+    table = cloudflare.bindings(env)  # a folder that holds a project's folders: ~/code, /, ~/.paradev/worktrees/<repo>
     after = {d: p for d, p in table.items() if d != folder}
     if action == "activate":
         after[folder] = name
@@ -1001,7 +1001,7 @@ def wrangler_login_check(project: Project | None, args: list[str], registry: Reg
 
 def project_folders(project: Project) -> list[str]:
     """The project's folders as wrangler sees them when it runs there (symlinks resolved): its roots and the same
-    folder in each linked worktree of their repositories (Superset's under ~/.superset/worktrees too)."""
+    folder in each linked worktree of their repositories (Paradev's under ~/.paradev/worktrees too)."""
     import subprocess
 
     found = [str(root) for root in project.canonical_roots()]
@@ -1357,8 +1357,8 @@ def bindable(profile: str, folder: str, env: dict, here: str | None = None) -> b
 
 
 def superset_folder(profile: str, folder: str, project: Project, registry: Registry, env: dict) -> str | None:
-    """The folder that holds *folder* when it is a Superset worktree and that folder may be bound to the project's
-    profile instead: nothing in it belongs to another project (each worktree there resolves to this project or to
+    """The folder that holds *folder* when it is a Paradev worktree (or a Superset one, as Paradev was called before)
+    and that folder may be bound to the project's profile instead: nothing in it belongs to another project (each worktree there resolves to this project or to
     none, and no other project's root lies inside), and it does not belong to another project itself."""
     parent = cloudflare.superset_parent(folder, env)
     if parent is None or not bindable(profile, parent, env):
@@ -1437,7 +1437,8 @@ def offer_fixes(failed: list, project: Project, env: dict, registry: Registry, t
         done.append("bound this folder" if binding else "signed in")
     for profile, folder in binds:
         wider = superset_folder(profile, folder, project, registry, env)
-        if not _confirm(f"Bind {tilde(wider)} now, for every Superset worktree of {project.name}?" if wider
+        app = "Superset" if wider and canonical(wider).parent.parent.name.startswith(".superset") else "Paradev"
+        if not _confirm(f"Bind {tilde(wider)} now, for every {app} worktree of {project.name}?" if wider
                         else "Bind this folder now?"):
             return None
         real = cloudflare.wrangler_bin(env, os.getcwd())  # the project's own wrangler, as npx would run it

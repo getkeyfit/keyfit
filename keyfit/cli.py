@@ -1965,16 +1965,22 @@ COMMENT = "# keyfit: tool shims on PATH"
 OLD_COMMENT = "# keyfit: claude/codex/aws/gh shims on PATH"  # it named four tools of many
 NOT_MACOS = "Keyfit supports macOS for now (it stores keys in the Keychain); Linux is planned."
 
-# Superset's agent wrapper (when it is on PATH) first, Keyfit right behind it, then everything else, so the chain
-# is Superset wrapper → Keyfit shim → real tool (Superset finds "the next claude"). Both move to the very front:
-# a login profile that prepends another folder after Superset set PATH (e.g. `brew shellenv` in ~/.zprofile)
-# must not put real tools ahead of the shims.
+# Paradev's agent wrapper (when it is on PATH) first, Keyfit right behind it, then everything else, so the chain
+# is Paradev wrapper → Keyfit shim → real tool (Paradev finds "the next claude"). Both move to the very front:
+# a login profile that prepends another folder after Paradev set PATH (e.g. `brew shellenv` in ~/.zprofile)
+# must not put real tools ahead of the shims. Superset, as Paradev was called before, kept its wrapper in
+# ~/.superset/bin: it is moved the same way, after Paradev's when both are on PATH. Paradev's wrapper skips
+# ~/.superset/bin too, so then only Paradev's runs; an older Superset wrapper may not skip ~/.paradev/bin.
 SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/copilot/gemini/aws/gh/vercel/supabase/wrangler/convex/gcloud/firebase
 # shims on PATH (written by `keyfit setup`).
-# Superset's agent wrapper first when present, then Keyfit, then everything else.
+# Paradev's agent wrapper first when present, then Superset's (as Paradev was called before), then Keyfit, then
+# everything else.
 () {
-  local kf=@SHIMS@ ss="$HOME/.superset/bin"
-  if (( ${path[(Ie)$ss]} )); then path=($ss $kf ${${path:#$kf}:#$ss}); else path=($kf ${path:#$kf}); fi
+  local kf=@SHIMS@ pd="$HOME/.paradev/bin" ss="$HOME/.superset/bin"
+  local -a front
+  if (( ${path[(Ie)$pd]} )); then front+=($pd); fi
+  if (( ${path[(Ie)$ss]} )); then front+=($ss); fi
+  path=($front $kf ${${${path:#$kf}:#$pd}:#$ss})
 }
 """
 
@@ -1982,16 +1988,20 @@ SHELL_ZSH = """# Keyfit: put the claude/codex/opencode/copilot/gemini/aws/gh/ver
 # end; PATH is walked with parameter expansion (never word-split or globbed). Like zsh, it drops empty entries.
 SHELL_SH = """# Keyfit: put the claude/codex/opencode/copilot/gemini/aws/gh/vercel/supabase/wrangler/convex/gcloud/firebase
 # shims on PATH (written by `keyfit setup`).
-# Superset's agent wrapper first when present, then Keyfit, then everything else.
-_kf=@SHIMS@; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""; _kf_has=""
+# Paradev's agent wrapper first when present, then Superset's (as Paradev was called before), then Keyfit, then
+# everything else.
+_kf=@SHIMS@; _kf_pd="$HOME/.paradev/bin"; _kf_ss="$HOME/.superset/bin"; _kf_rest="${PATH:+$PATH:}"; _kf_out=""
+_kf_has_pd=""; _kf_has_ss=""
 while [ -n "$_kf_rest" ]; do
   _kf_p="${_kf_rest%%:*}"; _kf_rest="${_kf_rest#*:}"
   if [ -z "$_kf_p" ] || [ "$_kf_p" = "$_kf" ]; then continue; fi
-  if [ "$_kf_p" = "$_kf_ss" ]; then _kf_has=1; else _kf_out="$_kf_out:$_kf_p"; fi
+  if [ "$_kf_p" = "$_kf_pd" ]; then _kf_has_pd=1
+  elif [ "$_kf_p" = "$_kf_ss" ]; then _kf_has_ss=1
+  else _kf_out="$_kf_out:$_kf_p"; fi
 done
-if [ -n "$_kf_has" ]; then PATH="$_kf_ss:$_kf$_kf_out"; else PATH="$_kf$_kf_out"; fi
+PATH="${_kf_has_pd:+$_kf_pd:}${_kf_has_ss:+$_kf_ss:}$_kf$_kf_out"
 export PATH
-unset _kf _kf_ss _kf_rest _kf_out _kf_has _kf_p
+unset _kf _kf_pd _kf_ss _kf_rest _kf_out _kf_has_pd _kf_has_ss _kf_p
 """
 
 # shell → (PATH file in the config dir, its template, the command that loads it)
@@ -2000,7 +2010,7 @@ SHELLS = {"zsh": ("shell.zsh", SHELL_ZSH, "source"), "bash": ("shell.sh", SHELL_
 # One shim per tool. When the Python or the package it names is gone (Keyfit uninstalled before `keyfit setup
 # --remove`, or moved, or its Python removed under it), it says so instead of sh's "No such file or directory", and
 # the tool still doesn't start, except with KEYFIT_DISABLE=1: that bypass runs the real tool, found on PATH as the
-# Python shim finds it (never a folder of shims or Superset's wrapper, which would come back here).
+# Python shim finds it (never a folder of shims or Paradev's or Superset's wrapper, which would come back here).
 # -I: no PYTHONPATH, user site or current folder; -S: no site-packages and their .pth files (Keyfit needs only
 # the standard library), which also saves ~5 ms per launch.
 SHIM = """#!/bin/sh
@@ -2009,7 +2019,9 @@ SHIM = """#!/bin/sh
     _kf_rest="${PATH:+$PATH:}"
     while [ -n "$_kf_rest" ]; do
       _kf_p="${_kf_rest%%:*}"; _kf_rest="${_kf_rest#*:}"
-      case "$_kf_p" in ""|"$HOME/.superset/bin"|"$HOME"/.superset-*/bin) continue;; esac
+      case "$_kf_p" in
+        ""|"$HOME/.paradev/bin"|"$HOME"/.paradev-*/bin|"$HOME/.superset/bin"|"$HOME"/.superset-*/bin) continue;;
+      esac
       [ -f "$_kf_p/.keyfit-shims" ] || [ ! -f "$_kf_p/@TOOL@" ] || [ ! -x "$_kf_p/@TOOL@" ] || exec "$_kf_p/@TOOL@" "$@"
     done
     printf '%s\\n' "keyfit: @TOOL@ is not installed (no @TOOL@ on PATH besides Keyfit's shim)." >&2; exit 127
@@ -2195,7 +2207,7 @@ def cmd_setup(args) -> int:
         if offer:
             _offer_switchers()
         print(f"Keyfit has PATH files for zsh and bash; in {shell or 'your shell'}, put {folder} first on PATH "
-              f"(after Superset's wrapper, if you use Superset).")
+              f"(after Paradev's agent wrapper, ~/.paradev/bin, or Superset's, ~/.superset/bin, if you use one).")
         return 0
     line, old = _setup_line(shell), _setup_line(shell, OLD_COMMENT)
     candidates = dict.fromkeys(_rc_files(shell) + ([Path.home() / ".zshrc"] if shell == "zsh" else []))
@@ -2356,7 +2368,8 @@ def _check_shims(folder: Path) -> Check:
 
 
 def _check_path(env: dict) -> Check:
-    """The shims come before every real tool — right after Superset's agent wrapper when it is on PATH."""
+    """The shims come before every real tool — right after Paradev's agent wrapper (or Superset's, as Paradev was called
+    before) when it is on PATH."""
     from .realbin import is_shim_dir, shim_dir, wrapper_dirs
     from .shim import TOOLS
 
@@ -2372,9 +2385,14 @@ def _check_path(env: dict) -> Check:
     last_line = (f"make Keyfit's line (`…  # keyfit: …`) the last line of "
                  f"{tilde(loading[0]) if loading else 'your shell startup file'}, then open a new terminal")
     at = places.index(folder)
-    superset = canonical(Path(env.get("HOME") or Path.home()) / ".superset" / "bin")
-    if superset in places[at:] and superset not in places[:at]:
-        return Check("PATH", "fail", label, "comes before Superset's agent wrapper (~/.superset/bin)", last_line)
+    home = Path(env.get("HOME") or Path.home())
+    # the folders Keyfit's line puts ahead of the shims; Paradev's wins when ~/.superset links to ~/.paradev, as Paradev
+    # leaves it after the rename
+    agents = {canonical(home / ".superset" / "bin"): "Superset", canonical(home / ".paradev" / "bin"): "Paradev"}
+    for place in places[at:]:
+        if place in agents and place not in places[:at]:
+            name = agents[place]
+            return Check("PATH", "fail", label, f"comes before {name}'s agent wrapper (~/.{name.lower()}/bin)", last_line)
     wrappers = {canonical(w) for w in wrapper_dirs(env)}
     for entry, place in zip(entries[:at], places[:at]):
         if place in wrappers or is_shim_dir(place):
@@ -2383,9 +2401,11 @@ def _check_path(env: dict) -> Check:
         if ahead:
             return Check("PATH", "fail", label, f"{_short(entry)} comes first: {', '.join(ahead)} would run without Keyfit",
                          last_line)
-    where = ("first" if superset not in places
-             else "right after Superset's agent wrapper" if places.index(superset) == at - 1
-             else "after Superset's agent wrapper")
+    names = list(dict.fromkeys(agents[place] for place in places[:at] if place in agents))  # in PATH order
+    wrapper = " and ".join(f"{name}'s" for name in names) + (" agent wrappers" if len(names) > 1 else " agent wrapper")
+    where = ("first" if not names
+             else f"right after {wrapper}" if places[at - 1] in agents
+             else f"after {wrapper}")
     return Check("PATH", "ok", label, f"{where}, before every real tool")
 
 

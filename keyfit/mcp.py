@@ -439,7 +439,7 @@ def codex_overrides(project: Project, env: dict, owners: dict | None = None, cwd
     return out
 
 
-# OpenCode: the user's config folder (OPENCODE_CONFIG_DIR replaces it, as Superset's wrapper does), OPENCODE_CONFIG,
+# OpenCode: the user's config folder (OPENCODE_CONFIG_DIR replaces it, as Paradev's wrapper does), OPENCODE_CONFIG,
 # then opencode.json(c) and .opencode/opencode.json(c) in the folder and every folder above it, then
 # OPENCODE_CONFIG_CONTENT, the last and strongest. A server is switched off only by a whole entry there (OpenCode
 # 2.0.25 drops a document with {"enabled": false} alone); a disabled one never starts, whatever its own type was.

@@ -223,6 +223,16 @@ class AdapterTests(CloudflareCase):
         self.cf.inject(conn, env)
         return self.cf.verify(conn, env)
 
+    def test_the_folder_that_holds_paradev_and_superset_worktrees(self):
+        env = {"HOME": str(self.home)}
+        for app in (".paradev", ".paradev-canary", ".superset", ".superset-dev"):
+            holder = self.home / app / "worktrees" / "client"
+            self.assertEqual(cloudflare.superset_parent(holder / "ws1", env), str(holder), app)
+        for folder in (self.home / ".paradevish" / "worktrees" / "client" / "ws1",
+                       self.home / ".paradev" / "trees" / "client" / "ws1",
+                       self.tmp / ".paradev" / "worktrees" / "client" / "ws1"):  # outside the home folder
+            self.assertIsNone(cloudflare.superset_parent(folder, env), folder)
+
     def test_inject_scrubs_credentials_that_beat_profiles_and_pins_the_account(self):
         env = dict(self.env, CLOUDFLARE_API_TOKEN="inherited", CF_API_TOKEN="old", CLOUDFLARE_API_KEY="k",
                    CLOUDFLARE_EMAIL="e@x.io", CF_EMAIL="e", CF_API_KEY="k", CLOUDFLARE_ACCOUNT_ID=GLOBEX_ID,
@@ -988,9 +998,10 @@ class ShimTests(CloudflareCase):
     def activations(self):
         return [call for call in self.wrangler.calls if call["argv"][:2] == ["auth", "activate"]]
 
-    def superset_worktree(self, repo: str, name: str, holder: str | None = None) -> Path:
-        """A Superset workspace of *repo*: a worktree at ~/.superset/worktrees/<holder, default repo>/<name>."""
-        folder = self.home / ".superset" / "worktrees" / (holder or repo) / name
+    def superset_worktree(self, repo: str, name: str, holder: str | None = None, app: str = ".superset") -> Path:
+        """A Superset workspace of *repo*: a worktree at ~/.superset/worktrees/<holder, default repo>/<name> (with
+        app=".paradev", a workspace of Paradev, as Superset is now called)."""
+        folder = self.home / app / "worktrees" / (holder or repo) / name
         git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
         subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], cwd=self.repos[repo], check=True)
         subprocess.run([*git, "worktree", "add", "-q", "-b", name, str(folder)], cwd=self.repos[repo], check=True)
@@ -1150,6 +1161,39 @@ class ShimTests(CloudflareCase):
         self.assertEqual(self.bindings()[str(workspace)], "acme")
         self.assertNotIn(str(workspace.parent), self.bindings())
 
+    def test_paradev_worktree_offers_the_folder_that_holds_them(self):
+        workspace = self.superset_worktree("client", "ws1", app=".paradev")
+        code, argv = self.run_in_terminal("deploy", cwd=workspace)
+        self.assertEqual((code, argv), (None, ["wrangler", "deploy"]), self.stderr)
+        self.assertIn("    → wrangler auth activate acme ~/.paradev/worktrees/client/ws1\n  Bind "
+                      "~/.paradev/worktrees/client now, for every Paradev worktree of client? [Y/n] ", self.stderr)
+        self.assertIn("keyfit: bound ~/.paradev/worktrees/client to wrangler profile acme, starting wrangler\n",
+                      self.stderr)
+        self.assertEqual(self.bindings()[str(workspace.parent)], "acme")
+        self.assertNotIn(str(workspace), self.bindings())
+        code, argv, _ = self.run_shim("deploy", cwd=self.superset_worktree("client", "ws2", app=".paradev"))
+        self.assertEqual((code, argv), (None, ["wrangler", "deploy"]), self.stderr)
+
+    def test_superset_folder_linked_to_paradev_offers_paradevs(self):
+        # Paradev moved ~/.superset to ~/.paradev and left a link behind: its worktrees are Paradev's
+        (self.home / ".paradev").mkdir()
+        (self.home / ".superset").symlink_to(".paradev")
+        workspace = self.superset_worktree("client", "ws1")
+        code, argv = self.run_in_terminal("deploy", cwd=workspace)
+        self.assertEqual((code, argv), (None, ["wrangler", "deploy"]), self.stderr)
+        self.assertIn("  Bind ~/.paradev/worktrees/client now, for every Paradev worktree of client? [Y/n] ", self.stderr)
+        self.assertEqual(self.bindings()[str(self.home / ".paradev" / "worktrees" / "client")], "acme")
+
+    def test_paradev_folder_holding_another_projects_worktree_binds_only_this_one(self):
+        workspace = self.superset_worktree("client", "ws1", app=".paradev-canary")  # another Paradev build
+        self.superset_worktree("mine", "stray", holder="client", app=".paradev-canary")
+        code, argv = self.run_in_terminal("deploy", cwd=workspace)
+        self.assertEqual((code, argv), (None, ["wrangler", "deploy"]), self.stderr)
+        self.assertIn("    → wrangler auth activate acme ~/.paradev-canary/worktrees/client/ws1\n  Bind this folder now? "
+                      "[Y/n] ", self.stderr)
+        self.assertEqual(self.bindings()[str(workspace)], "acme")
+        self.assertNotIn(str(workspace.parent), self.bindings())
+
     def test_dry_run_names_only_the_variables(self):
         code, _, _ = self.run_shim("deploy", KEYFIT_DRY_RUN="1", CLOUDFLARE_API_TOKEN="inherited")
         self.assertEqual(code, 0)
@@ -1276,6 +1320,16 @@ class ShimTests(CloudflareCase):
                               f"client uses wrangler profile acme.", self.stderr)
         code, argv, _ = self.run_shim("auth", "activate", "acme", str(holder), cwd=self.outside)
         self.assertEqual(argv, ["wrangler", "auth", "activate", "acme", str(holder)], self.stderr)
+
+    def test_the_folder_that_holds_paradev_worktrees_is_checked(self):
+        workspace = self.superset_worktree("client", "ws1", app=".paradev")
+        holder = workspace.parent
+        self.bind({str(holder): "acme", str(self.repos["client"]): "acme", str(self.repos["mine"]): "globex"})
+        for cwd in (self.repos["client"], self.outside, workspace):
+            code, argv, _ = self.run_shim("auth", "activate", "globex", str(holder), cwd=cwd)
+            self.assertEqual((code, argv), (1, None), cwd)
+            self.assertIn(f"for ~/.paradev/worktrees/client: it holds ~/.paradev/worktrees/client/ws1, where "
+                          f"client uses wrangler profile acme.", self.stderr)
 
     def test_env_and_config_values_are_read_like_wrangler(self):
         """`--env NAME` loads .env.NAME as path.resolve reads it (`--env /../x` loads x); `--config -0x.toml` names a
